@@ -1,0 +1,57 @@
+name: Pikko
+options:
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+settings:
+  base:
+    SWIFT_VERSION: 6.0
+    IPHONEOS_DEPLOYMENT_TARGET: 17.0
+targets:
+  Pikko:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    configFiles:
+      Debug: Config/Debug.xcconfig
+      Release: Config/Release.xcconfig
+    sources:
+      - path: App
+      - path: Config
+      - path: Core
+      - path: Domain
+      - path: Data
+      - path: DesignSystem
+      - path: Shared
+      - path: Features
+    resources:
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pikko.ios
+        PRODUCT_NAME: Pikko
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_PIKKO_APP_ENV: $(PIKKO_APP_ENV)
+        INFOPLIST_KEY_PIKKO_BASE_URL: $(PIKKO_BASE_URL)
+        INFOPLIST_KEY_PIKKO_SESAC_KEY: $(PIKKO_SESAC_KEY)
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+    scheme:
+      gatherCoverageData: false
+      testTargets:
+        - PikkoTests
+  PikkoTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    hostApplication: Pikko
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Pikko
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pikko.ios.tests
+        GENERATE_INFOPLIST_FILE: YES

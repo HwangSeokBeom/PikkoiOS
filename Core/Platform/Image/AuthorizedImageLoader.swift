@@ -1,0 +1,106 @@
+import Foundation
+
+protocol AuthorizedImageLoading: Sendable {
+    func imageData(for path: String) async throws -> Data
+    func cachedImageData(for path: String) async throws -> Data?
+    func removeCachedImage(for path: String) async throws
+}
+
+actor AuthorizedImageLoader: AuthorizedImageLoading {
+    private let session: URLSession
+    private let requestBuilder: RequestBuilder
+    private let tokenRefreshCoordinator: TokenRefreshCoordinator
+    private let fileURLResolver: any AuthorizedFileURLResolving
+    private let imageCache: ImageCache
+
+    private var inFlightTasks: [URL: Task<Data, Error>] = [:]
+
+    init(
+        session: URLSession,
+        requestBuilder: RequestBuilder,
+        tokenRefreshCoordinator: TokenRefreshCoordinator,
+        fileURLResolver: any AuthorizedFileURLResolving,
+        imageCache: ImageCache
+    ) {
+        self.session = session
+        self.requestBuilder = requestBuilder
+        self.tokenRefreshCoordinator = tokenRefreshCoordinator
+        self.fileURLResolver = fileURLResolver
+        self.imageCache = imageCache
+    }
+
+    func imageData(for path: String) async throws -> Data {
+        let url = try fileURLResolver.resolveURL(from: path)
+
+        if let cachedData = await imageCache.data(for: url) {
+            return cachedData
+        }
+
+        if let inFlightTask = inFlightTasks[url] {
+            return try await inFlightTask.value
+        }
+
+        let task = Task<Data, Error> {
+            try await fetchImageData(from: url, didRetryAfterRefresh: false)
+        }
+        inFlightTasks[url] = task
+
+        do {
+            let data = try await task.value
+            await imageCache.insert(data, for: url)
+            inFlightTasks[url] = nil
+            return data
+        } catch {
+            inFlightTasks[url] = nil
+            throw error
+        }
+    }
+
+    func cachedImageData(for path: String) async throws -> Data? {
+        let url = try fileURLResolver.resolveURL(from: path)
+        return await imageCache.data(for: url)
+    }
+
+    func removeCachedImage(for path: String) async throws {
+        let url = try fileURLResolver.resolveURL(from: path)
+        await imageCache.removeValue(for: url)
+    }
+
+    private func fetchImageData(from url: URL, didRetryAfterRefresh: Bool) async throws -> Data {
+        let endpoint = Endpoint<EmptyResponse>(
+            path: url.absoluteString,
+            method: .get,
+            timeout: .default,
+            authorizationPolicy: .fileAuthorized
+        )
+        let request = try await requestBuilder.build(for: endpoint)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw NetworkError.transport
+            }
+
+            switch httpResponse.statusCode {
+            case 200..<300:
+                return data
+            case 419 where !didRetryAfterRefresh:
+                _ = try await tokenRefreshCoordinator.refreshTokens()
+                return try await fetchImageData(from: url, didRetryAfterRefresh: true)
+            default:
+                let error = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
+                switch error {
+                case .unauthorized, .refreshTokenExpired:
+                    await tokenRefreshCoordinator.invalidateSession()
+                default:
+                    break
+                }
+                throw error
+            }
+        } catch let error as NetworkError {
+            throw error
+        } catch {
+            throw NetworkError.transport
+        }
+    }
+}

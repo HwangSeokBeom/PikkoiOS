@@ -1,0 +1,5 @@
+PIKKO_APP_ENV = development
+PIKKO_BASE_URL = http://pickup.sesac.kr:42678
+PIKKO_SESAC_KEY = REPLACE_WITH_SESAC_KEY
+
+#include? "Secrets.xcconfig"
