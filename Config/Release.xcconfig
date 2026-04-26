@@ -6,5 +6,4 @@ GOOGLE_IOS_CLIENT_ID = REPLACE_WITH_GOOGLE_IOS_CLIENT_ID
 GOOGLE_REVERSED_CLIENT_ID = REPLACE_WITH_GOOGLE_REVERSED_CLIENT_ID
 PIKKO_INTERNAL_STUB_AUTH_ENABLED = NO
 
-#include? "AuthSecrets.xcconfig"
-#include? "LocalSecrets.xcconfig"
+#include? "Secrets.xcconfig"

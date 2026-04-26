@@ -23,13 +23,13 @@ enum AppConfigurationError: Error, Equatable, Sendable {
     var logMessage: String {
         switch self {
         case .missingBaseURL:
-            return "PIKKO_BASE_URL is missing. Configure it in AuthSecrets.xcconfig or LocalSecrets.xcconfig."
+            return "PIKKO_BASE_URL is missing. Configure it in Secrets.xcconfig."
         case .invalidBaseURL:
-            return "PIKKO_BASE_URL is invalid. Configure a full http/https host in AuthSecrets.xcconfig or LocalSecrets.xcconfig."
+            return "PIKKO_BASE_URL is invalid. Configure a full http/https host in Secrets.xcconfig."
         case .missingSeSACKey:
-            return "PIKKO_SESAC_KEY is missing. Configure it in AuthSecrets.xcconfig or LocalSecrets.xcconfig."
+            return "PIKKO_SESAC_KEY is missing. Configure it in Secrets.xcconfig."
         case .invalidSeSACKey:
-            return "PIKKO_SESAC_KEY is invalid. Check the configured value in AuthSecrets.xcconfig or LocalSecrets.xcconfig."
+            return "PIKKO_SESAC_KEY is invalid. Check the configured value in Secrets.xcconfig."
         }
     }
 
@@ -37,13 +37,13 @@ enum AppConfigurationError: Error, Equatable, Sendable {
 #if DEBUG
         switch self {
         case .missingBaseURL:
-            return "PIKKO_BASE_URL이 누락되었습니다. Config/AuthSecrets.xcconfig 또는 Config/LocalSecrets.xcconfig를 확인하세요."
+            return "PIKKO_BASE_URL이 누락되었습니다. Config/Secrets.xcconfig를 확인하세요."
         case .invalidBaseURL:
-            return "PIKKO_BASE_URL이 올바르지 않습니다. Config/AuthSecrets.xcconfig 또는 Config/LocalSecrets.xcconfig를 확인하세요."
+            return "PIKKO_BASE_URL이 올바르지 않습니다. Config/Secrets.xcconfig를 확인하세요."
         case .missingSeSACKey:
-            return "PIKKO_SESAC_KEY가 누락되었습니다. Config/AuthSecrets.xcconfig 또는 Config/LocalSecrets.xcconfig를 확인하세요."
+            return "PIKKO_SESAC_KEY가 누락되었습니다. Config/Secrets.xcconfig를 확인하세요."
         case .invalidSeSACKey:
-            return "PIKKO_SESAC_KEY가 올바르지 않습니다. Config/AuthSecrets.xcconfig 또는 Config/LocalSecrets.xcconfig를 확인하세요."
+            return "PIKKO_SESAC_KEY가 올바르지 않습니다. Config/Secrets.xcconfig를 확인하세요."
         }
 #else
         return "앱 설정을 확인해 주세요."

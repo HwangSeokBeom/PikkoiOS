@@ -1,13 +1,18 @@
 Pikko local auth setup
 
-1. Copy `Config/Secrets.xcconfig.sample` to `Config/Secrets.xcconfig`.
+1. Copy `Config/AuthSecrets.example.xcconfig` to `Config/AuthSecrets.xcconfig` or `Config/LocalSecrets.xcconfig`.
 2. Fill in these values locally:
    - `KAKAO_NATIVE_APP_KEY`
    - `GOOGLE_IOS_CLIENT_ID`
    - `GOOGLE_REVERSED_CLIENT_ID`
    - `PIKKO_BASE_URL`
    - `PIKKO_SESAC_KEY`
-3. Keep `Config/Secrets.xcconfig` out of git. `.gitignore` already excludes it.
+   - For `PIKKO_BASE_URL`, do not write `http://...` directly in xcconfig.
+   - Use:
+     `PIKKO_URL_SLASH = /`
+     `PIKKO_BASE_URL = http:$(PIKKO_URL_SLASH)$(PIKKO_URL_SLASH)pickup.sesac.kr:42678/`
+   - `http://pickup.sesac.kr:42678` and `http://pickup.sesac.kr:42678/` both work at runtime.
+3. Keep `Config/AuthSecrets.xcconfig` and `Config/LocalSecrets.xcconfig` out of git. `.gitignore` already excludes them.
 4. `Config/GoogleService-Info.plist` is optional for the current client-ID based Google Sign-In flow.
    - If another SDK flow requires it later, place the real file at `Config/GoogleService-Info.plist`.
    - Do not commit the real plist.
