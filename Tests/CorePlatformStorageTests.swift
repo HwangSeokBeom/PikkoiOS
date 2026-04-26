@@ -61,6 +61,30 @@ final class CorePlatformStorageTests: XCTestCase {
         XCTAssertEqual(store.string(forKey: "session.deviceToken"), "device-token-123")
     }
 
+    func testFallbackAuthorizedImageLoaderUsesGeneratedPlaceholderForSeedPath() async throws {
+        let primaryLoader = StubAuthorizedImageLoader()
+        let fallbackLoader = FallbackAuthorizedImageLoader(primaryLoader: primaryLoader)
+
+        let data = try await fallbackLoader.imageData(for: "community-avatar-preview")
+
+        XCTAssertFalse(data.isEmpty)
+        let requestedPaths = await primaryLoader.requestedPaths
+        XCTAssertTrue(requestedPaths.isEmpty)
+    }
+
+    func testFallbackAuthorizedImageLoaderDelegatesRemotePathToPrimaryLoader() async throws {
+        let primaryLoader = StubAuthorizedImageLoader(
+            dataByPath: ["/v1/data/profiles/avatar.jpg": Data([0x01, 0x02, 0x03])]
+        )
+        let fallbackLoader = FallbackAuthorizedImageLoader(primaryLoader: primaryLoader)
+
+        let data = try await fallbackLoader.imageData(for: "/v1/data/profiles/avatar.jpg")
+
+        XCTAssertEqual(data, Data([0x01, 0x02, 0x03]))
+        let requestedPaths = await primaryLoader.requestedPaths
+        XCTAssertEqual(requestedPaths, ["/v1/data/profiles/avatar.jpg"])
+    }
+
     private func makeUserDefaults(suiteName: String) -> UserDefaults {
         let userDefaults = UserDefaults(suiteName: suiteName)!
         userDefaults.removePersistentDomain(forName: suiteName)
@@ -82,4 +106,27 @@ private actor InMemoryTokenStore: TokenStore {
     func clearTokens() async throws {
         tokens = nil
     }
+}
+
+private actor StubAuthorizedImageLoader: AuthorizedImageLoading {
+    private let dataByPath: [String: Data]
+    private(set) var requestedPaths: [String] = []
+
+    init(dataByPath: [String: Data] = [:]) {
+        self.dataByPath = dataByPath
+    }
+
+    func imageData(for path: String) async throws -> Data {
+        requestedPaths.append(path)
+        if let data = dataByPath[path] {
+            return data
+        }
+        throw NetworkError.invalidRequest
+    }
+
+    func cachedImageData(for path: String) async throws -> Data? {
+        dataByPath[path]
+    }
+
+    func removeCachedImage(for path: String) async throws {}
 }

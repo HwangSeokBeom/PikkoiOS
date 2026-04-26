@@ -26,9 +26,8 @@ final class APIClient: APIClientProtocol {
         didRetryTransport: Bool,
         didRetryAfterRefresh: Bool
     ) async throws -> ResponseDTO {
-        let request = try await requestBuilder.build(for: endpoint)
-
         do {
+            let request = try await requestBuilder.build(for: endpoint)
             let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw NetworkError.transport
@@ -36,9 +35,14 @@ final class APIClient: APIClientProtocol {
 
             switch httpResponse.statusCode {
             case 200..<300:
-                return try decode(ResponseDTO.self, from: data, statusCode: httpResponse.statusCode)
-            case 419
-                where shouldAttemptRefresh(for: endpoint, didRetryAfterRefresh: didRetryAfterRefresh):
+                return try decode(
+                    ResponseDTO.self,
+                    from: data,
+                    statusCode: httpResponse.statusCode,
+                    endpoint: endpoint
+                )
+            case 401 where shouldAttemptRefresh(for: endpoint, didRetryAfterRefresh: didRetryAfterRefresh),
+                 419 where shouldAttemptRefresh(for: endpoint, didRetryAfterRefresh: didRetryAfterRefresh):
                 _ = try await tokenRefreshCoordinator.refreshTokens()
                 return try await execute(
                     endpoint,
@@ -46,9 +50,14 @@ final class APIClient: APIClientProtocol {
                     didRetryAfterRefresh: true
                 )
             default:
+                if httpResponse.statusCode == 444 {
+                    Logger.shared.error(
+                        "Received 444 for \(endpoint.method.rawValue) \(endpoint.path). Check Swagger path/method alignment."
+                    )
+                }
                 let mappedError = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
                 switch mappedError {
-                case .unauthorized, .refreshTokenExpired:
+                case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .forbidden:
                     await tokenRefreshCoordinator.invalidateSession()
                 default:
                     break
@@ -56,6 +65,10 @@ final class APIClient: APIClientProtocol {
                 throw mappedError
             }
         } catch let error as NetworkError {
+            if endpoint.authorizationPolicy.requiresAuthenticatedSession,
+               error.shouldInvalidateSessionImmediately {
+                await tokenRefreshCoordinator.invalidateSession()
+            }
             throw error
         } catch {
             if endpoint.method.isTransportRetryEligible,
@@ -89,7 +102,8 @@ final class APIClient: APIClientProtocol {
     private func decode<ResponseDTO: Decodable & Sendable>(
         _ type: ResponseDTO.Type,
         from data: Data,
-        statusCode: Int
+        statusCode: Int,
+        endpoint: Endpoint<ResponseDTO>
     ) throws -> ResponseDTO {
         if ResponseDTO.self == EmptyResponse.self, data.isEmpty || statusCode == 204 {
             return EmptyResponse() as! ResponseDTO
@@ -102,6 +116,10 @@ final class APIClient: APIClientProtocol {
         do {
             return try NetworkCoding.makeJSONDecoder().decode(ResponseDTO.self, from: data)
         } catch {
+            let payloadSnippet = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8>"
+            Logger.shared.error(
+                "Decoding failed for \(endpoint.method.rawValue) \(endpoint.path) into \(String(describing: ResponseDTO.self)). payload=\(payloadSnippet)"
+            )
             throw NetworkError.decoding
         }
     }

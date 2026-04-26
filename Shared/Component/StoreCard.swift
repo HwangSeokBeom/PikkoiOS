@@ -29,97 +29,85 @@ struct StoreCard: View {
     var onLikeTapped: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: PikkoSpacing.md) {
+        VStack(alignment: .leading, spacing: contentSpacing) {
             imageSection
             infoSection
         }
-        .padding(style == .featured ? PikkoSpacing.sm : PikkoSpacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(cardPadding)
         .background(.white)
-        .clipShape(RoundedRectangle(cornerRadius: style == .featured ? PikkoRadius.hero : PikkoRadius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                .stroke(PikkoColor.line.opacity(0.6), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
         .pikkoShadow(PikkoShadow.card)
     }
 
     private var imageSection: some View {
         ZStack(alignment: .topLeading) {
             Group {
-                if style == .list, !model.thumbnailPaths.isEmpty {
-                    HStack(spacing: PikkoSpacing.xs) {
-                        AuthorizedAsyncImage(
-                            path: model.heroImagePath,
-                            loader: loader,
-                            cornerRadius: PikkoRadius.hero
-                        )
-
-                        VStack(spacing: PikkoSpacing.xs) {
-                            ForEach(model.thumbnailPaths.prefix(2), id: \.self) { path in
-                                AuthorizedAsyncImage(
-                                    path: path,
-                                    loader: loader,
-                                    cornerRadius: PikkoRadius.card
-                                )
-                            }
-                        }
-                        .frame(width: 92)
-                    }
+                if style == .list {
+                    listImageLayout
                 } else {
-                    AuthorizedAsyncImage(
-                        path: model.heroImagePath,
+                    StoreCardImageTile(
+                        path: primaryImagePath,
                         loader: loader,
-                        cornerRadius: style == .featured ? PikkoRadius.hero : PikkoRadius.card
+                        cornerRadius: imageCornerRadius
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(height: style == .featured ? 170 : 156)
+            .frame(height: imageHeight)
+            .clipped()
 
-            HStack {
+            HStack(alignment: .top) {
                 Button {
                     onLikeTapped?()
                 } label: {
                     Image(systemName: model.isLiked ? "heart.fill" : "heart")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(model.isLiked ? PikkoColor.coralHeart : .white)
-                        .frame(width: 34, height: 34)
-                        .background(.white.opacity(0.84))
+                        .font(.system(size: heartIconSize, weight: .semibold))
+                        .foregroundStyle(model.isLiked ? PikkoColor.coralHeart : PikkoColor.gray500)
+                        .frame(width: overlayButtonSize, height: overlayButtonSize)
+                        .background(.white.opacity(0.9))
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
 
-                Spacer()
+                Spacer(minLength: PikkoSpacing.xs)
 
                 if model.isPickupAvailable {
                     TagChip(
-                        title: "픽업됨",
+                        title: "픽업중",
                         systemImage: "takeoutbag.and.cup.and.straw.fill",
                         isSelected: true,
-                        appearance: .filled
+                        appearance: .filled,
+                        size: .mini
                     )
                 }
             }
-            .padding(PikkoSpacing.sm)
+            .padding(overlayPadding)
         }
     }
 
     private var infoSection: some View {
-        VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
-            HStack(alignment: .top) {
-                Text(model.title)
-                    .font(PikkoTypography.cardTitle)
-                    .foregroundStyle(PikkoColor.primaryText)
-                    .lineLimit(2)
-                Spacer(minLength: PikkoSpacing.xs)
-                if style == .featured {
-                    RatingSummaryView(ratingText: model.ratingText, reviewCountText: model.reviewCountText)
-                }
-            }
+        VStack(alignment: .leading, spacing: infoSpacing) {
+            Text(model.title)
+                .font(titleFont)
+                .foregroundStyle(PikkoColor.primaryText)
+                .lineLimit(style == .featured ? 1 : 2)
+                .multilineTextAlignment(.leading)
 
-            HStack(spacing: PikkoSpacing.sm) {
+            HStack(spacing: metaSpacing) {
                 metaBadge(systemImage: "heart.fill", text: model.likeText, tint: PikkoColor.warmYellow)
-                if style == .list {
-                    RatingSummaryView(ratingText: model.ratingText, reviewCountText: model.reviewCountText)
-                }
+                RatingSummaryView(
+                    ratingText: model.ratingText,
+                    reviewCountText: model.reviewCountText,
+                    size: .compact
+                )
             }
 
-            HStack(spacing: PikkoSpacing.md) {
+            HStack(spacing: infoRowSpacing) {
                 infoPill(systemImage: "location.fill", text: model.distanceText)
                 infoPill(systemImage: "clock.fill", text: model.openTimeText)
                 infoPill(systemImage: "figure.walk", text: model.orderCountText)
@@ -129,33 +117,258 @@ struct StoreCard: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: PikkoSpacing.xs) {
                         ForEach(model.tags, id: \.self) { tag in
-                            TagChip(title: tag, appearance: .subtle)
+                            TagChip(title: tag, appearance: .subtle, size: .mini)
                         }
                     }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func infoPill(systemImage: String, text: String) -> some View {
         HStack(spacing: 4) {
             Image(systemName: systemImage)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
             Text(text)
-                .font(PikkoTypography.captionStrong)
+                .font(PikkoTypography.micro)
         }
         .foregroundStyle(PikkoColor.secondaryText)
+        .lineLimit(1)
     }
 
     private func metaBadge(systemImage: String, text: String, tint: Color) -> some View {
         HStack(spacing: 4) {
             Image(systemName: systemImage)
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(tint)
             Text(text)
-                .font(PikkoTypography.bodyStrong)
+                .font(PikkoTypography.captionStrong)
                 .foregroundStyle(PikkoColor.primaryText)
         }
+    }
+
+    @ViewBuilder
+    private var listImageLayout: some View {
+        switch secondaryImagePaths.count {
+        case 2...:
+            HStack(spacing: PikkoSpacing.xs) {
+                StoreCardImageTile(
+                    path: primaryImagePath,
+                    loader: loader,
+                    cornerRadius: imageCornerRadius
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                VStack(spacing: PikkoSpacing.xs) {
+                    ForEach(Array(secondaryImagePaths.prefix(2).enumerated()), id: \.offset) { _, path in
+                        StoreCardImageTile(
+                            path: path,
+                            loader: loader,
+                            cornerRadius: secondaryImageCornerRadius
+                        )
+                        .frame(width: thumbnailColumnWidth, height: secondaryImageHeight)
+                    }
+                }
+                .frame(width: thumbnailColumnWidth)
+                .frame(maxHeight: .infinity)
+            }
+            .frame(maxHeight: .infinity)
+        case 1:
+            HStack(spacing: PikkoSpacing.xs) {
+                StoreCardImageTile(
+                    path: primaryImagePath,
+                    loader: loader,
+                    cornerRadius: imageCornerRadius
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                StoreCardImageTile(
+                    path: secondaryImagePaths.first,
+                    loader: loader,
+                    cornerRadius: secondaryImageCornerRadius
+                )
+                .frame(width: thumbnailColumnWidth, height: imageHeight)
+            }
+            .frame(maxHeight: .infinity)
+        default:
+            StoreCardImageTile(
+                path: primaryImagePath,
+                loader: loader,
+                cornerRadius: imageCornerRadius
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var imagePathsForDisplay: [String] {
+        var seen = Set<String>()
+
+        return ([model.heroImagePath] + model.thumbnailPaths)
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0).inserted }
+    }
+
+    private var primaryImagePath: String? {
+        imagePathsForDisplay.first
+    }
+
+    private var secondaryImagePaths: [String] {
+        Array(imagePathsForDisplay.dropFirst().prefix(2))
+    }
+
+    private var cardPadding: CGFloat {
+        switch style {
+        case .featured:
+            return 10
+        case .list:
+            return 12
+        }
+    }
+
+    private var contentSpacing: CGFloat {
+        switch style {
+        case .featured:
+            return PikkoSpacing.sm
+        case .list:
+            return 10
+        }
+    }
+
+    private var infoSpacing: CGFloat {
+        switch style {
+        case .featured:
+            return 6
+        case .list:
+            return 8
+        }
+    }
+
+    private var metaSpacing: CGFloat {
+        switch style {
+        case .featured:
+            return PikkoSpacing.xs
+        case .list:
+            return PikkoSpacing.sm
+        }
+    }
+
+    private var infoRowSpacing: CGFloat {
+        switch style {
+        case .featured:
+            return 10
+        case .list:
+            return PikkoSpacing.sm
+        }
+    }
+
+    private var imageHeight: CGFloat {
+        switch style {
+        case .featured:
+            return 118
+        case .list:
+            return 132
+        }
+    }
+
+    private var secondaryImageHeight: CGFloat {
+        (imageHeight - PikkoSpacing.xs) / 2
+    }
+
+    private var thumbnailColumnWidth: CGFloat {
+        82
+    }
+
+    private var imageCornerRadius: CGFloat {
+        switch style {
+        case .featured:
+            return 14
+        case .list:
+            return 16
+        }
+    }
+
+    private var secondaryImageCornerRadius: CGFloat {
+        switch style {
+        case .featured:
+            return 14
+        case .list:
+            return 14
+        }
+    }
+
+    private var overlayButtonSize: CGFloat {
+        switch style {
+        case .featured:
+            return 28
+        case .list:
+            return 30
+        }
+    }
+
+    private var heartIconSize: CGFloat {
+        switch style {
+        case .featured:
+            return 14
+        case .list:
+            return 15
+        }
+    }
+
+    private var overlayPadding: CGFloat {
+        switch style {
+        case .featured:
+            return PikkoSpacing.xs
+        case .list:
+            return 10
+        }
+    }
+
+    private var titleFont: Font {
+        switch style {
+        case .featured:
+            return .system(size: 15, weight: .semibold)
+        case .list:
+            return .system(size: 16, weight: .semibold)
+        }
+    }
+
+    private var cardCornerRadius: CGFloat {
+        switch style {
+        case .featured:
+            return 18
+        case .list:
+            return 20
+        }
+    }
+}
+
+private struct StoreCardImageTile: View {
+    let path: String?
+    let loader: any AuthorizedImageLoading
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        Group {
+            if let path, !path.isEmpty {
+                AuthorizedAsyncImage(
+                    path: path,
+                    loader: loader,
+                    contentMode: .fill,
+                    cornerRadius: cornerRadius
+                )
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(PikkoColor.surfaceMuted)
+                    .overlay {
+                        Image(systemName: "photo")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(PikkoColor.secondaryText)
+                    }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 

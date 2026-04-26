@@ -1,13 +1,13 @@
 import SwiftUI
 
 struct OrderStatusTimelineView: View {
-    enum StageState {
+    enum StageState: Equatable {
         case completed
         case current
         case upcoming
     }
 
-    struct Stage: Identifiable {
+    struct Stage: Identifiable, Equatable {
         let id: String
         let title: String
         let timeText: String

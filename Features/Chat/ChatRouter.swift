@@ -10,7 +10,6 @@ final class ChatRouter: ObservableObject, ChatRouting {
     @Published private(set) var pendingRoute: AppRoute?
 
     func routeToPrimaryDestination() {
-        pendingRoute = .chat
         Logger.shared.debug("TODO: Push chat room destinations once room models exist.")
     }
 }

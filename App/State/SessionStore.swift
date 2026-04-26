@@ -9,12 +9,14 @@ final class SessionStore: ObservableObject {
 
     private enum StorageKey {
         static let deviceToken = "session.deviceToken"
+        static let lastSyncedDeviceTokenSignature = "session.lastSyncedDeviceTokenSignature"
     }
 
     @Published private(set) var currentSession: UserSession?
     @Published private(set) var deviceToken: String?
     private let tokenStore: any TokenStore
     private let userDefaultsStore: any UserDefaultsStoring
+    private let sessionSnapshotStore: any SessionSnapshotStoring
     private var notificationObservers: [NSObjectProtocol] = []
 
     var accessToken: String? {
@@ -29,6 +31,10 @@ final class SessionStore: ObservableObject {
         currentSession?.userID
     }
 
+    var email: String? {
+        currentSession?.email
+    }
+
     var nick: String? {
         currentSession?.nick
     }
@@ -41,16 +47,28 @@ final class SessionStore: ObservableObject {
         currentSession != nil
     }
 
+    var deviceTokenSyncStateID: String {
+        [currentUserID ?? "guest", deviceToken ?? "none", authState == .authenticated ? "auth" : "anon"]
+            .joined(separator: "|")
+    }
+
+    var hasSyncedCurrentDeviceToken: Bool {
+        currentDeviceTokenSignature != nil
+            && currentDeviceTokenSignature == userDefaultsStore.string(forKey: StorageKey.lastSyncedDeviceTokenSignature)
+    }
+
     var authState: AuthState {
         isAuthenticated ? .authenticated : .unauthenticated
     }
 
     init(
         tokenStore: any TokenStore,
-        userDefaultsStore: any UserDefaultsStoring
+        userDefaultsStore: any UserDefaultsStoring,
+        sessionSnapshotStore: (any SessionSnapshotStoring)? = nil
     ) {
         self.tokenStore = tokenStore
         self.userDefaultsStore = userDefaultsStore
+        self.sessionSnapshotStore = sessionSnapshotStore ?? UserDefaultsSessionSnapshotStore(store: userDefaultsStore)
         self.deviceToken = userDefaultsStore.string(forKey: StorageKey.deviceToken)
         bindNetworkNotifications()
     }
@@ -69,6 +87,7 @@ final class SessionStore: ObservableObject {
                     refreshToken: session.refreshToken
                 )
             )
+            try? await sessionSnapshotStore.saveSnapshot(StoredSessionProfile(session: session))
         }
     }
 
@@ -79,11 +98,17 @@ final class SessionStore: ObservableObject {
         guard let currentSession else { return }
         self.currentSession = UserSession(
             userID: currentSession.userID,
+            email: currentSession.email,
             displayName: nick ?? currentSession.displayName,
             profileImagePath: profileImagePath ?? currentSession.profileImagePath,
             accessToken: currentSession.accessToken,
             refreshToken: currentSession.refreshToken
         )
+        if let currentSession = self.currentSession {
+            Task {
+                try? await sessionSnapshotStore.saveSnapshot(StoredSessionProfile(session: currentSession))
+            }
+        }
     }
 
     func updateDeviceToken(_ deviceToken: String?) {
@@ -91,10 +116,20 @@ final class SessionStore: ObservableObject {
         userDefaultsStore.set(deviceToken, forKey: StorageKey.deviceToken)
     }
 
+    func markCurrentDeviceTokenSynced() {
+        userDefaultsStore.set(currentDeviceTokenSignature, forKey: StorageKey.lastSyncedDeviceTokenSignature)
+    }
+
+    func clearSyncedDeviceTokenState() {
+        userDefaultsStore.removeValue(forKey: StorageKey.lastSyncedDeviceTokenSignature)
+    }
+
     func clear() {
         currentSession = nil
+        clearSyncedDeviceTokenState()
         Task {
             try? await tokenStore.clearTokens()
+            try? await sessionSnapshotStore.saveSnapshot(nil)
         }
     }
 
@@ -109,6 +144,7 @@ final class SessionStore: ObservableObject {
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.currentSession = nil
+                    self?.clearSyncedDeviceTokenState()
                 }
             }
         )
@@ -137,5 +173,15 @@ final class SessionStore: ObservableObject {
                 }
             }
         )
+    }
+
+    private var currentDeviceTokenSignature: String? {
+        guard let currentUserID,
+              let deviceToken,
+              !deviceToken.isEmpty else {
+            return nil
+        }
+
+        return "\(currentUserID)|\(deviceToken)"
     }
 }

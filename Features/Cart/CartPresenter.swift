@@ -6,7 +6,6 @@ final class CartPresenter: ObservableObject {
 
     private let interactor: CartInteracting
     private let router: CartRouting
-    private var hasLoaded = false
 
     init(interactor: CartInteracting, router: CartRouting) {
         self.interactor = interactor
@@ -16,10 +15,13 @@ final class CartPresenter: ObservableObject {
     func send(_ action: CartAction) async {
         switch action {
         case .onAppear:
-            guard !hasLoaded else { return }
-            hasLoaded = true
             viewState = await interactor.loadInitialState()
+        case .incrementTapped(let menuID):
+            viewState = await interactor.updateQuantity(for: menuID, delta: 1)
+        case .decrementTapped(let menuID):
+            viewState = await interactor.updateQuantity(for: menuID, delta: -1)
         case .primaryButtonTapped:
+            guard viewState.isCheckoutEnabled else { return }
             router.routeToPrimaryDestination()
         }
     }

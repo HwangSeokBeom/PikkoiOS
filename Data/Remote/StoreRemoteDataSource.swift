@@ -1,6 +1,14 @@
 import Foundation
 
 protocol StoreRemoteDataSourceProtocol: Sendable {
+    func fetchStoreDetail(storeID: String) async throws -> StoreDetailResponseDTO
+    func searchStores(name: String?) async throws -> StoreSearchListResponseDTO
+    func fetchLikedStores(
+        category: String?,
+        nextCursor: String?,
+        limit: Int
+    ) async throws -> StoreSummaryListResponseDTO
+
     func fetchNearbyStores(
         category: String?,
         longitude: Double?,
@@ -11,7 +19,7 @@ protocol StoreRemoteDataSourceProtocol: Sendable {
         orderBy: StoreSortOrder
     ) async throws -> StoreSummaryListResponseDTO
 
-    func fetchPopularStores(category: String?) async throws -> [StoreSummaryDTO]
+    func fetchPopularStores(category: String?) async throws -> PopularStoresResponseDTO
     func fetchPopularSearchTerms() async throws -> PopularSearchTermsResponseDTO
     func updateLikeStatus(storeID: String, isLiked: Bool) async throws -> LikeStoreResponseDTO
 }
@@ -21,6 +29,46 @@ struct StoreRemoteDataSource: StoreRemoteDataSourceProtocol {
 
     init(apiClient: any APIClientProtocol) {
         self.apiClient = apiClient
+    }
+
+    func fetchStoreDetail(storeID: String) async throws -> StoreDetailResponseDTO {
+        let endpoint = Endpoint<StoreDetailResponseDTO>(
+            path: "/v1/stores/\(storeID)",
+            method: .get,
+            timeout: .default,
+            authorizationPolicy: .accessToken
+        )
+        return try await apiClient.execute(endpoint)
+    }
+
+    func searchStores(name: String?) async throws -> StoreSearchListResponseDTO {
+        let endpoint = Endpoint<StoreSearchListResponseDTO>(
+            path: "/v1/stores/search",
+            method: .get,
+            query: optionalQueryItems([("name", name)]),
+            timeout: .default,
+            authorizationPolicy: .accessToken
+        )
+        return try await apiClient.execute(endpoint)
+    }
+
+    func fetchLikedStores(
+        category: String?,
+        nextCursor: String?,
+        limit: Int
+    ) async throws -> StoreSummaryListResponseDTO {
+        let endpoint = Endpoint<StoreSummaryListResponseDTO>(
+            path: "/v1/stores/likes/me",
+            method: .get,
+            query: optionalQueryItems([
+                ("category", category),
+                ("next", nextCursor),
+                ("limit", String(limit))
+            ]),
+            timeout: .default,
+            authorizationPolicy: .accessToken
+        )
+        return try await apiClient.execute(endpoint)
     }
 
     func fetchNearbyStores(
@@ -50,8 +98,8 @@ struct StoreRemoteDataSource: StoreRemoteDataSourceProtocol {
         return try await apiClient.execute(endpoint)
     }
 
-    func fetchPopularStores(category: String?) async throws -> [StoreSummaryDTO] {
-        let endpoint = Endpoint<[StoreSummaryDTO]>(
+    func fetchPopularStores(category: String?) async throws -> PopularStoresResponseDTO {
+        let endpoint = Endpoint<PopularStoresResponseDTO>(
             path: "/v1/stores/popular-stores",
             method: .get,
             query: optionalQueryItems([("category", category)]),

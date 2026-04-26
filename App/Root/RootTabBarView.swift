@@ -1,47 +1,53 @@
 import SwiftUI
 
 struct RootTabBarView: View {
+    private enum Layout {
+        static let height: CGFloat = 92
+        static let floatingOffset: CGFloat = -16
+        static let itemsTopPadding: CGFloat = 22
+        static let itemsBottomPadding: CGFloat = 8
+        static let centerSlotWidth: CGFloat = 78
+    }
+
     let selectedTab: RootTab
     let onSelect: (RootTab) -> Void
     let onQuickAction: () -> Void
 
     var body: some View {
         ZStack(alignment: .top) {
+            tabBarBackground
+
             FloatingQuickActionView(action: onQuickAction)
-                .offset(y: -20)
+                .offset(y: Layout.floatingOffset)
                 .zIndex(1)
 
-            VStack(spacing: 0) {
-                Spacer()
-                    .frame(height: 26)
-
-                HStack(spacing: 0) {
-                    item(for: .home)
-                    item(for: .order)
-                    Color.clear
-                        .frame(width: 88)
-                    item(for: .community)
-                    item(for: .profile)
-                }
-                .padding(.horizontal, PikkoSpacing.md)
-                .padding(.top, PikkoSpacing.sm)
-                .padding(.bottom, PikkoSpacing.xs)
-                .frame(maxWidth: .infinity)
-                .background(tabBarBackground)
+            HStack(spacing: 0) {
+                item(for: .home)
+                item(for: .order)
+                Color.clear
+                    .frame(width: Layout.centerSlotWidth)
+                item(for: .community)
+                item(for: .profile)
             }
+            .padding(.horizontal, PikkoSpacing.sm)
+            .padding(.top, Layout.itemsTopPadding)
+            .padding(.bottom, Layout.itemsBottomPadding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(height: 106)
+        .frame(height: Layout.height)
     }
 
     private var tabBarBackground: some View {
         Rectangle()
-            .fill(PikkoColor.surfaceElevated)
+            .fill(Color.white.opacity(0.86))
+            .background(.ultraThinMaterial)
             .overlay(alignment: .top) {
                 Rectangle()
                     .fill(PikkoColor.line.opacity(0.8))
                     .frame(height: 1)
             }
             .shadow(color: Color.black.opacity(0.06), radius: 12, x: 0, y: -2)
+            .ignoresSafeArea(edges: .bottom)
     }
 
     private func item(for tab: RootTab) -> some View {
@@ -52,15 +58,15 @@ struct RootTabBarView: View {
         } label: {
             VStack(spacing: 6) {
                 Image(systemName: isSelected ? tab.activeSystemImage : tab.inactiveSystemImage)
-                    .font(.system(size: 21, weight: .semibold))
-                    .foregroundStyle(isSelected ? PikkoColor.accentStrong : PikkoColor.gray300)
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(isSelected ? PikkoColor.accentStrong : PikkoColor.gray400)
 
                 Text(tab.title)
                     .font(PikkoTypography.micro)
                     .foregroundStyle(isSelected ? PikkoColor.accentStrong : PikkoColor.tertiaryText)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 54)
+            .frame(height: 50)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

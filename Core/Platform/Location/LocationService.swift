@@ -6,11 +6,13 @@ final class LocationService: NSObject, LocationServiceProtocol {
     private let locationManager: CLLocationManager
     private var locationContinuations: [UUID: AsyncStream<CLLocation>.Continuation] = [:]
     private var pendingLocationRequest: CheckedContinuation<CLLocation, Error>?
+    private var cachedAuthorizationStatus: CLAuthorizationStatus = .notDetermined
+    private var hasRequestedAuthorization = false
 
     private(set) var currentLocation: CLLocation?
 
     var authorizationStatus: CLAuthorizationStatus {
-        locationManager.authorizationStatus
+        cachedAuthorizationStatus
     }
 
     init(locationManager: CLLocationManager = CLLocationManager()) {
@@ -18,15 +20,24 @@ final class LocationService: NSObject, LocationServiceProtocol {
         super.init()
         self.locationManager.delegate = self
         self.locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        self.cachedAuthorizationStatus = locationManager.authorizationStatus
     }
 
     func requestWhenInUseAuthorization() {
-        guard CLLocationManager.locationServicesEnabled() else { return }
-        locationManager.requestWhenInUseAuthorization()
+        guard cachedAuthorizationStatus == .notDetermined,
+              !hasRequestedAuthorization else {
+            return
+        }
+        hasRequestedAuthorization = true
+        Task { [weak self] in
+            guard let self else { return }
+            let servicesEnabled = await Self.locationServicesEnabled()
+            self.requestAuthorizationIfPossible(servicesEnabled: servicesEnabled)
+        }
     }
 
     func requestCurrentLocation() async throws -> CLLocation {
-        guard CLLocationManager.locationServicesEnabled() else {
+        guard await Self.locationServicesEnabled() else {
             throw LocationServiceError.servicesDisabled
         }
 
@@ -41,7 +52,6 @@ final class LocationService: NSObject, LocationServiceProtocol {
                 locationManager.requestLocation()
             }
         case .notDetermined:
-            locationManager.requestWhenInUseAuthorization()
             throw LocationServiceError.authorizationNotDetermined
         case .restricted, .denied:
             throw LocationServiceError.unauthorized
@@ -51,8 +61,20 @@ final class LocationService: NSObject, LocationServiceProtocol {
     }
 
     func startUpdatingLocation() {
-        guard CLLocationManager.locationServicesEnabled() else { return }
-        locationManager.startUpdatingLocation()
+        switch cachedAuthorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            Task { [weak self] in
+                guard let self else { return }
+                let servicesEnabled = await Self.locationServicesEnabled()
+                self.startUpdatingLocationIfPossible(servicesEnabled: servicesEnabled)
+            }
+        case .notDetermined:
+            requestWhenInUseAuthorization()
+        case .restricted, .denied:
+            return
+        @unknown default:
+            return
+        }
     }
 
     func stopUpdatingLocation() {
@@ -71,6 +93,33 @@ final class LocationService: NSObject, LocationServiceProtocol {
         }
     }
 
+    private func requestAuthorizationIfPossible(servicesEnabled: Bool) {
+        guard hasRequestedAuthorization else { return }
+        guard servicesEnabled else {
+            hasRequestedAuthorization = false
+            return
+        }
+        guard cachedAuthorizationStatus == .notDetermined else {
+            hasRequestedAuthorization = false
+            return
+        }
+        locationManager.requestWhenInUseAuthorization()
+    }
+
+    private func startUpdatingLocationIfPossible(servicesEnabled: Bool) {
+        guard servicesEnabled else { return }
+        switch cachedAuthorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            locationManager.startUpdatingLocation()
+        case .notDetermined:
+            requestWhenInUseAuthorization()
+        case .restricted, .denied:
+            return
+        @unknown default:
+            return
+        }
+    }
+
     private func finishPendingLocationRequest(with result: Result<CLLocation, Error>) {
         guard let pendingLocationRequest else { return }
         self.pendingLocationRequest = nil
@@ -81,6 +130,12 @@ final class LocationService: NSObject, LocationServiceProtocol {
         case .failure(let error):
             pendingLocationRequest.resume(throwing: error)
         }
+    }
+
+    nonisolated private static func locationServicesEnabled() async -> Bool {
+        await Task.detached(priority: .utility) {
+            CLLocationManager.locationServicesEnabled()
+        }.value
     }
 }
 
@@ -102,10 +157,20 @@ extension LocationService: @preconcurrency CLLocationManagerDelegate {
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        guard authorizationStatus == .denied || authorizationStatus == .restricted else {
-            return
-        }
+        cachedAuthorizationStatus = manager.authorizationStatus
+        hasRequestedAuthorization = false
 
-        finishPendingLocationRequest(with: .failure(LocationServiceError.unauthorized))
+        switch cachedAuthorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            if pendingLocationRequest != nil {
+                manager.requestLocation()
+            }
+        case .denied, .restricted:
+            finishPendingLocationRequest(with: .failure(LocationServiceError.unauthorized))
+        case .notDetermined:
+            break
+        @unknown default:
+            finishPendingLocationRequest(with: .failure(LocationServiceError.unauthorized))
+        }
     }
 }

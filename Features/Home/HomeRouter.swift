@@ -2,30 +2,57 @@ import Foundation
 
 @MainActor
 protocol HomeRouting: AnyObject {
+    func routeToAuth()
     func routeToLocationPicker()
     func routeToSearch(query: String)
-    func routeToBanner(id: String)
+    func routeToBanner(_ banner: HomeBannerItem)
     func routeToStoreDetail(storeID: String)
+    func clearPendingRoute()
+}
+
+enum HomeRouteDestination: Equatable {
+    case storeDetail(String)
+    case search(String)
+    case bannerWeb(HomeBannerItem)
 }
 
 @MainActor
 final class HomeRouter: ObservableObject, HomeRouting {
-    @Published private(set) var pendingRoute: AppRoute?
+    @Published private(set) var pendingDestination: HomeRouteDestination?
+    @Published private(set) var isAuthPresented = false
+
+    func routeToAuth() {
+        isAuthPresented = true
+    }
 
     func routeToLocationPicker() {
         Logger.shared.debug("TODO: Connect Home location picker route.")
     }
 
     func routeToSearch(query: String) {
-        Logger.shared.debug("TODO: Connect Home search route. query=\(query)")
+        pendingDestination = .search(query)
     }
 
-    func routeToBanner(id: String) {
-        Logger.shared.debug("TODO: Connect Home banner route. bannerID=\(id)")
+    func routeToBanner(_ banner: HomeBannerItem) {
+        guard banner.payloadType.caseInsensitiveCompare("WEBVIEW") == .orderedSame else {
+            Logger.shared.debug(
+                "Ignoring unsupported banner payload type. type=\(banner.payloadType) value=\(banner.payloadValue)"
+            )
+            return
+        }
+
+        pendingDestination = .bannerWeb(banner)
     }
 
     func routeToStoreDetail(storeID: String) {
-        pendingRoute = .storeDetail(storeID: storeID)
-        Logger.shared.debug("TODO: Connect HomeRouter store detail destination mapping.")
+        pendingDestination = .storeDetail(storeID)
+    }
+
+    func clearPendingRoute() {
+        pendingDestination = nil
+    }
+
+    func dismissAuth() {
+        isAuthPresented = false
     }
 }

@@ -7,6 +7,6 @@ struct InMemoryCartRepository: CartRepository {
         }
 
         // TODO: Replace with server-backed cart hydration.
-        return CartSummary(itemCount: 0, subtotalText: "$0")
+        return .empty
     }
 }

@@ -6,11 +6,13 @@ final class AppDIContainer {
     let appConfiguration: AppConfiguration
     let urlSession: URLSession
     let tokenStore: any TokenStore
+    let sessionSnapshotStore: any SessionSnapshotStoring
     let userDefaultsStore: any UserDefaultsStoring
     let recentSearchStore: RecentSearchStore
     let requestBuilder: RequestBuilder
     let tokenRefreshCoordinator: TokenRefreshCoordinator
     let apiClient: any APIClientProtocol
+    let socialAuthService: any SocialAuthProviding
     let locationService: any LocationServiceProtocol
     let reverseGeocoder: ReverseGeocoder
     let mapLauncher: any MapLauncherProtocol
@@ -20,7 +22,11 @@ final class AppDIContainer {
     let authRepository: AuthRepository
     let cartRepository: CartRepository
     let storeRepository: StoreRepository
+    let reviewRepository: ReviewRepository
     let bannerRepository: BannerRepository
+    let communityRepository: CommunityRepository
+    let orderRepository: OrderRepository
+    let orderMapper: OrderMapper
 
     init(
         environment: AppEnvironment = .current,
@@ -30,7 +36,8 @@ final class AppDIContainer {
         userDefaultsStore: (any UserDefaultsStoring)? = nil,
         locationService: (any LocationServiceProtocol)? = nil,
         mapLauncher: (any MapLauncherProtocol)? = nil,
-        authRepository: AuthRepository = InMemoryAuthRepository(),
+        socialAuthService: (any SocialAuthProviding)? = nil,
+        authRepository: AuthRepository? = nil,
         cartRepository: CartRepository = InMemoryCartRepository()
     ) {
         let resolvedConfiguration = appConfiguration ?? AppConfiguration(environment: environment)
@@ -38,6 +45,7 @@ final class AppDIContainer {
         let resolvedTokenStore = tokenStore ?? KeychainTokenStore(
             service: (Bundle.main.bundleIdentifier ?? "com.pikko.ios") + ".tokens"
         )
+        let resolvedSessionSnapshotStore = UserDefaultsSessionSnapshotStore(store: resolvedUserDefaultsStore)
         let resolvedRequestBuilder = RequestBuilder(
             configuration: resolvedConfiguration,
             tokenStore: resolvedTokenStore
@@ -55,9 +63,14 @@ final class AppDIContainer {
             requestBuilder: resolvedRequestBuilder,
             tokenRefreshCoordinator: resolvedRefreshCoordinator
         )
+        let resolvedSocialAuthService = socialAuthService ?? SocialAuthService(appConfiguration: resolvedConfiguration)
         let resolvedFileURLResolver = AuthorizedFileURLResolver(configuration: resolvedConfiguration)
         let storeMapper = StoreMapper(fileURLResolver: resolvedFileURLResolver)
+        let reviewMapper = ReviewMapper(fileURLResolver: resolvedFileURLResolver)
         let bannerMapper = BannerMapper(fileURLResolver: resolvedFileURLResolver)
+        let communityMapper = CommunityMapper(fileURLResolver: resolvedFileURLResolver)
+        let checkoutMapper = CheckoutMapper()
+        let orderMapper = OrderMapper(fileURLResolver: resolvedFileURLResolver)
         let resolvedImageCache = ImageCache()
         let resolvedLocationService = locationService ?? LocationService()
         let resolvedReverseGeocoder = ReverseGeocoder()
@@ -70,38 +83,67 @@ final class AppDIContainer {
             remoteDataSource: BannerRemoteDataSource(apiClient: resolvedAPIClient),
             mapper: bannerMapper
         )
+        let resolvedReviewRepository = ReviewRepositoryImpl(
+            remoteDataSource: ReviewRemoteDataSource(apiClient: resolvedAPIClient),
+            mapper: reviewMapper
+        )
+        let resolvedCommunityRepository = CommunityRepositoryImpl(
+            remoteDataSource: CommunityRemoteDataSource(apiClient: resolvedAPIClient),
+            mapper: communityMapper
+        )
+        let resolvedOrderRepository = OrderRepositoryImpl(
+            remoteDataSource: OrderRemoteDataSource(apiClient: resolvedAPIClient),
+            checkoutMapper: checkoutMapper,
+            mapper: orderMapper
+        )
+        let resolvedAuthRepository = authRepository ?? AuthRepositoryImpl(
+            remoteDataSource: AuthRemoteDataSource(apiClient: resolvedAPIClient),
+            tokenStore: resolvedTokenStore,
+            sessionSnapshotStore: resolvedSessionSnapshotStore,
+            fileURLResolver: resolvedFileURLResolver
+        )
 
         self.environment = environment
         self.appConfiguration = resolvedConfiguration
         self.urlSession = resolvedSession
         self.tokenStore = resolvedTokenStore
+        self.sessionSnapshotStore = resolvedSessionSnapshotStore
         self.userDefaultsStore = resolvedUserDefaultsStore
         self.recentSearchStore = RecentSearchStore(store: resolvedUserDefaultsStore)
         self.requestBuilder = resolvedRequestBuilder
         self.tokenRefreshCoordinator = resolvedRefreshCoordinator
         self.apiClient = resolvedAPIClient
+        self.socialAuthService = resolvedSocialAuthService
         self.locationService = resolvedLocationService
         self.reverseGeocoder = resolvedReverseGeocoder
         self.mapLauncher = resolvedMapLauncher
         self.imageCache = resolvedImageCache
         self.authorizedFileURLResolver = resolvedFileURLResolver
-        self.authorizedImageLoader = AuthorizedImageLoader(
+        let remoteAuthorizedImageLoader = AuthorizedImageLoader(
             session: resolvedSession,
             requestBuilder: resolvedRequestBuilder,
             tokenRefreshCoordinator: resolvedRefreshCoordinator,
             fileURLResolver: resolvedFileURLResolver,
             imageCache: resolvedImageCache
         )
-        self.authRepository = authRepository
+        self.authorizedImageLoader = FallbackAuthorizedImageLoader(
+            primaryLoader: remoteAuthorizedImageLoader
+        )
+        self.authRepository = resolvedAuthRepository
         self.cartRepository = cartRepository
         self.storeRepository = resolvedStoreRepository
+        self.reviewRepository = resolvedReviewRepository
         self.bannerRepository = resolvedBannerRepository
+        self.communityRepository = resolvedCommunityRepository
+        self.orderRepository = resolvedOrderRepository
+        self.orderMapper = orderMapper
     }
 
     func makeAppState() -> AppState {
         let sessionStore = SessionStore(
             tokenStore: tokenStore,
-            userDefaultsStore: userDefaultsStore
+            userDefaultsStore: userDefaultsStore,
+            sessionSnapshotStore: sessionSnapshotStore
         )
         let cartStore = CartStore(cartRepository: cartRepository)
         return AppState(sessionStore: sessionStore, cartStore: cartStore)

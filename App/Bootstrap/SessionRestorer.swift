@@ -13,6 +13,11 @@ final class SessionRestorer {
     func restoreIfAvailable() async {
         do {
             let session = try await authRepository.restoreSession()
+            guard let session else {
+                sessionStore.clear()
+                Logger.shared.info("No valid stored session. Presenting authentication gate.")
+                return
+            }
             sessionStore.apply(session: session)
         } catch {
             sessionStore.clear()

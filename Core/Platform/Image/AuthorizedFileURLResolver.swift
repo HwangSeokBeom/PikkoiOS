@@ -7,6 +7,7 @@ protocol AuthorizedFileURLResolving: Sendable {
 
 struct AuthorizedFileURLResolver: AuthorizedFileURLResolving, Sendable {
     private let configuration: AppConfiguration
+    private let urlBuilder = URLBuilder()
 
     init(configuration: AppConfiguration) {
         self.configuration = configuration
@@ -22,24 +23,19 @@ struct AuthorizedFileURLResolver: AuthorizedFileURLResolving, Sendable {
             return absoluteURL
         }
 
-        let normalizedPath = normalize(path: trimmedPath)
-        guard let resolvedURL = URL(string: normalizedPath, relativeTo: originURL)?.absoluteURL else {
-            throw NetworkError.invalidRequest
+        guard let baseURL = configuration.baseURL else {
+            throw NetworkError.configuration(configuration.baseURLError ?? .missingBaseURL)
         }
-        return resolvedURL
+
+        return try urlBuilder.makeURL(
+            baseURL: try urlBuilder.makeOriginURL(baseURL: baseURL),
+            path: normalize(path: trimmedPath)
+        )
     }
 
     func resolveOptionalURL(from path: String?) throws -> URL? {
         guard let path else { return nil }
         return try resolveURL(from: path)
-    }
-
-    private var originURL: URL {
-        var components = URLComponents()
-        components.scheme = configuration.baseURL.scheme
-        components.host = configuration.baseURL.host
-        components.port = configuration.baseURL.port
-        return components.url ?? configuration.baseURL
     }
 
     private func normalize(path: String) -> String {

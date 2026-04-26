@@ -22,12 +22,7 @@ struct RootScene: View {
         Group {
             switch appState.launchPhase {
             case .idle, .restoringSession:
-                ZStack {
-                    PikkoColor.background.ignoresSafeArea()
-
-                    LoadingView(message: "세션을 준비하고 있어요")
-                        .padding(PikkoSpacing.xl)
-                }
+                SplashScreenView()
             case .ready:
                 if sessionStore.isAuthenticated {
                     RootTabView(
@@ -35,12 +30,32 @@ struct RootScene: View {
                         featureBuilderFactory: featureBuilderFactory
                     )
                 } else {
-                    AuthGateView(featureBuilderFactory: featureBuilderFactory)
+                    AuthGateView(
+                        featureBuilderFactory: featureBuilderFactory
+                    )
                 }
             }
         }
         .task {
             await bootstrapper.bootstrapIfNeeded()
         }
+        .task(id: sessionStore.deviceTokenSyncStateID) {
+            guard sessionStore.isAuthenticated else { return }
+            await featureBuilderFactory.syncCurrentDeviceTokenIfNeeded()
+        }
+    }
+}
+
+private struct SplashScreenView: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Image("SplashScreen")
+                .resizable()
+                .scaledToFill()
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipped()
+        }
+        .background(PikkoColor.sage50)
+        .ignoresSafeArea()
     }
 }

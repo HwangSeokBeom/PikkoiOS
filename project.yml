@@ -1,6 +1,13 @@
 name: Pikko
 options:
   createIntermediateGroups: true
+packages:
+  KakaoSDK:
+    url: https://github.com/kakao/kakao-ios-sdk
+    branch: master
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: 9.0.0
 configs:
   Debug: debug
   Release: release
@@ -19,6 +26,10 @@ targets:
     sources:
       - path: App
       - path: Config
+        excludes:
+          - "*.xcconfig"
+          - "*.plist"
+          - "*.entitlements"
       - path: Core
       - path: Domain
       - path: Data
@@ -31,13 +42,20 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pikko.ios
         PRODUCT_NAME: Pikko
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_PIKKO_APP_ENV: $(PIKKO_APP_ENV)
-        INFOPLIST_KEY_PIKKO_BASE_URL: $(PIKKO_BASE_URL)
-        INFOPLIST_KEY_PIKKO_SESAC_KEY: $(PIKKO_SESAC_KEY)
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Config/Pikko-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/Pikko.entitlements
         CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: KakaoSDK
+        product: KakaoSDKAuth
+      - package: KakaoSDK
+        product: KakaoSDKCommon
+      - package: KakaoSDK
+        product: KakaoSDKUser
+      - package: GoogleSignIn
+        product: GoogleSignIn
     scheme:
       gatherCoverageData: false
       testTargets:
@@ -47,6 +65,9 @@ targets:
     platform: iOS
     deploymentTarget: "17.0"
     hostApplication: Pikko
+    configFiles:
+      Debug: Config/Test.xcconfig
+      Release: Config/Test.xcconfig
     sources:
       - path: Tests
     dependencies:
@@ -55,3 +76,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pikko.ios.tests
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_PIKKO_APP_ENV: $(PIKKO_APP_ENV)
+        INFOPLIST_KEY_PIKKO_BASE_URL: $(PIKKO_BASE_URL)
+        INFOPLIST_KEY_PIKKO_SESAC_KEY: $(PIKKO_SESAC_KEY)
+        INFOPLIST_KEY_KAKAO_NATIVE_APP_KEY: $(KAKAO_NATIVE_APP_KEY)
+        INFOPLIST_KEY_GOOGLE_IOS_CLIENT_ID: $(GOOGLE_IOS_CLIENT_ID)
+        INFOPLIST_KEY_GOOGLE_REVERSED_CLIENT_ID: $(GOOGLE_REVERSED_CLIENT_ID)
+        INFOPLIST_KEY_PIKKO_INTERNAL_STUB_AUTH_ENABLED: $(PIKKO_INTERNAL_STUB_AUTH_ENABLED)

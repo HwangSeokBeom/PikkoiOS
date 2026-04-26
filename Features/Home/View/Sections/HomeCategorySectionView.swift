@@ -7,44 +7,47 @@ struct HomeCategorySectionView: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: PikkoSpacing.sm) {
+            LazyHStack(spacing: 10) {
                 ForEach(categories) { category in
                     Button {
                         onSelect(category.id)
                     } label: {
-                        VStack(spacing: PikkoSpacing.xs) {
-                            RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
-                                .fill(PikkoColor.gray100)
-                                .frame(width: 56, height: 56)
+                        VStack(spacing: 6) {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(selectedCategoryID == category.id ? PikkoColor.sage50 : PikkoColor.gray100)
+                                .frame(width: 44, height: 44)
                                 .overlay {
                                     Text(category.icon)
-                                        .font(.system(size: 28))
+                                        .font(.system(size: 22))
                                 }
 
                             Text(category.title)
-                                .font(PikkoTypography.caption)
-                                .foregroundStyle(PikkoColor.secondaryText)
+                                .font(PikkoTypography.micro)
+                                .foregroundStyle(selectedCategoryID == category.id ? PikkoColor.accentStrong : PikkoColor.secondaryText)
                         }
-                        .frame(width: 72)
-                        .padding(.vertical, PikkoSpacing.sm)
+                        .frame(width: 62)
+                        .padding(.vertical, 10)
                         .background(PikkoColor.surface)
                         .overlay {
-                            RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .stroke(
-                                    selectedCategoryID == category.id ? PikkoColor.accent.opacity(0.6) : PikkoColor.line,
-                                    lineWidth: selectedCategoryID == category.id ? 1.5 : 1
+                                    selectedCategoryID == category.id ? PikkoColor.accent.opacity(0.45) : PikkoColor.line,
+                                    lineWidth: selectedCategoryID == category.id ? 1.2 : 1
                                 )
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, PikkoSpacing.xl)
-            .padding(.vertical, PikkoSpacing.md)
+            .padding(.horizontal, PikkoSpacing.sm)
+            .padding(.vertical, PikkoSpacing.sm)
         }
         .background(PikkoColor.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .padding(.horizontal, 0)
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(PikkoColor.line.opacity(0.7), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 }

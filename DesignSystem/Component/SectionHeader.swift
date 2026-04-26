@@ -1,41 +1,111 @@
 import SwiftUI
 
 struct SectionHeader: View {
+    enum Size {
+        case regular
+        case compact
+    }
+
     let title: String
     var subtitle: String?
     var actionTitle: String?
     var actionSystemImage: String?
     var action: (() -> Void)?
+    var size: Size = .regular
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: subtitleSpacing) {
                 Text(title)
-                    .font(PikkoTypography.section)
+                    .font(titleFont)
                     .foregroundStyle(PikkoColor.primaryText)
                 if let subtitle {
                     Text(subtitle)
-                        .font(PikkoTypography.caption)
+                        .font(subtitleFont)
                         .foregroundStyle(PikkoColor.secondaryText)
                 }
             }
 
-            Spacer(minLength: PikkoSpacing.sm)
+            Spacer(minLength: spacerLength)
 
-            if let actionTitle, let action {
-                Button(action: action) {
-                    HStack(spacing: 4) {
-                        Text(actionTitle)
-                            .font(PikkoTypography.captionStrong)
-                        if let actionSystemImage {
-                            Image(systemName: actionSystemImage)
-                                .font(.system(size: 11, weight: .semibold))
+            if let actionTitle {
+                Group {
+                    if let action {
+                        Button(action: action) {
+                            actionLabel(actionTitle: actionTitle)
                         }
+                        .buttonStyle(.plain)
+                    } else {
+                        actionLabel(actionTitle: actionTitle)
                     }
-                    .foregroundStyle(PikkoColor.secondaryText)
                 }
-                .buttonStyle(.plain)
             }
+        }
+    }
+
+    private func actionLabel(actionTitle: String) -> some View {
+        HStack(spacing: 4) {
+            Text(actionTitle)
+                .font(actionFont)
+            if let actionSystemImage {
+                Image(systemName: actionSystemImage)
+                    .font(.system(size: actionIconSize, weight: .semibold))
+            }
+        }
+        .foregroundStyle(PikkoColor.secondaryText)
+    }
+
+    private var titleFont: Font {
+        switch size {
+        case .regular:
+            return PikkoTypography.section
+        case .compact:
+            return .system(size: 17, weight: .bold)
+        }
+    }
+
+    private var subtitleFont: Font {
+        switch size {
+        case .regular:
+            return PikkoTypography.caption
+        case .compact:
+            return PikkoTypography.micro
+        }
+    }
+
+    private var actionFont: Font {
+        switch size {
+        case .regular:
+            return PikkoTypography.captionStrong
+        case .compact:
+            return PikkoTypography.micro
+        }
+    }
+
+    private var actionIconSize: CGFloat {
+        switch size {
+        case .regular:
+            return 11
+        case .compact:
+            return 10
+        }
+    }
+
+    private var spacerLength: CGFloat {
+        switch size {
+        case .regular:
+            return PikkoSpacing.sm
+        case .compact:
+            return PikkoSpacing.xs
+        }
+    }
+
+    private var subtitleSpacing: CGFloat {
+        switch size {
+        case .regular:
+            return 2
+        case .compact:
+            return 1
         }
     }
 }

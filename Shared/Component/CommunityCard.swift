@@ -1,18 +1,19 @@
 import SwiftUI
 
 struct CommunityCard: View {
-    struct Media: Identifiable {
+    struct Media: Identifiable, Equatable {
         let id: String
         let path: String?
     }
 
-    struct StoreSnippet {
+    struct StoreSnippet: Equatable {
+        let id: String
         let title: String
         let subtitle: String
         let imagePath: String?
     }
 
-    struct Model: Identifiable {
+    struct Model: Identifiable, Equatable {
         let id: String
         let authorName: String
         let authorAvatarPath: String?
@@ -28,7 +29,9 @@ struct CommunityCard: View {
 
     let model: Model
     let loader: any AuthorizedImageLoading
+    var onCardTapped: (() -> Void)?
     var onLikeTapped: (() -> Void)?
+    var onStoreSnippetTapped: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.md) {
@@ -44,6 +47,10 @@ struct CommunityCard: View {
         .padding(.horizontal, PikkoSpacing.md)
         .padding(.vertical, PikkoSpacing.lg)
         .background(.white)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onCardTapped?()
+        }
     }
 
     private var authorHeader: some View {
@@ -69,18 +76,33 @@ struct CommunityCard: View {
     }
 
     private var mediaMosaic: some View {
-        GeometryReader { geometry in
-            let height = geometry.size.width * 0.7
-            HStack(spacing: PikkoSpacing.xs) {
-                mediaTile(model.media[safe: 0], showsPlayOverlay: true)
-                    .frame(width: primaryWidth(totalWidth: geometry.size.width), height: height)
+        ZStack(alignment: .topLeading) {
+            GeometryReader { geometry in
+                let height = geometry.size.width * 0.7
+                HStack(spacing: PikkoSpacing.xs) {
+                    mediaTile(model.media[safe: 0], showsPlayOverlay: true)
+                        .frame(width: primaryWidth(totalWidth: geometry.size.width), height: height)
 
-                VStack(spacing: PikkoSpacing.xs) {
-                    mediaTile(model.media[safe: 1], showsPlayOverlay: false)
-                    mediaTile(model.media[safe: 2], showsPlayOverlay: false, trailingCount: max(model.media.count - 3, 0))
+                    VStack(spacing: PikkoSpacing.xs) {
+                        mediaTile(model.media[safe: 1], showsPlayOverlay: false)
+                        mediaTile(model.media[safe: 2], showsPlayOverlay: false, trailingCount: max(model.media.count - 3, 0))
+                    }
+                    .frame(width: secondaryWidth(totalWidth: geometry.size.width), height: height)
                 }
-                .frame(width: secondaryWidth(totalWidth: geometry.size.width), height: height)
             }
+
+            Button {
+                onLikeTapped?()
+            } label: {
+                Image(systemName: model.isLiked ? "heart.fill" : "heart")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(.black.opacity(0.22))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(PikkoSpacing.xs)
         }
         .frame(height: 248)
     }
@@ -88,7 +110,7 @@ struct CommunityCard: View {
     private var contentSection: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
             Text(model.title)
-                .font(PikkoTypography.title)
+                .font(PikkoTypography.cardTitle)
                 .foregroundStyle(PikkoColor.primaryText)
                 .lineLimit(2)
 
@@ -112,37 +134,42 @@ struct CommunityCard: View {
                 .font(PikkoTypography.body)
                 .foregroundStyle(PikkoColor.secondaryText)
                 .lineSpacing(4)
-                .lineLimit(3)
+                .lineLimit(4)
         }
     }
 
     private func snippetView(_ snippet: StoreSnippet) -> some View {
-        HStack(spacing: PikkoSpacing.sm) {
-            AuthorizedAsyncImage(
-                path: snippet.imagePath,
-                loader: loader,
-                contentMode: .fill,
-                cornerRadius: PikkoRadius.card
-            )
-            .frame(width: 56, height: 56)
+        Button {
+            onStoreSnippetTapped?(snippet.id)
+        } label: {
+            HStack(spacing: PikkoSpacing.sm) {
+                AuthorizedAsyncImage(
+                    path: snippet.imagePath,
+                    loader: loader,
+                    contentMode: .fill,
+                    cornerRadius: PikkoRadius.card
+                )
+                .frame(width: 56, height: 56)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(snippet.title)
-                    .font(PikkoTypography.bodyStrong)
-                    .foregroundStyle(PikkoColor.accentStrong)
-                Text(snippet.subtitle)
-                    .font(PikkoTypography.caption)
-                    .foregroundStyle(PikkoColor.secondaryText)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(snippet.title)
+                        .font(PikkoTypography.bodyStrong)
+                        .foregroundStyle(PikkoColor.accentStrong)
+                    Text(snippet.subtitle)
+                        .font(PikkoTypography.caption)
+                        .foregroundStyle(PikkoColor.secondaryText)
+                }
+                Spacer()
             }
-            Spacer()
+            .padding(PikkoSpacing.xs)
+            .background(PikkoColor.surfaceMuted)
+            .overlay {
+                RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                    .stroke(PikkoColor.accent.opacity(0.28), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         }
-        .padding(PikkoSpacing.xs)
-        .background(PikkoColor.surfaceMuted)
-        .overlay {
-            RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                .stroke(PikkoColor.accent.opacity(0.28), lineWidth: 1)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+        .buttonStyle(.plain)
     }
 
     private func mediaTile(
@@ -157,19 +184,6 @@ struct CommunityCard: View {
                 contentMode: .fill,
                 cornerRadius: PikkoRadius.card
             )
-
-            Button {
-                onLikeTapped?()
-            } label: {
-                Image(systemName: model.isLiked ? "heart.fill" : "heart")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(.black.opacity(0.22))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .padding(PikkoSpacing.xs)
 
             if showsPlayOverlay, media != nil, MediaTypeResolver.resolve(from: media?.path ?? "") == .video {
                 Image(systemName: "play.circle.fill")
@@ -223,6 +237,7 @@ struct CommunityCard: View {
                     .init(id: "media-3", path: "media-photo-b")
                 ],
                 storeSnippet: .init(
+                    id: "store-1",
                     title: "새싹 도넛 가게",
                     subtitle: "디저트 · 서울 영등포구 선유로9길 30",
                     imagePath: "store-snippet"

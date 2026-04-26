@@ -7,7 +7,13 @@ protocol ChatInteracting {
 
 @MainActor
 struct ChatInteractor: ChatInteracting {
+    private let storeID: String?
+
+    init(storeID: String? = nil) {
+        self.storeID = storeID
+    }
+
     func loadInitialState() async -> ChatViewState {
-        ChatViewState()
+        ChatViewState(storeID: storeID)
     }
 }

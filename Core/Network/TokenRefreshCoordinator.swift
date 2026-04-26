@@ -60,7 +60,15 @@ actor TokenRefreshCoordinator {
             timeout: .default,
             authorizationPolicy: .refreshToken
         )
-        let request = try await requestBuilder.build(for: endpoint)
+        let request: URLRequest
+        do {
+            request = try await requestBuilder.build(for: endpoint)
+        } catch let error as NetworkError {
+            if error.shouldInvalidateSessionImmediately {
+                await invalidateSession()
+            }
+            throw error
+        }
 
         do {
             let (data, response) = try await session.data(for: request)
@@ -92,7 +100,7 @@ actor TokenRefreshCoordinator {
             default:
                 let mappedError = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
                 switch mappedError {
-                case .unauthorized, .refreshTokenExpired, .accessTokenExpired:
+                case .unauthorized, .forbidden, .refreshTokenExpired, .accessTokenExpired:
                     await invalidateSession()
                     throw NetworkError.refreshTokenExpired
                 default:
@@ -104,59 +112,5 @@ actor TokenRefreshCoordinator {
         } catch {
             throw NetworkError.transport
         }
-    }
-}
-
-private struct RefreshTokenResponseDTO: Decodable, Sendable {
-    let accessToken: String
-    let refreshToken: String?
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: DynamicCodingKey.self)
-        accessToken = try container.decodeString(forKeys: ["accessToken", "access_token", "token"])
-        refreshToken = container.decodeOptionalString(forKeys: ["refreshToken", "refresh_token"])
-    }
-}
-
-private struct DynamicCodingKey: CodingKey {
-    let stringValue: String
-    let intValue: Int?
-
-    init?(stringValue: String) {
-        self.stringValue = stringValue
-        self.intValue = nil
-    }
-
-    init?(intValue: Int) {
-        self.stringValue = "\(intValue)"
-        self.intValue = intValue
-    }
-}
-
-private extension KeyedDecodingContainer where Key == DynamicCodingKey {
-    func decodeString(forKeys keys: [String]) throws -> String {
-        for key in keys {
-            guard let codingKey = DynamicCodingKey(stringValue: key) else { continue }
-            if let value = try decodeIfPresent(String.self, forKey: codingKey), !value.isEmpty {
-                return value
-            }
-        }
-
-        throw DecodingError.keyNotFound(
-            DynamicCodingKey(stringValue: keys[0])!,
-            DecodingError.Context(codingPath: codingPath, debugDescription: "Expected one of \(keys)")
-        )
-    }
-
-    func decodeOptionalString(forKeys keys: [String]) -> String? {
-        for key in keys {
-            guard let codingKey = DynamicCodingKey(stringValue: key) else { continue }
-            if let value = try? decode(String.self, forKey: codingKey),
-               !value.isEmpty {
-                return value
-            }
-        }
-
-        return nil
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 enum HomeAction {
     case onAppear
     case refreshRequested
+    case loginRequiredTapped
     case locationTapped
     case searchTextChanged(String)
     case searchSubmitted

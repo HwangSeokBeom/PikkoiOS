@@ -5,6 +5,7 @@ final class AppState: ObservableObject {
     @Published var launchPhase: LaunchPhase = .idle
     @Published var selectedTab: RootTab = .home
     @Published var pendingDeepLink: URL?
+    @Published var pendingHighlightedOrderID: String?
     @Published var globalToast: GlobalToast?
 
     let sessionStore: SessionStore
@@ -13,5 +14,9 @@ final class AppState: ObservableObject {
     init(sessionStore: SessionStore, cartStore: CartStore) {
         self.sessionStore = sessionStore
         self.cartStore = cartStore
+    }
+
+    var shouldPresentAuthGate: Bool {
+        !sessionStore.isAuthenticated
     }
 }

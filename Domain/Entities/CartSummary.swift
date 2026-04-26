@@ -4,5 +4,5 @@ struct CartSummary: Equatable, Sendable {
     let itemCount: Int
     let subtotalText: String
 
-    static let empty = CartSummary(itemCount: 0, subtotalText: "$0")
+    static let empty = CartSummary(itemCount: 0, subtotalText: "0원")
 }

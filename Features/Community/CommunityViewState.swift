@@ -1,7 +1,18 @@
 import Foundation
 
-struct CommunityViewState: Equatable {
-    var title = "Community"
-    var subtitle = "Feeds, posts, comments, and creator discovery can evolve behind this isolated feature shell."
-    var primaryActionTitle = "Open Community Placeholder Route"
+struct CommunityViewState {
+    var searchText = ""
+    var selectedSort: CommunitySortOption = .latest
+    var selectedDistance: CommunityDistanceOption = .defaultOption
+    var sortOptions: [CommunitySortOption] = CommunitySortOption.all
+    var distanceOptions: [CommunityDistanceOption] = CommunityDistanceOption.all
+    var filterChips: [CommunityFilterChip] = CommunityFilterChip.defaults
+    var selectedFilterChip: CommunityFilterChip?
+    var featuredBanner: CommunityFeaturedBanner?
+    var posts: [CommunityCard.Model] = []
+    var nextCursor: String?
+    var emptyState: CommunityEmptyState?
+    var isLoading = true
+    var isRefreshing = false
+    var errorMessage: String?
 }

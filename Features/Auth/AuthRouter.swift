@@ -2,14 +2,18 @@ import Foundation
 
 @MainActor
 protocol AuthRouting: AnyObject {
-    func routeToPostAuthHome()
+    func completeAuthentication()
 }
 
 @MainActor
-final class AuthRouter: ObservableObject, AuthRouting {
-    @Published private(set) var pendingRoute: AppRoute?
+final class AuthRouter: AuthRouting {
+    private let onAuthenticated: () -> Void
 
-    func routeToPostAuthHome() {
-        pendingRoute = .home
+    init(onAuthenticated: @escaping () -> Void = {}) {
+        self.onAuthenticated = onAuthenticated
+    }
+
+    func completeAuthentication() {
+        onAuthenticated()
     }
 }

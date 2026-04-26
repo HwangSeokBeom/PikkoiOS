@@ -7,6 +7,9 @@ enum StoreSortOrder: String, Sendable {
 }
 
 protocol StoreRepository: Sendable {
+    func fetchStoreDetail(storeID: String) async throws -> StoreDetail
+    func searchStores(name: String?) async throws -> [StoreSummary]
+
     func fetchNearbyStores(
         category: String?,
         longitude: Double?,
@@ -19,5 +22,10 @@ protocol StoreRepository: Sendable {
 
     func fetchPopularStores(category: String?) async throws -> [StoreSummary]
     func fetchPopularSearchTerms() async throws -> [String]
+    func fetchLikedStores(
+        category: String?,
+        nextCursor: String?,
+        limit: Int
+    ) async throws -> CursorPage<StoreSummary>
     func updateLikeStatus(storeID: String, isLiked: Bool) async throws -> Bool
 }

@@ -2,6 +2,8 @@ import SwiftUI
 import UIKit
 
 struct AuthorizedAsyncImage: View {
+    private let logger = Logger(category: "AuthorizedAsyncImage")
+
     private enum Phase {
         case idle
         case loading
@@ -59,6 +61,7 @@ struct AuthorizedAsyncImage: View {
         do {
             let data = try await loader.imageData(for: path)
             guard let uiImage = UIImage(data: data) else {
+                logger.warning("Image decode failed. path=\(path)")
                 phase = .failure
                 return
             }

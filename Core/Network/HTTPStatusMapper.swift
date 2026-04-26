@@ -5,8 +5,10 @@ enum HTTPStatusMapper {
         let message = ResponseMessageParser.message(from: data, statusCode: statusCode)
 
         switch statusCode {
-        case 400, 422, 444:
-            return .invalidRequest
+        case 400, 422:
+            return .abnormalRequest(message: message)
+        case 444:
+            return .abnormalRequest(message: message)
         case 401:
             return .unauthorized
         case 403:
@@ -20,7 +22,7 @@ enum HTTPStatusMapper {
         case 419:
             return .accessTokenExpired
         case 420:
-            return .serviceKeyInvalid
+            return .configuration(.invalidSeSACKey)
         case 429:
             return .rateLimited
         case 445:
@@ -76,6 +78,8 @@ private enum ResponseMessageParser {
 
     private static func defaultMessage(for statusCode: Int) -> String {
         switch statusCode {
+        case 444:
+            return "The API path or method does not match the server contract."
         case 404:
             return "The requested resource was not found."
         case 409:

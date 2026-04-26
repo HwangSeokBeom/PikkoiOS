@@ -1,1 +1,11 @@
 Config/Secrets.xcconfig
+Config/AuthSecrets.xcconfig
+Config/LocalSecrets.xcconfig
+Config/GoogleService-Info.plist
+GoogleService-Info.plist
+*.p8
+AuthKey_*.p8
+fastlane/AppStoreConnect_API_Key*.json
+.env
+.env.*
+!.env.example

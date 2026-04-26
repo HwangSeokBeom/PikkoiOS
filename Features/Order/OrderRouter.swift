@@ -2,15 +2,41 @@ import Foundation
 
 @MainActor
 protocol OrderRouting: AnyObject {
-    func routeToPrimaryDestination()
+    func routeToOrderDetail(orderID: String)
+    func routeToAuth()
+    func dismissAuth()
+    func routeToExploreHome()
+    func clearPendingRoute()
 }
 
 @MainActor
 final class OrderRouter: ObservableObject, OrderRouting {
     @Published private(set) var pendingRoute: AppRoute?
+    @Published private(set) var isAuthPresented = false
 
-    func routeToPrimaryDestination() {
-        pendingRoute = .orderHistory
-        Logger.shared.debug("TODO: Route to order detail once order IDs and destination registration exist.")
+    private let onExploreHome: () -> Void
+
+    init(onExploreHome: @escaping () -> Void = {}) {
+        self.onExploreHome = onExploreHome
+    }
+
+    func routeToOrderDetail(orderID: String) {
+        pendingRoute = .orderDetail(orderID: orderID)
+    }
+
+    func routeToAuth() {
+        isAuthPresented = true
+    }
+
+    func dismissAuth() {
+        isAuthPresented = false
+    }
+
+    func routeToExploreHome() {
+        onExploreHome()
+    }
+
+    func clearPendingRoute() {
+        pendingRoute = nil
     }
 }

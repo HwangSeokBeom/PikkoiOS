@@ -10,14 +10,14 @@ struct FloatingQuickActionView: View {
                 ZStack {
                     Circle()
                         .fill(PikkoColor.surface)
-                        .frame(width: 82, height: 82)
+                        .frame(width: 74, height: 74)
 
                     Circle()
                         .fill(PikkoColor.accent)
-                        .frame(width: 68, height: 68)
+                        .frame(width: 60, height: 60)
                         .overlay {
                             Image(systemName: "sparkles")
-                                .font(.system(size: 26, weight: .bold))
+                                .font(.system(size: 22, weight: .bold))
                                 .foregroundStyle(.white)
                         }
                 }
@@ -26,11 +26,11 @@ struct FloatingQuickActionView: View {
                     Text("\(cartStore.summary.itemCount)")
                         .font(PikkoTypography.captionStrong)
                         .foregroundStyle(.white)
-                        .padding(.horizontal, PikkoSpacing.xs)
-                        .frame(height: 24)
+                        .padding(.horizontal, 6)
+                        .frame(height: 20)
                         .background(PikkoColor.accentStrong)
                         .clipShape(Capsule())
-                        .offset(x: 6, y: 4)
+                        .offset(x: 5, y: 4)
                 }
             }
         }

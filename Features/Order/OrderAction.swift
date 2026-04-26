@@ -1,6 +1,12 @@
 import Foundation
 
-enum OrderAction {
+enum OrderAction: Equatable {
     case onAppear
-    case primaryButtonTapped
+    case refreshRequested
+    case retryTapped
+    case filterTapped(OrderListFilter)
+    case orderTapped(String)
+    case orderAppeared(String)
+    case loginRequiredTapped
+    case exploreStoresTapped
 }

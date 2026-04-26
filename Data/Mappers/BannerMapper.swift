@@ -15,12 +15,20 @@ struct BannerMapper: Sendable {
             resolvedImagePath = dto.imageURL
         }
 
+        let resolvedPayloadValue: String
+        if dto.payload.type.caseInsensitiveCompare("WEBVIEW") == .orderedSame,
+           let url = try? fileURLResolver.resolveURL(from: dto.payload.value) {
+            resolvedPayloadValue = url.absoluteString
+        } else {
+            resolvedPayloadValue = dto.payload.value
+        }
+
         return Banner(
             id: "\(dto.payload.type):\(dto.payload.value)",
             name: dto.name,
             imagePath: resolvedImagePath,
             payloadType: dto.payload.type,
-            payloadValue: dto.payload.value
+            payloadValue: resolvedPayloadValue
         )
     }
 }

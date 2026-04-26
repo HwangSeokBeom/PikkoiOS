@@ -3,6 +3,7 @@ import Foundation
 struct RequestBuilder: Sendable {
     private let configuration: AppConfiguration
     private let tokenStore: any TokenStore
+    private let urlBuilder = URLBuilder()
 
     init(configuration: AppConfiguration, tokenStore: any TokenStore) {
         self.configuration = configuration
@@ -16,6 +17,9 @@ struct RequestBuilder: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method.rawValue
         request.timeoutInterval = endpoint.timeout.resolve(with: configuration)
+        guard configuration.hasValidSeSACKey else {
+            throw NetworkError.configuration(configuration.seSACKeyError ?? .missingSeSACKey)
+        }
         request.setValue(configuration.seSACKey, forHTTPHeaderField: "SeSACKey")
 
         try await applyAuthorizationHeaders(to: &request, policy: endpoint.authorizationPolicy)
@@ -35,29 +39,15 @@ struct RequestBuilder: Sendable {
     }
 
     private func makeURL(path: String, query: [URLQueryItem]) throws -> URL {
-        let baseURL: URL
-
-        if let absoluteURL = URL(string: path), absoluteURL.scheme != nil {
-            baseURL = absoluteURL
-        } else if let relativeURL = URL(string: path, relativeTo: configuration.baseURL)?.absoluteURL {
-            baseURL = relativeURL
-        } else {
-            throw NetworkError.invalidRequest
+        guard let baseURL = configuration.baseURL else {
+            throw NetworkError.configuration(configuration.baseURLError ?? .missingBaseURL)
         }
 
-        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
-            throw NetworkError.invalidRequest
-        }
-
-        if !query.isEmpty {
-            components.queryItems = query
-        }
-
-        guard let url = components.url else {
-            throw NetworkError.invalidRequest
-        }
-
-        return url
+        return try urlBuilder.makeURL(
+            baseURL: baseURL,
+            path: path,
+            query: query
+        )
     }
 
     private func applyAuthorizationHeaders(
@@ -79,6 +69,10 @@ struct RequestBuilder: Sendable {
             guard let tokens = try await tokenStore.loadTokens() else {
                 throw NetworkError.refreshTokenExpired
             }
+            request.setValue(
+                configuration.authorizationHeaderFormat.format(tokens.accessToken),
+                forHTTPHeaderField: "Authorization"
+            )
             request.setValue(tokens.refreshToken, forHTTPHeaderField: "RefreshToken")
         }
     }

@@ -7,6 +7,7 @@ protocol AuthorizedImageLoading: Sendable {
 }
 
 actor AuthorizedImageLoader: AuthorizedImageLoading {
+    private let logger = Logger(category: "AuthorizedImageLoader")
     private let session: URLSession
     private let requestBuilder: RequestBuilder
     private let tokenRefreshCoordinator: TokenRefreshCoordinator
@@ -30,7 +31,13 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
     }
 
     func imageData(for path: String) async throws -> Data {
-        let url = try fileURLResolver.resolveURL(from: path)
+        let url: URL
+        do {
+            url = try fileURLResolver.resolveURL(from: path)
+        } catch {
+            logger.warning("Image URL resolution failed. path=\(path) error=\(error.localizedDescription)")
+            throw error
+        }
 
         if let cachedData = await imageCache.data(for: url) {
             return cachedData
@@ -52,6 +59,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             return data
         } catch {
             inFlightTasks[url] = nil
+            logger.warning("Image load failed. url=\(url.absoluteString) error=\(error.localizedDescription)")
             throw error
         }
     }
@@ -73,7 +81,15 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             timeout: .default,
             authorizationPolicy: .fileAuthorized
         )
-        let request = try await requestBuilder.build(for: endpoint)
+        let request: URLRequest
+        do {
+            request = try await requestBuilder.build(for: endpoint)
+        } catch let error as NetworkError {
+            if error.shouldInvalidateSessionImmediately {
+                await tokenRefreshCoordinator.invalidateSession()
+            }
+            throw error
+        }
 
         do {
             let (data, response) = try await session.data(for: request)
@@ -84,22 +100,27 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             switch httpResponse.statusCode {
             case 200..<300:
                 return data
-            case 419 where !didRetryAfterRefresh:
+            case 401 where !didRetryAfterRefresh,
+                 419 where !didRetryAfterRefresh:
                 _ = try await tokenRefreshCoordinator.refreshTokens()
                 return try await fetchImageData(from: url, didRetryAfterRefresh: true)
             default:
                 let error = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
                 switch error {
-                case .unauthorized, .refreshTokenExpired:
+                case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .forbidden:
                     await tokenRefreshCoordinator.invalidateSession()
                 default:
                     break
                 }
+                logger.warning(
+                    "Image request returned non-success status. url=\(url.absoluteString) status=\(httpResponse.statusCode) error=\(error.localizedDescription)"
+                )
                 throw error
             }
         } catch let error as NetworkError {
             throw error
         } catch {
+            logger.warning("Image transport failed. url=\(url.absoluteString) error=\(error.localizedDescription)")
             throw NetworkError.transport
         }
     }

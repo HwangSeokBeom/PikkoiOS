@@ -16,6 +16,7 @@ struct PikkoApp: App {
         self.bootstrapper = container.makeAppBootstrapper(appState: appState)
         self.featureBuilderFactory = container.makeFeatureBuilderFactory(appState: appState)
         _appState = StateObject(wrappedValue: appState)
+        container.socialAuthService.prepareIfNeeded()
     }
 
     var body: some Scene {
@@ -28,6 +29,11 @@ struct PikkoApp: App {
             .environmentObject(appState)
             .environmentObject(appState.sessionStore)
             .environmentObject(appState.cartStore)
+            .onOpenURL { url in
+                if !container.socialAuthService.handleOpenURL(url) {
+                    appState.pendingDeepLink = url
+                }
+            }
         }
     }
 }

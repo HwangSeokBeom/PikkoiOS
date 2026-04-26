@@ -32,8 +32,20 @@ struct HomeViewState {
     var banners: [HomeBannerItem] = []
     var popularStores: [StoreCard.Model] = []
     var nearbyStores: [StoreCard.Model] = []
+    var popularKeywordsSectionMessage: String?
+    var bannerSectionMessage: String?
+    var popularStoresSectionMessage: String?
+    var nearbyStoresSectionMessage: String?
     var nextCursor: String?
+    var emptyState: HomeEmptyState?
     var isLoading = true
     var isRefreshing = false
     var errorMessage: String?
+}
+
+struct HomeEmptyState: Equatable {
+    let title: String
+    let message: String
+    let actionTitle: String?
+    var requiresAuthentication = false
 }

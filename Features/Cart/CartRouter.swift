@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 protocol CartRouting: AnyObject {
     func routeToPrimaryDestination()
+    func clearPendingRoute()
 }
 
 @MainActor
@@ -11,6 +12,9 @@ final class CartRouter: ObservableObject, CartRouting {
 
     func routeToPrimaryDestination() {
         pendingRoute = .checkout
-        Logger.shared.debug("TODO: Push checkout from CartRouter once root navigation graph is wired.")
+    }
+
+    func clearPendingRoute() {
+        pendingRoute = nil
     }
 }

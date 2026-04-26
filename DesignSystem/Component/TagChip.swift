@@ -7,11 +7,18 @@ struct TagChip: View {
         case subtle
     }
 
+    enum Size {
+        case regular
+        case compact
+        case mini
+    }
+
     let title: String
     var systemImage: String?
     var isSelected = false
     var appearance: Appearance = .outlined
     var action: (() -> Void)?
+    var size: Size = .regular
 
     var body: some View {
         Group {
@@ -25,23 +32,23 @@ struct TagChip: View {
     }
 
     private var label: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: contentSpacing) {
             if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: iconSize, weight: .semibold))
             }
             Text(title)
-                .font(PikkoTypography.captionStrong)
+                .font(font)
         }
         .foregroundStyle(foregroundColor)
-        .padding(.horizontal, PikkoSpacing.sm)
-        .frame(height: 36)
+        .padding(.horizontal, horizontalPadding)
+        .frame(height: height)
         .background(backgroundColor)
         .overlay {
-            RoundedRectangle(cornerRadius: PikkoRadius.chip, style: .continuous)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(borderColor, lineWidth: borderColor == .clear ? 0 : 1)
         }
-        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.chip, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 
     private var foregroundColor: Color {
@@ -78,6 +85,72 @@ struct TagChip: View {
             return PikkoColor.gray200
         case .subtle:
             return .clear
+        }
+    }
+
+    private var font: Font {
+        switch size {
+        case .regular:
+            return PikkoTypography.captionStrong
+        case .compact:
+            return PikkoTypography.micro
+        case .mini:
+            return .system(size: 10, weight: .semibold)
+        }
+    }
+
+    private var height: CGFloat {
+        switch size {
+        case .regular:
+            return 36
+        case .compact:
+            return 30
+        case .mini:
+            return 24
+        }
+    }
+
+    private var horizontalPadding: CGFloat {
+        switch size {
+        case .regular:
+            return PikkoSpacing.sm
+        case .compact:
+            return 10
+        case .mini:
+            return 8
+        }
+    }
+
+    private var cornerRadius: CGFloat {
+        switch size {
+        case .regular:
+            return PikkoRadius.chip
+        case .compact:
+            return 15
+        case .mini:
+            return 12
+        }
+    }
+
+    private var iconSize: CGFloat {
+        switch size {
+        case .regular:
+            return 11
+        case .compact:
+            return 10
+        case .mini:
+            return 9
+        }
+    }
+
+    private var contentSpacing: CGFloat {
+        switch size {
+        case .regular:
+            return 6
+        case .compact:
+            return 5
+        case .mini:
+            return 4
         }
     }
 }

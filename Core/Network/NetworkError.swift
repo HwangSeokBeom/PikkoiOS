@@ -2,6 +2,8 @@ import Foundation
 
 enum NetworkError: Error, Equatable, Sendable {
     case invalidRequest
+    case abnormalRequest(message: String)
+    case configuration(AppConfigurationError)
     case unauthorized
     case accessTokenExpired
     case refreshTokenExpired
@@ -9,7 +11,6 @@ enum NetworkError: Error, Equatable, Sendable {
     case notFound(message: String)
     case conflict(message: String)
     case rateLimited
-    case serviceKeyInvalid
     case businessAuthorization(message: String)
     case server(message: String)
     case decoding
@@ -21,6 +22,10 @@ extension NetworkError: LocalizedError {
         switch self {
         case .invalidRequest:
             return "The request could not be created or accepted by the server."
+        case .abnormalRequest(let message):
+            return message
+        case .configuration(let error):
+            return error.userMessage
         case .unauthorized:
             return "Authentication failed."
         case .accessTokenExpired:
@@ -36,12 +41,46 @@ extension NetworkError: LocalizedError {
             return message
         case .rateLimited:
             return "The request was rate limited."
-        case .serviceKeyInvalid:
-            return "The SeSAC service key is invalid."
         case .decoding:
             return "The response could not be decoded."
         case .transport:
             return "A transport error occurred."
         }
+    }
+}
+
+extension NetworkError {
+    var isAuthenticationFailure: Bool {
+        switch self {
+        case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .forbidden:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var shouldInvalidateSessionImmediately: Bool {
+        switch self {
+        case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .forbidden:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var isConfigurationFailure: Bool {
+        switch self {
+        case .configuration:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var appConfigurationError: AppConfigurationError? {
+        if case .configuration(let error) = self {
+            return error
+        }
+        return nil
     }
 }

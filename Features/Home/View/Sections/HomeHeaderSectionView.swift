@@ -8,19 +8,20 @@ struct HomeHeaderSectionView: View {
     let onSearchSubmit: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+        VStack(alignment: .leading, spacing: 10) {
             Button(action: onLocationTap) {
-                HStack(spacing: PikkoSpacing.xs) {
+                HStack(spacing: 6) {
                     Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: 22, weight: .bold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(PikkoColor.gray600)
 
                     Text(locationLabel)
-                        .font(PikkoTypography.section)
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(PikkoColor.primaryText)
+                        .lineLimit(1)
 
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(PikkoColor.gray500)
 
                     Spacer()
@@ -31,30 +32,40 @@ struct HomeHeaderSectionView: View {
             SearchBar(
                 text: $searchText,
                 placeholder: "검색어를 입력해주세요.",
-                onSubmit: onSearchSubmit
+                onSubmit: onSearchSubmit,
+                style: .compact
             )
 
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(PikkoColor.accentSoft)
+            if !formattedPopularKeywords.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(PikkoColor.accentSoft)
 
-                Text("인기검색어")
-                    .font(PikkoTypography.captionStrong)
-                    .foregroundStyle(PikkoColor.accentSoft)
+                    Text("인기검색어")
+                        .font(PikkoTypography.micro)
+                        .foregroundStyle(PikkoColor.sage300)
 
-                if !popularKeywords.isEmpty {
                     Rectangle()
                         .fill(PikkoColor.line)
-                        .frame(width: 1, height: 10)
+                        .frame(width: 1, height: 8)
 
-                    ForEach(Array(popularKeywords.prefix(3).enumerated()), id: \.offset) { index, keyword in
-                        Text("\(index + 1) \(keyword)")
-                            .font(PikkoTypography.captionStrong)
-                            .foregroundStyle(PikkoColor.sage500)
-                    }
+                    Text(formattedPopularKeywords)
+                        .font(PikkoTypography.micro)
+                        .foregroundStyle(PikkoColor.sage500)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private var formattedPopularKeywords: String {
+        Array(popularKeywords.prefix(3).enumerated())
+            .map { index, keyword in
+                "\(index + 1) \(keyword)"
+            }
+            .joined(separator: "   ")
     }
 }
