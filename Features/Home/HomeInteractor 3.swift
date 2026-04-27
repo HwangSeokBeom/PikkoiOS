@@ -129,7 +129,7 @@ struct HomeInteractor: HomeInteracting {
         } catch LocationServiceError.authorizationNotDetermined {
             locationService.requestWhenInUseAuthorization()
         } catch {
-            Logger.shared.warning("Home location resolution failed: \(error.localizedDescription)")
+            Logger.shared.info("Home feed requested without a resolved location.")
         }
 
         return HomeLocationContext(label: "현재 위치 주변", longitude: nil, latitude: nil)

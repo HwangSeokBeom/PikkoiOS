@@ -41,10 +41,22 @@ final class HomePresenter: ObservableObject {
             router.routeToAuth()
         case .locationTapped:
             router.routeToLocationPicker()
+        case .currentLocationRequested:
+            await useCurrentLocation()
+        case .manualLocationSelectionTapped:
+            router.routeToLocationSearch()
+        case .selectedLocationSelected(let location):
+            interactor.saveSelectedLocation(location)
+            await loadHome(isRefresh: true)
         case .searchTextChanged(let text):
             viewState.searchText = text
         case .searchSubmitted:
             let query = viewState.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !query.isEmpty else { return }
+            viewState.searchText = query
+            router.routeToSearch(query: query)
+        case .popularKeywordTapped(let keyword):
+            let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !query.isEmpty else { return }
             viewState.searchText = query
             router.routeToSearch(query: query)
@@ -166,6 +178,27 @@ final class HomePresenter: ObservableObject {
             viewState.popularStores = previousPopularStores
             viewState.nearbyStores = previousNearbyStores
             viewState.errorMessage = resolveErrorMessage(from: error)
+        }
+    }
+
+    private func useCurrentLocation() async {
+        guard !isConfigurationBlocked else { return }
+        guard sessionStore?.isAuthenticated != false else {
+            applyAuthenticationRequiredState()
+            return
+        }
+
+        viewState.errorMessage = nil
+
+        switch await interactor.requestCurrentLocationForHome() {
+        case .available:
+            await loadHome(isRefresh: true)
+        case .authorizationRequested:
+            viewState.errorMessage = "위치 권한을 허용한 뒤 다시 시도해 주세요."
+        case .permissionDenied:
+            router.routeToLocationPermissionSettings()
+        case .unavailable(let message):
+            viewState.errorMessage = message
         }
     }
 
@@ -423,7 +456,7 @@ final class HomePresenter: ObservableObject {
             return nil
         }
 
-        return "가까운 매장을 준비 중이에요. 잠시 후 다시 확인해 주세요."
+        return "가까운 매장을 불러오지 못했어요. 잠시 후 다시 확인해 주세요."
     }
 
     private func makeFailureEmptyState(for error: Error) -> HomeEmptyState {

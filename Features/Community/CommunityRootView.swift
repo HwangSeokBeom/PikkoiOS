@@ -58,6 +58,9 @@ struct CommunityRootView: View {
         .task {
             await presenter.send(.onAppear)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .pikkoSelectedLocationDidChange)) { _ in
+            Task { await presenter.send(.refreshRequested) }
+        }
         .onChange(of: router.pendingRoute) { _, route in
             switch route {
             case .storeDetail(let storeID):
@@ -98,8 +101,8 @@ struct CommunityRootView: View {
                 presentedComposerInitialDraft = nil
                 presentedComposerMode = .create
                 router.clearPendingRoute()
-                Task { await presenter.send(.refreshRequested) }
-                DispatchQueue.main.async {
+                Task { @MainActor in
+                    await presenter.send(.postSubmitted(postID))
                     presentedPostID = postID
                 }
             }
@@ -133,8 +136,12 @@ private extension CommunityRootView {
             get: { presentedPostID != nil },
             set: { isPresented in
                 if !isPresented {
+                    let dismissedPostID = presentedPostID
                     presentedPostID = nil
                     router.clearPendingRoute()
+                    guard presenter.shouldRefreshAfterDetailDismiss(postID: dismissedPostID) else {
+                        return
+                    }
                     Task { await presenter.send(.refreshRequested) }
                 }
             }

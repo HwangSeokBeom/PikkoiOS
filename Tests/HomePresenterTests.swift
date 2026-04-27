@@ -250,6 +250,96 @@ final class HomePresenterTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.searchText, "베이커리")
     }
 
+    func testHomePresenterRoutesPopularKeywordSearch() async {
+        let router = SpyHomeRouter()
+        let presenter = HomePresenter(
+            interactor: StubHomeInteractor(
+                loadHomeResult: .success(
+                    HomeContent(
+                        locationLabel: "문래역, 영등포구",
+                        popularKeywords: ["새싹 베이커리"],
+                        banners: [],
+                        popularStores: [],
+                        nearbyStoresPage: CursorPage(items: [], nextCursor: nil)
+                    )
+                )
+            ),
+            router: router
+        )
+
+        await presenter.send(.popularKeywordTapped("  새싹 베이커리  "))
+
+        XCTAssertEqual(router.routedSearchQuery, "새싹 베이커리")
+        XCTAssertEqual(presenter.viewState.searchText, "새싹 베이커리")
+    }
+
+    func testLocationTapRoutesLocationPicker() async {
+        let router = SpyHomeRouter()
+        let presenter = HomePresenter(
+            interactor: StubHomeInteractor(
+                loadHomeResult: .success(
+                    HomeContent(
+                        locationLabel: "문래역, 영등포구",
+                        popularKeywords: [],
+                        banners: [],
+                        popularStores: [],
+                        nearbyStoresPage: CursorPage(items: [], nextCursor: nil)
+                    )
+                )
+            ),
+            router: router
+        )
+
+        await presenter.send(.locationTapped)
+
+        XCTAssertEqual(router.locationPickerRouteCallCount, 1)
+    }
+
+    func testCurrentLocationRequestReloadsHomeWithSelectedLocation() async {
+        let interactor = StubHomeInteractor(
+            loadHomeResult: .success(
+                HomeContent(
+                    locationLabel: "서울 강남구",
+                    popularKeywords: [],
+                    banners: [],
+                    popularStores: [],
+                    nearbyStoresPage: CursorPage(items: [makeStoreSummary()], nextCursor: nil)
+                )
+            ),
+            currentLocationResult: .available
+        )
+        let presenter = HomePresenter(interactor: interactor, router: SpyHomeRouter())
+
+        await presenter.send(.currentLocationRequested)
+
+        XCTAssertEqual(interactor.currentLocationRequestCallCount, 1)
+        XCTAssertEqual(interactor.loadHomeCallCount, 1)
+        XCTAssertEqual(presenter.viewState.locationLabel, "서울 강남구")
+        XCTAssertEqual(presenter.viewState.nearbyStores.count, 1)
+    }
+
+    func testCurrentLocationPermissionDeniedRoutesSettingsAlert() async {
+        let interactor = StubHomeInteractor(
+            loadHomeResult: .success(
+                HomeContent(
+                    locationLabel: "문래역, 영등포구",
+                    popularKeywords: [],
+                    banners: [],
+                    popularStores: [],
+                    nearbyStoresPage: CursorPage(items: [], nextCursor: nil)
+                )
+            ),
+            currentLocationResult: .permissionDenied
+        )
+        let router = SpyHomeRouter()
+        let presenter = HomePresenter(interactor: interactor, router: router)
+
+        await presenter.send(.currentLocationRequested)
+
+        XCTAssertEqual(router.locationPermissionSettingsRouteCallCount, 1)
+        XCTAssertEqual(interactor.loadHomeCallCount, 0)
+    }
+
     func testBannerTapRoutesInjectedBannerEvenWhenIDsMatch() async {
         let router = SpyHomeRouter()
         let presenter = HomePresenter(
@@ -399,10 +489,16 @@ final class StoreListPresenterTests: XCTestCase {
 @MainActor
 private final class StubHomeInteractor: HomeInteracting {
     private(set) var loadHomeCallCount = 0
+    private(set) var currentLocationRequestCallCount = 0
     private let loadHomeResult: Result<HomeContent, Error>
+    private let currentLocationResult: HomeLocationRequestResult
 
-    init(loadHomeResult: Result<HomeContent, Error>) {
+    init(
+        loadHomeResult: Result<HomeContent, Error>,
+        currentLocationResult: HomeLocationRequestResult = .available
+    ) {
         self.loadHomeResult = loadHomeResult
+        self.currentLocationResult = currentLocationResult
     }
 
     func loadHome(category: String?) async throws -> HomeContent {
@@ -417,15 +513,29 @@ private final class StubHomeInteractor: HomeInteracting {
     func updateLikeStatus(storeID: String, isLiked: Bool) async throws -> Bool {
         isLiked
     }
+
+    func requestCurrentLocationForHome() async -> HomeLocationRequestResult {
+        currentLocationRequestCallCount += 1
+        return currentLocationResult
+    }
+
+    func saveSelectedLocation(_ location: PikkoSelectedLocation) {
+        _ = location
+    }
 }
 
 @MainActor
 private final class SpyHomeRouter: HomeRouting {
     private(set) var routedSearchQuery: String?
     private(set) var routedBanner: HomeBannerItem?
+    private(set) var locationPickerRouteCallCount = 0
+    private(set) var locationPermissionSettingsRouteCallCount = 0
+    private(set) var locationSearchRouteCallCount = 0
 
     func routeToAuth() {}
-    func routeToLocationPicker() {}
+    func routeToLocationPicker() { locationPickerRouteCallCount += 1 }
+    func routeToLocationPermissionSettings() { locationPermissionSettingsRouteCallCount += 1 }
+    func routeToLocationSearch() { locationSearchRouteCallCount += 1 }
     func routeToSearch(query: String) { routedSearchQuery = query }
     func routeToBanner(_ banner: HomeBannerItem) { routedBanner = banner }
     func routeToStoreDetail(storeID: String) {}

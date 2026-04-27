@@ -14,13 +14,13 @@ final class SessionRestorer {
         do {
             let session = try await authRepository.restoreSession()
             guard let session else {
-                sessionStore.clear()
+                await sessionStore.clearSession()
                 Logger.shared.info("No valid stored session. Presenting authentication gate.")
                 return
             }
-            sessionStore.apply(session: session)
+            await sessionStore.establishAuthenticatedSession(session)
         } catch {
-            sessionStore.clear()
+            await sessionStore.clearSession()
             Logger.shared.warning("Session restoration failed: \(error.localizedDescription)")
         }
     }

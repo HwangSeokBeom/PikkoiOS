@@ -177,7 +177,8 @@ final class OrderPresenter: ObservableObject {
 
     private func mapListItem(_ order: OrderSummary) -> OrderListItemViewState {
         let primaryMenuName = order.itemSummaries.first?.menuName ?? "메뉴 정보 준비 중"
-        let additionalCount = max(order.itemSummaries.reduce(0) { $0 + $1.quantity } - 1, 0)
+        let totalItemCount = order.itemSummaries.reduce(0) { $0 + $1.quantity }
+        let additionalCount = max(totalItemCount - 1, 0)
         let primaryItemText = additionalCount > 0 ? "\(primaryMenuName) 외 \(additionalCount)개" : primaryMenuName
         let createdAtText = dateParser.string(from: order.createdAt, format: "M월 d일 a h:mm")
         let pickupTimeText = order.pickupTime.map { "픽업 예상 \($0.formatted(date: .omitted, time: .shortened))" }
@@ -188,14 +189,67 @@ final class OrderPresenter: ObservableObject {
             storeName: order.storeName,
             storeImagePath: order.storeImagePath,
             statusTitle: order.status.displayTitle,
+            statusSteps: makeProgressSteps(for: order.status),
             primaryItemText: primaryItemText,
+            itemRows: order.itemSummaries.map(makeMenuItemRow),
+            itemCountText: "\(totalItemCount)EA",
             createdAtText: createdAtText,
             pickupTimeText: pickupTimeText,
             totalPriceText: currencyFormatter.string(from: order.totalAmount),
+            reviewRatingText: order.reviewRating.map { rating in
+                let value = NSDecimalNumber(decimal: rating).doubleValue
+                return String(format: "%.1f", value)
+            },
             isHighlighted: order.id == viewState.highlightedOrderID,
             canCancel: order.canCancel,
-            isCancelling: viewState.cancellingOrderIDs.contains(order.id)
+            isCancelling: viewState.cancellingOrderIDs.contains(order.id),
+            isPastOrder: order.status.isTerminal,
+            canWriteReview: order.status == .completed && order.reviewID == nil
         )
+    }
+
+    private func makeMenuItemRow(_ item: OrderItemSummary) -> OrderMenuItemViewState {
+        OrderMenuItemViewState(
+            id: item.id,
+            name: item.menuName,
+            quantityText: "\(item.quantity)EA",
+            priceText: item.unitPriceAmount.map { currencyFormatter.string(from: $0) } ?? "-",
+            imagePath: item.imagePath
+        )
+    }
+
+    private func makeProgressSteps(for status: OrderStatus) -> [OrderProgressStepViewState] {
+        let orderedStatuses: [OrderStatus] = [.pending, .accepted, .preparing, .ready, .completed]
+
+        if status.isExceptionTerminal || status.progressStepIndex == nil {
+            return [
+                OrderProgressStepViewState(
+                    id: status.displayTitle,
+                    title: status.displayTitle,
+                    timeText: status.isExceptionTerminal ? "주문이 종료되었어요" : nil,
+                    state: status.isExceptionTerminal ? .exception : .current
+                )
+            ]
+        }
+
+        let currentIndex = status.progressStepIndex ?? 0
+        return orderedStatuses.enumerated().map { index, stepStatus in
+            let state: OrderProgressStepViewState.State
+            if index < currentIndex {
+                state = .completed
+            } else if index == currentIndex {
+                state = .current
+            } else {
+                state = .pending
+            }
+
+            return OrderProgressStepViewState(
+                id: stepStatus.displayTitle,
+                title: stepStatus.displayTitle,
+                timeText: nil,
+                state: state
+            )
+        }
     }
 
     private func cancelOrder(orderID: String) async {
@@ -242,7 +296,9 @@ final class OrderPresenter: ObservableObject {
             createdAt: detail.createdAt,
             totalAmount: detail.totalAmount,
             itemSummaries: detail.items,
-            pickupTime: detail.pickupTime
+            pickupTime: detail.pickupTime,
+            reviewID: detail.reviewID,
+            reviewRating: detail.reviewRating
         )
     }
 
@@ -279,7 +335,9 @@ final class OrderPresenter: ObservableObject {
             createdAt: existing.createdAt,
             totalAmount: existing.totalAmount,
             itemSummaries: existing.itemSummaries,
-            pickupTime: existing.pickupTime
+            pickupTime: existing.pickupTime,
+            reviewID: existing.reviewID,
+            reviewRating: existing.reviewRating
         )
         viewState.cancellingOrderIDs.remove(existing.id)
         applyOrders(resetErrorMessage: false)

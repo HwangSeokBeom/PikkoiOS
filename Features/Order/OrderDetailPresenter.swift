@@ -108,14 +108,7 @@ final class OrderDetailPresenter: ObservableObject {
                 imagePath: $0.imagePath
             )
         }
-        viewState.timelineStages = detail.timeline.map { entry in
-            OrderStatusTimelineView.Stage(
-                id: entry.id,
-                title: entry.status.displayTitle,
-                timeText: entry.changedAt.map { $0.formatted(date: .omitted, time: .shortened) } ?? "상태 대기 중",
-                state: makeStageState(for: entry, currentStatus: detail.status)
-            )
-        }
+        viewState.timelineStages = makeTimelineStages(from: detail.timeline, currentStatus: detail.status)
         viewState.emptyState = nil
         viewState.hasLoadedContent = true
         applyReviewCTA(detail)
@@ -167,14 +160,52 @@ final class OrderDetailPresenter: ObservableObject {
         )
     }
 
-    private func makeStageState(
-        for entry: OrderStatusTimelineEntry,
+    private func makeTimelineStages(
+        from timeline: [OrderStatusTimelineEntry],
         currentStatus: OrderStatus
-    ) -> OrderStatusTimelineView.StageState {
-        if entry.status == currentStatus {
-            return .current
+    ) -> [OrderStatusTimelineView.Stage] {
+        let orderedStatuses: [OrderStatus] = [.pending, .accepted, .preparing, .ready, .completed]
+
+        guard let currentIndex = currentStatus.progressStepIndex else {
+            return [
+                OrderStatusTimelineView.Stage(
+                    id: currentStatus.displayTitle,
+                    title: currentStatus.displayTitle,
+                    timeText: currentStatus.isExceptionTerminal ? "주문이 종료되었어요" : "상태를 확인하고 있어요",
+                    state: currentStatus.isExceptionTerminal ? .current : .upcoming
+                )
+            ]
         }
-        return entry.completed ? .completed : .upcoming
+
+        return orderedStatuses.enumerated().map { index, status in
+            let entry = timeline.first { $0.status == status }
+            let state: OrderStatusTimelineView.StageState
+            if index < currentIndex {
+                state = .completed
+            } else if index == currentIndex {
+                state = .current
+            } else {
+                state = .upcoming
+            }
+
+            return OrderStatusTimelineView.Stage(
+                id: status.displayTitle,
+                title: status.displayTitle,
+                timeText: entry?.changedAt.map { $0.formatted(date: .omitted, time: .shortened) } ?? fallbackTimelineText(for: status),
+                state: state
+            )
+        }
+    }
+
+    private func fallbackTimelineText(for status: OrderStatus) -> String {
+        switch status {
+        case .pending:
+            return "승인 전"
+        case .accepted, .preparing, .ready, .completed:
+            return "상태 대기 중"
+        case .cancelled, .rejected, .failed, .unknown:
+            return "확인 중"
+        }
     }
 
     private func bindOrderStatusChanges() {
@@ -200,24 +231,46 @@ final class OrderDetailPresenter: ObservableObject {
         viewState.orderStatus = event.status
         viewState.statusTitle = event.status.displayTitle
 
-        viewState.timelineStages = viewState.timelineStages.map {
-            OrderStatusTimelineView.Stage(
+        let timeline = viewState.timelineStages.map {
+            OrderStatusTimelineEntry(
                 id: $0.id,
-                title: $0.title,
-                timeText: $0.timeText,
-                state: .completed
+                status: OrderStatus(displayTitle: $0.title),
+                completed: $0.state != .upcoming,
+                changedAt: nil
             )
-        }
+        } + [
+            OrderStatusTimelineEntry(
+                id: event.status.displayTitle,
+                status: event.status,
+                completed: true,
+                changedAt: Date()
+            )
+        ]
+        viewState.timelineStages = makeTimelineStages(from: timeline, currentStatus: event.status)
+    }
+}
 
-        if !viewState.timelineStages.contains(where: { $0.title == event.status.displayTitle }) {
-            viewState.timelineStages.append(
-                OrderStatusTimelineView.Stage(
-                    id: "\(event.status.displayTitle)-\(event.orderCode)",
-                    title: event.status.displayTitle,
-                    timeText: "방금 전",
-                    state: .current
-                )
-            )
+private extension OrderStatus {
+    init(displayTitle: String) {
+        switch displayTitle {
+        case OrderStatus.pending.displayTitle:
+            self = .pending
+        case OrderStatus.accepted.displayTitle:
+            self = .accepted
+        case OrderStatus.preparing.displayTitle:
+            self = .preparing
+        case OrderStatus.ready.displayTitle:
+            self = .ready
+        case OrderStatus.completed.displayTitle:
+            self = .completed
+        case OrderStatus.cancelled.displayTitle:
+            self = .cancelled
+        case OrderStatus.rejected.displayTitle:
+            self = .rejected
+        case OrderStatus.failed.displayTitle:
+            self = .failed
+        default:
+            self = .unknown(displayTitle)
         }
     }
 }

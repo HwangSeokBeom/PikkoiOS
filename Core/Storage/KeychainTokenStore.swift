@@ -2,9 +2,18 @@ import Foundation
 import Security
 
 actor KeychainTokenStore: TokenStore {
-    enum KeychainError: Error {
+    enum KeychainError: Error, LocalizedError {
         case unexpectedStatus(OSStatus)
         case invalidData
+
+        var errorDescription: String? {
+            switch self {
+            case .unexpectedStatus(let status):
+                return "Keychain operation failed with OSStatus \(status)."
+            case .invalidData:
+                return "Keychain item contained invalid token data."
+            }
+        }
     }
 
     private let service: String
@@ -64,7 +73,7 @@ actor KeychainTokenStore: TokenStore {
 
     func clearTokens() async throws {
         let status = SecItemDelete(baseQuery() as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
+        guard status == errSecSuccess || status == errSecItemNotFound || status == 0 else {
             throw KeychainError.unexpectedStatus(status)
         }
     }

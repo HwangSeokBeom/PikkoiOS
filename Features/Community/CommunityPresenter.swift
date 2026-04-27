@@ -17,6 +17,7 @@ final class CommunityPresenter: ObservableObject {
     private var activeQuery: String?
     private var referenceLocation: CommunityReferenceLocation?
     private var isPaging = false
+    private var recentlySubmittedPostID: String?
 
     init(
         interactor: CommunityInteracting,
@@ -72,19 +73,24 @@ final class CommunityPresenter: ObservableObject {
         case .sortSelected(let sortID):
             guard let selectedSort = viewState.sortOptions.first(where: { $0.id == sortID }) else { return }
             viewState.selectedSort = selectedSort
+            viewState.nextCursor = nil
             await loadFeed(isRefresh: false)
         case .distanceSelected(let distanceID):
             guard let selectedDistance = viewState.distanceOptions.first(where: { $0.id == distanceID }) else { return }
             viewState.selectedDistance = selectedDistance
+            viewState.nextCursor = nil
             await loadFeed(isRefresh: false)
         case .filterChipTapped(let chipID):
-            let tappedChip = viewState.filterChips.first(where: { $0.id == chipID })
-            if viewState.selectedFilterChip?.id == chipID {
-                viewState.selectedFilterChip = nil
+            guard viewState.filterChips.contains(where: { $0.id == chipID }) else { return }
+            if viewState.selectedFilterChipIDs.contains(chipID) {
+                viewState.selectedFilterChipIDs.remove(chipID)
             } else {
-                viewState.selectedFilterChip = tappedChip
+                viewState.selectedFilterChipIDs.insert(chipID)
             }
-            applyFilters()
+            viewState.nextCursor = nil
+            await loadFeed(isRefresh: false)
+        case .postSubmitted(let postID):
+            await handleSubmittedPost(postID: postID)
         case .postTapped(let postID):
             router.routeToPostDetail(postID: postID)
         case .storeSnippetTapped(let storeID):
@@ -96,14 +102,22 @@ final class CommunityPresenter: ObservableObject {
         }
     }
 
-    private func loadFeed(isRefresh: Bool) async {
+    private func loadFeed(isRefresh: Bool, reason: String? = nil) async {
         if isRefresh || hasLoaded {
             viewState.isRefreshing = true
         } else {
             viewState.isLoading = true
         }
+        viewState.feedStatus = .loading
         viewState.errorMessage = nil
         viewState.emptyState = nil
+
+        if reason == "postCreated" {
+            viewState.nextCursor = nil
+            #if DEBUG
+            Logger.shared.debug("[CommunityList] reload reason=postCreated")
+            #endif
+        }
 
         do {
             let content = try await interactor.loadFeed(
@@ -116,8 +130,11 @@ final class CommunityPresenter: ObservableObject {
         } catch {
             viewState.errorMessage = resolveErrorMessage(from: error)
             if allPosts.isEmpty {
-                viewState.featuredBanner = .mock
+                viewState.featuredBanner = nil
                 viewState.emptyState = makeFailureEmptyState(for: error)
+                viewState.feedStatus = feedStatus(for: error)
+            } else {
+                viewState.feedStatus = .content
             }
         }
 
@@ -137,7 +154,7 @@ final class CommunityPresenter: ObservableObject {
         var filteredPosts = allPosts
 
         if let maxDistance = viewState.selectedDistance.meters,
-           activeQuery != nil {
+           referenceLocation != nil {
             filteredPosts = filteredPosts.filter { post in
                 guard let distance = distance(from: post) else {
                     return true
@@ -146,9 +163,9 @@ final class CommunityPresenter: ObservableObject {
             }
         }
 
-        if let selectedFilterChip = viewState.selectedFilterChip {
+        for selectedFilterID in viewState.selectedFilterChipIDs {
             filteredPosts = filteredPosts.filter { post in
-                switch selectedFilterChip.id {
+                switch selectedFilterID {
                 case "nearby":
                     guard let distance = distance(from: post) else {
                         return false
@@ -201,6 +218,65 @@ final class CommunityPresenter: ObservableObject {
 
         viewState.posts = filteredPosts.map(makeCommunityCardModel)
         viewState.emptyState = makeEmptyState(filteredPosts: filteredPosts)
+        viewState.feedStatus = filteredPosts.isEmpty ? .empty : .content
+    }
+
+    private func handleSubmittedPost(postID: String) async {
+        recentlySubmittedPostID = postID
+        activeQuery = nil
+        viewState.searchText = ""
+        viewState.selectedFilterChipIDs.removeAll()
+        viewState.selectedSort = .latest
+        viewState.nextCursor = nil
+
+        await loadFeed(isRefresh: true, reason: "postCreated")
+
+        guard allPosts.contains(where: { $0.id == postID }) == false else {
+            return
+        }
+
+        await mergeSubmittedPost(postID: postID)
+    }
+
+    func shouldRefreshAfterDetailDismiss(postID: String?) -> Bool {
+        guard let postID, postID == recentlySubmittedPostID else {
+            return true
+        }
+
+        recentlySubmittedPostID = nil
+        return false
+    }
+
+    private func mergeSubmittedPost(postID: String) async {
+        viewState.errorMessage = nil
+        viewState.emptyState = nil
+
+        do {
+            let createdPost = try await interactor.loadPost(postID: postID)
+            allPosts.removeAll { $0.id == createdPost.id }
+            allPosts.insert(createdPost, at: 0)
+            viewState.nextCursor = nil
+            hasLoaded = true
+
+            if activeQuery != nil {
+                activeQuery = nil
+                viewState.searchText = ""
+            }
+
+            viewState.selectedFilterChipIDs.removeAll()
+
+            applyFilters()
+            #if DEBUG
+            Logger.shared.debug("[CommunityList] inserted created post postID=\(createdPost.id)")
+            #endif
+        } catch {
+            viewState.errorMessage = resolveErrorMessage(from: error)
+            if allPosts.isEmpty {
+                viewState.featuredBanner = nil
+                viewState.emptyState = makeFailureEmptyState(for: error)
+                viewState.feedStatus = feedStatus(for: error)
+            }
+        }
     }
 
     private func loadNextPageIfNeeded(triggeredBy postID: String) async {
@@ -411,6 +487,12 @@ final class CommunityPresenter: ObservableObject {
                     actionTitle: "로그인하러 가기",
                     requiresAuthentication: true
                 )
+            case .locationRequired(let message):
+                return CommunityEmptyState(
+                    title: "위치가 필요해요",
+                    message: message,
+                    actionTitle: "다시 시도"
+                )
             case .unavailable(let message):
                 return CommunityEmptyState(
                     title: "커뮤니티를 불러오지 못했어요",
@@ -425,6 +507,21 @@ final class CommunityPresenter: ObservableObject {
             message: resolveErrorMessage(from: error),
             actionTitle: "다시 시도"
         )
+    }
+
+    private func feedStatus(for error: Error) -> CommunityFeedStatus {
+        guard let communityError = error as? CommunityFeedError else {
+            return .failure
+        }
+
+        switch communityError {
+        case .authenticationRequired:
+            return .authenticationRequired
+        case .locationRequired:
+            return .locationRequired
+        case .unavailable:
+            return .failure
+        }
     }
 
     private func resolveErrorMessage(from error: Error) -> String {

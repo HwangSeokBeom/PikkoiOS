@@ -68,6 +68,43 @@ final class CommunityComposerFeatureTests: XCTestCase {
         XCTAssertEqual(createdPost.summary.title, "작성 성공")
     }
 
+    func testCommunityComposerInteractorUsesSelectedLocationBeforeCurrentLocation() async throws {
+        SelectedLocationStore.shared.save(
+            PikkoSelectedLocation(
+                title: "선택 위치",
+                subtitle: nil,
+                latitude: 37.5,
+                longitude: 127.0
+            )
+        )
+        defer { SelectedLocationStore.shared.clear() }
+
+        let repository = StubCommunityComposerRepository(
+            createResult: .success(makeCreatedDetail(postID: "created-post"))
+        )
+        let interactor = CommunityComposerInteractor(
+            communityRepository: repository,
+            locationService: StubCommunityComposerLocationService(
+                currentLocation: CLLocation(latitude: 35.0, longitude: 129.0)
+            )
+        )
+
+        _ = try await interactor.submitPost(
+            draft: CommunityComposerDraft(
+                title: "작성 성공",
+                body: "선택 위치 기준으로 등록합니다.",
+                categoryTitle: "일상",
+                store: nil,
+                attachments: [],
+                latitude: nil,
+                longitude: nil
+            )
+        )
+
+        XCTAssertEqual(repository.recordedCreateSubmission?.latitude, 37.5)
+        XCTAssertEqual(repository.recordedCreateSubmission?.longitude, 127.0)
+    }
+
     func testCommunityComposerInteractorUpdatesPostInEditMode() async throws {
         let repository = StubCommunityComposerRepository(
             updateResult: .success(makeCreatedDetail(postID: "edited-post"))

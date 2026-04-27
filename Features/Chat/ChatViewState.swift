@@ -1,16 +1,56 @@
 import Foundation
 
+enum ChatScreenMode: Equatable {
+    case roomList
+    case roomDetail
+}
+
+struct ChatRoomRowViewState: Equatable, Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let timeText: String
+    let avatarPath: String?
+}
+
+struct ChatMessageRowViewState: Equatable, Identifiable {
+    let id: String
+    let content: String
+    let timeText: String
+    let senderName: String
+    let isMine: Bool
+}
+
 struct ChatViewState: Equatable {
-    var storeID: String?
+    var mode: ChatScreenMode = .roomList
     var title = "채팅"
-    var subtitle = "가게 문의와 실시간 대화 기능은 이 루트에서 확장됩니다."
-    var primaryActionTitle = "채팅 기능 준비 상태 보기"
+    var rooms: [ChatRoomRowViewState] = []
+    var messages: [ChatMessageRowViewState] = []
+    var messageText = ""
+    var selectedRoomID: String?
+    var isLoading = true
+    var isRefreshing = false
+    var isSending = false
+    var errorMessage: String?
+    var emptyTitle: String?
+    var emptyMessage: String?
+    var primaryActionTitle: String?
+    var requiresAuthentication = false
+    var isExternalDetailPresentation = false
 
-    init(storeID: String? = nil) {
-        self.storeID = storeID
+    var showsEmptyState: Bool {
+        !isLoading && mode == .roomList && rooms.isEmpty && emptyTitle != nil
+    }
 
-        if let storeID, !storeID.isEmpty {
-            subtitle = "가게 문의 채널을 준비 중이에요. storeID: \(storeID)"
-        }
+    var showsDetailEmptyState: Bool {
+        !isLoading && mode == .roomDetail && messages.isEmpty && emptyTitle != nil
+    }
+
+    var canSend: Bool {
+        !isSending && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var showsInternalBackButton: Bool {
+        mode == .roomDetail && !isExternalDetailPresentation
     }
 }

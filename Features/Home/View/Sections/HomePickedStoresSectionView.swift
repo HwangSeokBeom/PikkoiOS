@@ -89,7 +89,7 @@ struct HomePickedStoresSectionView: View {
 
     private var resolvedEmptyMessage: String {
         if emptyMessage != nil {
-            return "가까운 매장을 준비 중이에요. 잠시 후 다시 확인해 주세요."
+            return "가까운 매장을 불러오지 못했어요. 잠시 후 다시 확인해 주세요."
         }
 
         return "가까운 매장이 아직 없어요."

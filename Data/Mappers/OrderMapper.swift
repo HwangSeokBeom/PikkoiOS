@@ -98,7 +98,9 @@ struct OrderMapper: Sendable {
             createdAt: dateParser.parseISO8601(dto.createdAt) ?? .distantPast,
             totalAmount: dto.totalPrice,
             itemSummaries: dto.orderMenuList.map(mapOrderItemSummary),
-            pickupTime: dto.orderStatusTimeline.first(where: { OrderStatus(serverValue: $0.status) == .ready })?.changedAt.flatMap(dateParser.parseISO8601)
+            pickupTime: dto.orderStatusTimeline.first(where: { OrderStatus(serverValue: $0.status) == .ready })?.changedAt.flatMap(dateParser.parseISO8601),
+            reviewID: dto.review?.id,
+            reviewRating: dto.review?.rating
         )
     }
 

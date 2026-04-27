@@ -23,6 +23,13 @@ final class LocationService: NSObject, LocationServiceProtocol {
         self.cachedAuthorizationStatus = locationManager.authorizationStatus
     }
 
+    deinit {
+        pendingLocationRequest?.resume(throwing: LocationServiceError.noLocationAvailable)
+        pendingLocationRequest = nil
+        locationContinuations.values.forEach { $0.finish() }
+        locationContinuations.removeAll()
+    }
+
     func requestWhenInUseAuthorization() {
         guard cachedAuthorizationStatus == .notDetermined,
               !hasRequestedAuthorization else {
@@ -48,6 +55,7 @@ final class LocationService: NSObject, LocationServiceProtocol {
             }
 
             return try await withCheckedThrowingContinuation { continuation in
+                finishPendingLocationRequest(with: .failure(LocationServiceError.noLocationAvailable))
                 pendingLocationRequest = continuation
                 locationManager.requestLocation()
             }

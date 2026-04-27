@@ -157,6 +157,9 @@ final class CommunityComposerPresenter: ObservableObject {
         viewState.infoMessage = nil
 
         do {
+            #if DEBUG
+            Logger.shared.debug("[CommunityCreate] request started")
+            #endif
             let createdPost = try await interactor.submitPost(
                 draft: CommunityComposerDraft(
                     title: viewState.draftTitle,
@@ -168,6 +171,9 @@ final class CommunityComposerPresenter: ObservableObject {
                     longitude: draftContext.longitude
                 )
             )
+            #if DEBUG
+            Logger.shared.debug("[CommunityCreate] success postID=\(createdPost.summary.id)")
+            #endif
             viewState.submittedPostID = createdPost.summary.id
             viewState.infoMessage = successMessage
             router.routeToPostDetail(postID: createdPost.summary.id)

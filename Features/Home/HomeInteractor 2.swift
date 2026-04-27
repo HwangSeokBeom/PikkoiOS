@@ -2,10 +2,20 @@ import CoreLocation
 import Foundation
 
 @MainActor
+enum HomeLocationRequestResult: Equatable {
+    case available
+    case authorizationRequested
+    case permissionDenied
+    case unavailable(String)
+}
+
+@MainActor
 protocol HomeInteracting {
     func loadHome(category: String?) async throws -> HomeContent
     func loadMoreNearbyStores(category: String?, nextCursor: String) async throws -> CursorPage<StoreSummary>
     func updateLikeStatus(storeID: String, isLiked: Bool) async throws -> Bool
+    func requestCurrentLocationForHome() async -> HomeLocationRequestResult
+    func saveSelectedLocation(_ location: PikkoSelectedLocation)
 }
 
 @MainActor
@@ -114,13 +124,49 @@ struct HomeInteractor: HomeInteracting {
         }
     }
 
+    func requestCurrentLocationForHome() async -> HomeLocationRequestResult {
+        switch locationService.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            return await requestCurrentLocation()
+        case .notDetermined:
+            locationService.requestWhenInUseAuthorization()
+            let decision = await waitForLocationAuthorizationDecision()
+            switch decision {
+            case .authorizedAlways, .authorizedWhenInUse:
+                return await requestCurrentLocation()
+            case .denied, .restricted:
+                return .permissionDenied
+            case .notDetermined:
+                return .authorizationRequested
+            @unknown default:
+                return .permissionDenied
+            }
+        case .denied, .restricted:
+            return .permissionDenied
+        @unknown default:
+            return .permissionDenied
+        }
+    }
+
+    func saveSelectedLocation(_ location: PikkoSelectedLocation) {
+        SelectedLocationStore.shared.save(location)
+    }
+
     private func resolveLocationContext(requestIfNeeded: Bool) async -> HomeLocationContext {
+        if let selectedLocation = SelectedLocationStore.shared.selectedLocation {
+            return HomeLocationContext(
+                label: selectedLocation.displayName,
+                longitude: selectedLocation.longitude,
+                latitude: selectedLocation.latitude
+            )
+        }
+
         if let currentLocation = locationService.currentLocation {
             return await makeLocationContext(from: currentLocation)
         }
 
         guard requestIfNeeded else {
-            return HomeLocationContext(label: "현재 위치 주변", longitude: nil, latitude: nil)
+            return defaultLocationContext()
         }
 
         do {
@@ -129,10 +175,10 @@ struct HomeInteractor: HomeInteracting {
         } catch LocationServiceError.authorizationNotDetermined {
             locationService.requestWhenInUseAuthorization()
         } catch {
-            Logger.shared.warning("Home location resolution failed: \(error.localizedDescription)")
+            Logger.shared.info("Home feed requested without a resolved location.")
         }
 
-        return HomeLocationContext(label: "현재 위치 주변", longitude: nil, latitude: nil)
+        return defaultLocationContext()
     }
 
     private func makeLocationContext(from location: CLLocation) async -> HomeLocationContext {
@@ -150,6 +196,54 @@ struct HomeInteractor: HomeInteracting {
             label: label,
             longitude: location.coordinate.longitude,
             latitude: location.coordinate.latitude
+        )
+    }
+
+    private func requestCurrentLocation() async -> HomeLocationRequestResult {
+        do {
+            let location = try await locationService.requestCurrentLocation()
+            let context = await makeLocationContext(from: location)
+            SelectedLocationStore.shared.save(
+                PikkoSelectedLocation(
+                    title: context.label,
+                    subtitle: nil,
+                    latitude: location.coordinate.latitude,
+                    longitude: location.coordinate.longitude,
+                    source: "currentLocation"
+                )
+            )
+            return .available
+        } catch LocationServiceError.authorizationNotDetermined {
+            locationService.requestWhenInUseAuthorization()
+            return .authorizationRequested
+        } catch LocationServiceError.unauthorized {
+            return .permissionDenied
+        } catch LocationServiceError.servicesDisabled {
+            return .unavailable("기기의 위치 서비스가 꺼져 있어요. 설정에서 위치 서비스를 켜 주세요.")
+        } catch LocationServiceError.noLocationAvailable {
+            return .unavailable("현재 위치를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.")
+        } catch {
+            return .unavailable("현재 위치를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.")
+        }
+    }
+
+    private func waitForLocationAuthorizationDecision() async -> CLAuthorizationStatus {
+        for _ in 0..<150 {
+            let status = locationService.authorizationStatus
+            guard status == .notDetermined else {
+                return status
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        return locationService.authorizationStatus
+    }
+
+    private func defaultLocationContext() -> HomeLocationContext {
+        HomeLocationContext(
+            label: LocationDefaults.defaultSelectedLocation.displayName,
+            longitude: LocationDefaults.defaultSelectedLocation.longitude,
+            latitude: LocationDefaults.defaultSelectedLocation.latitude
         )
     }
 

@@ -25,6 +25,7 @@ final class AppDIContainer {
     let reviewRepository: ReviewRepository
     let bannerRepository: BannerRepository
     let communityRepository: CommunityRepository
+    let chatRepository: ChatRepository
     let orderRepository: OrderRepository
     let orderMapper: OrderMapper
 
@@ -69,6 +70,7 @@ final class AppDIContainer {
         let reviewMapper = ReviewMapper(fileURLResolver: resolvedFileURLResolver)
         let bannerMapper = BannerMapper(fileURLResolver: resolvedFileURLResolver)
         let communityMapper = CommunityMapper(fileURLResolver: resolvedFileURLResolver)
+        let chatMapper = ChatMapper(fileURLResolver: resolvedFileURLResolver)
         let checkoutMapper = CheckoutMapper()
         let orderMapper = OrderMapper(fileURLResolver: resolvedFileURLResolver)
         let resolvedImageCache = ImageCache()
@@ -90,6 +92,10 @@ final class AppDIContainer {
         let resolvedCommunityRepository = CommunityRepositoryImpl(
             remoteDataSource: CommunityRemoteDataSource(apiClient: resolvedAPIClient),
             mapper: communityMapper
+        )
+        let resolvedChatRepository = DefaultChatRepository(
+            remoteDataSource: ChatRemoteDataSource(apiClient: resolvedAPIClient),
+            mapper: chatMapper
         )
         let resolvedOrderRepository = OrderRepositoryImpl(
             remoteDataSource: OrderRemoteDataSource(apiClient: resolvedAPIClient),
@@ -136,6 +142,7 @@ final class AppDIContainer {
         self.reviewRepository = resolvedReviewRepository
         self.bannerRepository = resolvedBannerRepository
         self.communityRepository = resolvedCommunityRepository
+        self.chatRepository = resolvedChatRepository
         self.orderRepository = resolvedOrderRepository
         self.orderMapper = orderMapper
     }

@@ -4,6 +4,8 @@ import Foundation
 protocol HomeRouting: AnyObject {
     func routeToAuth()
     func routeToLocationPicker()
+    func routeToLocationPermissionSettings()
+    func routeToLocationSearch()
     func routeToSearch(query: String)
     func routeToBanner(_ banner: HomeBannerItem)
     func routeToStoreDetail(storeID: String)
@@ -14,19 +16,30 @@ enum HomeRouteDestination: Equatable {
     case storeDetail(String)
     case search(String)
     case bannerWeb(HomeBannerItem)
+    case locationSearch
 }
 
 @MainActor
 final class HomeRouter: ObservableObject, HomeRouting {
     @Published private(set) var pendingDestination: HomeRouteDestination?
     @Published private(set) var isAuthPresented = false
+    @Published private(set) var isLocationPickerPresented = false
+    @Published private(set) var isLocationPermissionSettingsPresented = false
 
     func routeToAuth() {
         isAuthPresented = true
     }
 
     func routeToLocationPicker() {
-        Logger.shared.debug("TODO: Connect Home location picker route.")
+        isLocationPickerPresented = true
+    }
+
+    func routeToLocationPermissionSettings() {
+        isLocationPermissionSettingsPresented = true
+    }
+
+    func routeToLocationSearch() {
+        pendingDestination = .locationSearch
     }
 
     func routeToSearch(query: String) {
@@ -54,5 +67,13 @@ final class HomeRouter: ObservableObject, HomeRouting {
 
     func dismissAuth() {
         isAuthPresented = false
+    }
+
+    func dismissLocationPicker() {
+        isLocationPickerPresented = false
+    }
+
+    func dismissLocationPermissionSettings() {
+        isLocationPermissionSettingsPresented = false
     }
 }

@@ -91,6 +91,63 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    @discardableResult
+    func establishAuthenticatedSession(_ session: UserSession) async -> Bool {
+        do {
+            try await tokenStore.saveTokens(
+                StoredTokens(
+                    accessToken: session.accessToken,
+                    refreshToken: session.refreshToken
+                )
+            )
+            try await sessionSnapshotStore.saveSnapshot(StoredSessionProfile(session: session))
+            Logger.shared.debug("[Auth] token save completed")
+        } catch {
+            Logger.shared.warning("[Auth] token save failed: \(error.localizedDescription)")
+            currentSession = nil
+            clearSyncedDeviceTokenState()
+            return false
+        }
+
+        currentSession = session
+        Logger.shared.debug("[Auth] auth state changed authenticated")
+        return true
+    }
+
+    func prepareForLoginAttempt() async {
+        guard !isAuthenticated else { return }
+        clearSyncedDeviceTokenState()
+
+        do {
+            try await tokenStore.clearTokens()
+        } catch {
+            Logger.shared.warning("[Auth] stale session cleanup failed: \(error.localizedDescription)")
+        }
+
+        do {
+            try await sessionSnapshotStore.saveSnapshot(nil)
+        } catch {
+            Logger.shared.warning("[Auth] stale session snapshot cleanup failed: \(error.localizedDescription)")
+        }
+    }
+
+    func clearSession() async {
+        currentSession = nil
+        clearSyncedDeviceTokenState()
+
+        do {
+            try await tokenStore.clearTokens()
+        } catch {
+            Logger.shared.warning("[Auth] session clear failed: \(error.localizedDescription)")
+        }
+
+        do {
+            try await sessionSnapshotStore.saveSnapshot(nil)
+        } catch {
+            Logger.shared.warning("[Auth] session snapshot clear failed: \(error.localizedDescription)")
+        }
+    }
+
     func updateProfile(
         nick: String? = nil,
         profileImagePath: String? = nil

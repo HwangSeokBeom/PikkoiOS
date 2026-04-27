@@ -2,11 +2,11 @@ import SwiftUI
 
 struct StoreDetailMenuSectionView: View {
     private enum Layout {
-        static let menuImageSize: CGFloat = 88
+        static let menuImageSize: CGFloat = 98
         static let imageTextSpacing: CGFloat = 16
-        static let textVerticalSpacing: CGFloat = 8
-        static let addButtonMinWidth: CGFloat = 108
-        static let addButtonHeight: CGFloat = 42
+        static let textVerticalSpacing: CGFloat = 7
+        static let addButtonMinWidth: CGFloat = 76
+        static let addButtonHeight: CGFloat = 34
         static let quantityControlWidth: CGFloat = 116
         static let quantityControlHeight: CGFloat = 40
     }
@@ -28,7 +28,7 @@ struct StoreDetailMenuSectionView: View {
                             title: filter.title,
                             systemImage: filter.systemImage,
                             isSelected: selectedFilterID == filter.id,
-                            appearance: .outlined,
+                            appearance: selectedFilterID == filter.id ? .filled : .outlined,
                             action: {
                                 onFilterTap(filter.id)
                             }
@@ -65,79 +65,85 @@ struct StoreDetailMenuSectionView: View {
     }
 
     private func menuRow(_ menu: StoreDetailMenuItem) -> some View {
-        HStack(alignment: .top, spacing: Layout.imageTextSpacing) {
-            VStack(alignment: .leading, spacing: Layout.textVerticalSpacing) {
-                if let badgeText = menu.badgeText {
-                    Text(badgeText)
-                        .font(PikkoTypography.micro)
-                        .foregroundStyle(PikkoColor.sage500)
-                        .padding(.horizontal, PikkoSpacing.xs)
-                        .frame(height: 20)
-                        .background(PikkoColor.surfaceMuted)
-                        .clipShape(Capsule())
-                }
-
-                Text(menu.name)
-                    .font(PikkoTypography.cardTitle)
-                    .foregroundStyle(PikkoColor.primaryText)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Text(menu.description)
-                    .font(PikkoTypography.body)
-                    .foregroundStyle(PikkoColor.secondaryText)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-
-                Text(menu.priceText)
-                    .font(PikkoTypography.title)
-                    .foregroundStyle(PikkoColor.primaryText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .minimumScaleFactor(0.9)
-                    .layoutPriority(2)
-
-                quantityControl(for: menu)
-                    .fixedSize(horizontal: true, vertical: false)
+        VStack(alignment: .leading, spacing: Layout.textVerticalSpacing) {
+            if let badgeText = menu.badgeText {
+                Text(badgeText)
+                    .font(PikkoTypography.micro)
+                    .foregroundStyle(PikkoColor.sage500)
+                    .padding(.horizontal, PikkoSpacing.xs)
+                    .frame(height: 20)
+                    .background(PikkoColor.surfaceMuted)
+                    .clipShape(Capsule())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .layoutPriority(2)
 
-            ZStack {
-                AuthorizedAsyncImage(
-                    path: menu.imagePath,
-                    loader: imageLoader,
-                    contentMode: .fill,
-                    cornerRadius: PikkoRadius.card,
-                    showsProgress: false
-                )
-                .frame(width: Layout.menuImageSize, height: Layout.menuImageSize)
-                .clipped()
-
-                if menu.isSoldOut {
-                    RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                        .fill(Color.black.opacity(0.34))
-                        .frame(width: Layout.menuImageSize, height: Layout.menuImageSize)
-
-                    Text("품절")
+            HStack(alignment: .top, spacing: Layout.imageTextSpacing) {
+                VStack(alignment: .leading, spacing: Layout.textVerticalSpacing) {
+                    Text(menu.name)
                         .font(PikkoTypography.cardTitle)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(PikkoColor.primaryText)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(menu.description)
+                        .font(PikkoTypography.body)
+                        .foregroundStyle(PikkoColor.secondaryText)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+
+                    Text(menu.priceText)
+                        .font(PikkoTypography.title)
+                        .foregroundStyle(PikkoColor.primaryText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .minimumScaleFactor(0.9)
+                        .layoutPriority(2)
+
+                    quantityControl(for: menu)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(2)
+
+                menuImage(menu)
+                    .layoutPriority(0)
             }
-            .frame(width: Layout.menuImageSize, height: Layout.menuImageSize)
-            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
-            .layoutPriority(0)
         }
-        .frame(minHeight: Layout.menuImageSize + PikkoSpacing.lg, alignment: .top)
+        .frame(minHeight: Layout.menuImageSize, alignment: .top)
         .padding(.bottom, PikkoSpacing.lg)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(PikkoColor.divider)
                 .frame(height: 1)
         }
+    }
+
+    private func menuImage(_ menu: StoreDetailMenuItem) -> some View {
+        ZStack {
+            AuthorizedAsyncImage(
+                path: menu.imagePath,
+                loader: imageLoader,
+                contentMode: .fill,
+                cornerRadius: PikkoRadius.card,
+                showsProgress: false
+            )
+            .frame(width: Layout.menuImageSize, height: Layout.menuImageSize)
+            .clipped()
+
+            if menu.isSoldOut {
+                RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                    .fill(Color.black.opacity(0.34))
+                    .frame(width: Layout.menuImageSize, height: Layout.menuImageSize)
+
+                Text("품절")
+                    .font(PikkoTypography.cardTitle)
+                    .foregroundStyle(.white)
+            }
+        }
+        .frame(width: Layout.menuImageSize, height: Layout.menuImageSize)
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
     }
 
     @ViewBuilder

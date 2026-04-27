@@ -367,7 +367,9 @@ final class OrderFeatureTests: XCTestCase {
                     unitPriceAmount: 4_500
                 )
             ],
-            pickupTime: Date(timeIntervalSince1970: 1_710_000_600)
+            pickupTime: Date(timeIntervalSince1970: 1_710_000_600),
+            reviewID: nil,
+            reviewRating: nil
         )
     }
 

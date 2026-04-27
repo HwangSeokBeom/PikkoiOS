@@ -6,6 +6,7 @@ struct HomeHeaderSectionView: View {
     let popularKeywords: [String]
     let onLocationTap: () -> Void
     let onSearchSubmit: () -> Void
+    let onPopularKeywordTap: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -26,6 +27,8 @@ struct HomeHeaderSectionView: View {
 
                     Spacer()
                 }
+                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
@@ -36,7 +39,7 @@ struct HomeHeaderSectionView: View {
                 style: .compact
             )
 
-            if !formattedPopularKeywords.isEmpty {
+            if !popularKeywordItems.isEmpty {
                 HStack(spacing: 4) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 9, weight: .bold))
@@ -50,22 +53,31 @@ struct HomeHeaderSectionView: View {
                         .fill(PikkoColor.line)
                         .frame(width: 1, height: 8)
 
-                    Text(formattedPopularKeywords)
-                        .font(PikkoTypography.micro)
-                        .foregroundStyle(PikkoColor.sage500)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(popularKeywordItems, id: \.keyword) { item in
+                                Button {
+                                    onPopularKeywordTap(item.keyword)
+                                } label: {
+                                    Text("\(item.rank) \(item.keyword)")
+                                        .font(PikkoTypography.micro)
+                                        .foregroundStyle(PikkoColor.sage500)
+                                        .lineLimit(1)
+                                        .padding(.vertical, 6)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
-    private var formattedPopularKeywords: String {
+    private var popularKeywordItems: [(rank: Int, keyword: String)] {
         Array(popularKeywords.prefix(3).enumerated())
-            .map { index, keyword in
-                "\(index + 1) \(keyword)"
-            }
-            .joined(separator: "   ")
+            .map { index, keyword in (index + 1, keyword) }
     }
 }

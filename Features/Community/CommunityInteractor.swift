@@ -15,6 +15,7 @@ protocol CommunityInteracting {
         nextCursor: String
     ) async throws -> CommunityFeedContent
 
+    func loadPost(postID: String) async throws -> CommunityPostSummary
     func updateLikeStatus(postID: String, isLiked: Bool) async throws -> Bool
 }
 
@@ -37,18 +38,31 @@ struct CommunityInteractor: CommunityInteracting {
         selectedSort: CommunitySortOption
     ) async throws -> CommunityFeedContent {
         do {
-            let locationContext = await resolveLocationContext(requestIfNeeded: true)
-
             if let query = normalizedQuery(query) {
+                let referenceLocation = await resolveReferenceLocation()
+                #if DEBUG
+                Logger.shared.debug(
+                    "[CommunityList] request query cursor=nil sort=\(selectedSort.id) distance=\(selectedDistance.title) hasLocation=\(referenceLocation != nil)"
+                )
+                #endif
                 let posts = try await communityRepository.searchPosts(title: query)
+                #if DEBUG
+                Logger.shared.debug("[CommunityList] response count=\(posts.count) nextCursor=nil")
+                #endif
                 return CommunityFeedContent(
-                    featuredBanner: .mock,
+                    featuredBanner: nil,
                     posts: posts,
                     nextCursor: nil,
-                    referenceLocation: locationContext.referenceLocation
+                    referenceLocation: referenceLocation
                 )
             }
 
+            let locationContext = try await resolveLocationContext(requestIfNeeded: true)
+            #if DEBUG
+            Logger.shared.debug(
+                "[CommunityList] request query cursor=nil sort=\(selectedSort.id) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil)"
+            )
+            #endif
             let page = try await communityRepository.fetchGeolocationPosts(
                 category: nil,
                 longitude: locationContext.longitude,
@@ -58,20 +72,19 @@ struct CommunityInteractor: CommunityInteracting {
                 limit: 5,
                 orderBy: serverSortOrder(for: selectedSort)
             )
+            #if DEBUG
+            Logger.shared.debug("[CommunityList] response count=\(page.items.count) nextCursor=\(page.nextCursor ?? "nil")")
+            #endif
 
             return CommunityFeedContent(
-                featuredBanner: .mock,
+                featuredBanner: nil,
                 posts: page.items,
                 nextCursor: page.nextCursor,
                 referenceLocation: locationContext.referenceLocation
             )
         } catch {
             let mappedError = map(error)
-            if case .authenticationRequired = mappedError {
-                throw mappedError
-            }
-            Logger.shared.warning("Community feed falling back to local content: \(mappedError.localizedDescription)")
-            return makeFallbackContent(query: query)
+            throw mappedError
         }
     }
 
@@ -81,7 +94,12 @@ struct CommunityInteractor: CommunityInteracting {
         nextCursor: String
     ) async throws -> CommunityFeedContent {
         do {
-            let locationContext = await resolveLocationContext(requestIfNeeded: false)
+            let locationContext = try await resolveLocationContext(requestIfNeeded: false)
+            #if DEBUG
+            Logger.shared.debug(
+                "[CommunityList] request query cursor=\(nextCursor) sort=\(selectedSort.id) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil)"
+            )
+            #endif
             let page = try await communityRepository.fetchGeolocationPosts(
                 category: nil,
                 longitude: locationContext.longitude,
@@ -91,13 +109,24 @@ struct CommunityInteractor: CommunityInteracting {
                 limit: 5,
                 orderBy: serverSortOrder(for: selectedSort)
             )
+            #if DEBUG
+            Logger.shared.debug("[CommunityList] response count=\(page.items.count) nextCursor=\(page.nextCursor ?? "nil")")
+            #endif
 
             return CommunityFeedContent(
-                featuredBanner: .mock,
+                featuredBanner: nil,
                 posts: page.items,
                 nextCursor: page.nextCursor,
                 referenceLocation: locationContext.referenceLocation
             )
+        } catch {
+            throw map(error)
+        }
+    }
+
+    func loadPost(postID: String) async throws -> CommunityPostSummary {
+        do {
+            return try await communityRepository.fetchPostDetail(postID: postID).summary
         } catch {
             throw map(error)
         }
@@ -129,45 +158,42 @@ struct CommunityInteractor: CommunityInteracting {
         }
     }
 
-    private func makeFallbackContent(query: String?) -> CommunityFeedContent {
-        let normalizedQuery = normalizedQuery(query)?.lowercased()
-        let posts = [
-            CommunityPostSummary(
-                id: "local-community-fallback-1",
-                category: "디저트",
-                title: "근처 픽업 후기를 준비 중이에요",
-                content: "네트워크 응답을 받지 못해 임시 게시글을 보여드려요. 연결이 복구되면 실제 커뮤니티 글로 자동 갱신됩니다.",
-                creator: CommunityPostAuthor(id: "local-fallback-user", nick: "픽코", profileImagePath: nil),
-                mediaPaths: ["community-fallback-dessert"],
-                store: nil,
-                isLiked: false,
-                likeCount: 0,
-                longitude: nil,
-                latitude: nil,
-                createdAt: Date(),
-                updatedAt: nil
+    private func resolveReferenceLocation() async -> CommunityReferenceLocation? {
+        if let selectedLocation = SelectedLocationStore.shared.selectedLocation {
+            return .init(
+                longitude: selectedLocation.longitude,
+                latitude: selectedLocation.latitude
             )
-        ]
-        let filteredPosts = posts.filter {
-            guard let normalizedQuery else { return true }
-            return $0.title.lowercased().contains(normalizedQuery)
-                || $0.content.lowercased().contains(normalizedQuery)
         }
-        return CommunityFeedContent(
-            featuredBanner: .mock,
-            posts: filteredPosts,
-            nextCursor: nil,
-            referenceLocation: nil
+
+        guard let currentLocation = locationService.currentLocation else {
+            return nil
+        }
+
+        return .init(
+            longitude: currentLocation.coordinate.longitude,
+            latitude: currentLocation.coordinate.latitude
         )
     }
 
-    private func resolveLocationContext(requestIfNeeded: Bool) async -> CommunityLocationContext {
+    private func resolveLocationContext(requestIfNeeded: Bool) async throws -> CommunityLocationContext {
+        if let selectedLocation = SelectedLocationStore.shared.selectedLocation {
+            return CommunityLocationContext(
+                referenceLocation: .init(
+                    longitude: selectedLocation.longitude,
+                    latitude: selectedLocation.latitude
+                ),
+                longitude: selectedLocation.longitude,
+                latitude: selectedLocation.latitude
+            )
+        }
+
         if let currentLocation = locationService.currentLocation {
             return makeLocationContext(from: currentLocation)
         }
 
         guard requestIfNeeded else {
-            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
+            throw CommunityFeedError.locationRequired(message: "위치를 선택하거나 현재 위치 권한을 허용해 주세요.")
         }
 
         do {
@@ -175,11 +201,15 @@ struct CommunityInteractor: CommunityInteracting {
             return makeLocationContext(from: location)
         } catch LocationServiceError.authorizationNotDetermined {
             locationService.requestWhenInUseAuthorization()
+            throw CommunityFeedError.locationRequired(message: "커뮤니티 피드를 보려면 위치 권한을 허용해 주세요.")
+        } catch LocationServiceError.unauthorized, LocationServiceError.servicesDisabled {
+            throw CommunityFeedError.locationRequired(message: "위치를 선택하거나 현재 위치 권한을 허용해 주세요.")
+        } catch LocationServiceError.noLocationAvailable {
+            throw CommunityFeedError.locationRequired(message: "현재 위치를 확인하지 못했어요. 위치를 선택한 뒤 다시 시도해 주세요.")
         } catch {
-            Logger.shared.warning("Community location resolution failed: \(error.localizedDescription)")
+            Logger.shared.debug("Community location resolution failed; using the app default location.")
+            throw CommunityFeedError.locationRequired(message: "현재 위치를 확인하지 못했어요. 위치를 선택한 뒤 다시 시도해 주세요.")
         }
-
-        return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
     }
 
     private func makeLocationContext(from location: CLLocation) -> CommunityLocationContext {
@@ -194,6 +224,10 @@ struct CommunityInteractor: CommunityInteracting {
     }
 
     private func map(_ error: Error) -> CommunityFeedError {
+        if let communityError = error as? CommunityFeedError {
+            return communityError
+        }
+
         guard let networkError = error as? NetworkError else {
             return .unavailable(message: error.localizedDescription)
         }

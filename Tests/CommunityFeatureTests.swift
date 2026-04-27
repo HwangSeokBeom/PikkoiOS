@@ -58,6 +58,21 @@ final class CommunityFeatureTests: XCTestCase {
         XCTAssertEqual(router.pendingRoute, .communityComposer(mode: .create, initialDraft: nil))
     }
 
+    func testPostSubmittedInsertsCreatedPostWhenReloadIsStillEmpty() async {
+        let presenter = CommunityPresenter(
+            interactor: StubCommunityInteractor(),
+            router: CommunityRouter(),
+            sessionStore: makeSessionStore()
+        )
+
+        await presenter.send(.postSubmitted("created-post"))
+
+        XCTAssertEqual(presenter.viewState.feedStatus, .content)
+        XCTAssertEqual(presenter.viewState.posts.first?.id, "created-post")
+        XCTAssertNil(presenter.viewState.nextCursor)
+        XCTAssertEqual(presenter.viewState.searchText, "")
+    }
+
     func testCommunityPostListPresenterRemovesPostWhenLikedListUnlikesItem() async {
         let presenter = CommunityPostListPresenter(
             mode: .liked(category: nil),
@@ -165,6 +180,28 @@ private struct StubCommunityInteractor: CommunityInteracting {
             posts: [],
             nextCursor: nil,
             referenceLocation: nil
+        )
+    }
+
+    func loadPost(postID: String) async throws -> CommunityPostSummary {
+        CommunityPostSummary(
+            id: postID,
+            category: "일상",
+            title: "제목 \(postID)",
+            content: "본문 \(postID)",
+            creator: CommunityPostAuthor(
+                id: "user-\(postID)",
+                nick: "작성자",
+                profileImagePath: nil
+            ),
+            mediaPaths: [],
+            store: nil,
+            isLiked: false,
+            likeCount: 0,
+            longitude: nil,
+            latitude: nil,
+            createdAt: Date(),
+            updatedAt: nil
         )
     }
 

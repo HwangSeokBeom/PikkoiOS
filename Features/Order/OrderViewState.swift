@@ -24,11 +24,39 @@ struct OrderListItemViewState: Equatable, Identifiable {
     let storeName: String
     let storeImagePath: String?
     let statusTitle: String
+    let statusSteps: [OrderProgressStepViewState]
     let primaryItemText: String
+    let itemRows: [OrderMenuItemViewState]
+    let itemCountText: String
     let createdAtText: String
     let pickupTimeText: String?
     let totalPriceText: String
+    let reviewRatingText: String?
     let isHighlighted: Bool
     let canCancel: Bool
     let isCancelling: Bool
+    var isPastOrder = false
+    var canWriteReview = false
+}
+
+struct OrderProgressStepViewState: Equatable, Identifiable {
+    enum State: Equatable {
+        case completed
+        case current
+        case pending
+        case exception
+    }
+
+    let id: String
+    let title: String
+    let timeText: String?
+    let state: State
+}
+
+struct OrderMenuItemViewState: Equatable, Identifiable {
+    let id: String
+    let name: String
+    let quantityText: String
+    let priceText: String
+    let imagePath: String?
 }

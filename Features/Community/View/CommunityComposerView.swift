@@ -39,13 +39,13 @@ struct CommunityComposerView: View {
                     }
                     .padding(.horizontal, PikkoSpacing.xl)
                     .padding(.top, PikkoSpacing.xl)
-                    .padding(.bottom, PikkoSpacing.xxl)
+                    .padding(.bottom, PikkoSpacing.xxl + RootTabBarMetrics.scrollContentBottomInset)
                 }
                 .safeAreaInset(edge: .bottom) {
                     ctaBar
                         .padding(.horizontal, PikkoSpacing.xl)
                         .padding(.top, PikkoSpacing.md)
-                        .padding(.bottom, PikkoSpacing.lg)
+                        .padding(.bottom, PikkoSpacing.lg + RootTabBarMetrics.scrollContentBottomInset)
                         .background(
                             LinearGradient(
                                 colors: [
@@ -62,6 +62,7 @@ struct CommunityComposerView: View {
         }
         .navigationTitle(presenter.viewState.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
     }
 
     private var heroCard: some View {

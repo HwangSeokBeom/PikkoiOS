@@ -6,13 +6,13 @@ struct CommunityFilterSectionView: View {
     let sortOptions: [CommunitySortOption]
     let selectedSortID: String
     let filterChips: [CommunityFilterChip]
-    let selectedFilterChipID: String?
+    let selectedFilterChipIDs: Set<String>
     let onDistanceSelect: (String) -> Void
     let onSortSelect: (String) -> Void
     let onFilterChipTap: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+        VStack(alignment: .leading, spacing: PikkoSpacing.md) {
             DistanceChipBar(
                 title: "Distance",
                 options: distanceOptions.map { .init(id: $0.id, title: $0.title) },
@@ -41,8 +41,8 @@ struct CommunityFilterSectionView: View {
                         TagChip(
                             title: chip.title,
                             systemImage: chip.systemImage,
-                            isSelected: selectedFilterChipID == chip.id,
-                            appearance: .outlined,
+                            isSelected: selectedFilterChipIDs.contains(chip.id),
+                            appearance: selectedFilterChipIDs.contains(chip.id) ? .filled : .outlined,
                             action: {
                                 onFilterChipTap(chip.id)
                             }
@@ -66,7 +66,7 @@ struct CommunityFilterSectionView: View {
         sortOptions: CommunitySortOption.all,
         selectedSortID: CommunitySortOption.latest.id,
         filterChips: CommunityFilterChip.defaults,
-        selectedFilterChipID: "store",
+        selectedFilterChipIDs: ["store", "video"],
         onDistanceSelect: { _ in },
         onSortSelect: { _ in },
         onFilterChipTap: { _ in }

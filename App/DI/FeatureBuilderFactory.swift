@@ -299,7 +299,13 @@ struct FeatureBuilderFactory {
     }
 
     func makeChatView(storeID: String? = nil) -> ChatRootView {
-        ChatBuilder(storeID: storeID).build()
+        ChatBuilder(
+            storeID: storeID,
+            chatRepository: container.chatRepository,
+            storeRepository: container.storeRepository,
+            sessionStore: appState.sessionStore,
+            imageLoader: container.authorizedImageLoader
+        ).build()
     }
 
     func makeStoreSearchView(query: String) -> StoreListRootView {

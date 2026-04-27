@@ -55,6 +55,11 @@ final class AuthPresenter: ObservableObject {
 
     private func signIn(with provider: AuthProvider) async {
         guard !viewState.isLoading else { return }
+        let wasAuthenticatedAtStart = sessionStore.isAuthenticated
+        if provider == .apple {
+            Logger.shared.debug("[Auth] apple login started")
+            await sessionStore.prepareForLoginAttempt()
+        }
         setLoading(provider: provider)
 
         do {
@@ -62,16 +67,25 @@ final class AuthPresenter: ObservableObject {
                 with: provider,
                 deviceToken: sessionStore.deviceToken
             )
-            sessionStore.apply(session: session)
+            guard await sessionStore.establishAuthenticatedSession(session) else {
+                throw NetworkError.transport
+            }
             clearLoading()
+            Logger.shared.debug("[Auth] home/profile bootstrap allowed")
             router.completeAuthentication()
         } catch {
             clearLoading()
+            if provider == .apple, !wasAuthenticatedAtStart {
+                await sessionStore.clearSession()
+            }
             if handleSilentCancellation(error, provider: provider) {
                 return
             }
             let message = resolveErrorMessage(from: error)
             viewState.errorMessage = message == viewState.configurationMessage ? nil : message
+            if provider == .apple {
+                Logger.shared.warning("[Auth] social login failed provider=apple reason=\(error.localizedDescription)")
+            }
             logFailure(error, provider: provider)
         }
     }
@@ -86,7 +100,9 @@ final class AuthPresenter: ObservableObject {
                 password: viewState.password,
                 deviceToken: sessionStore.deviceToken
             )
-            sessionStore.apply(session: session)
+            guard await sessionStore.establishAuthenticatedSession(session) else {
+                throw NetworkError.transport
+            }
             clearLoading()
             router.completeAuthentication()
         } catch {
@@ -112,7 +128,9 @@ final class AuthPresenter: ObservableObject {
                 nick: viewState.nick,
                 deviceToken: sessionStore.deviceToken
             )
-            sessionStore.apply(session: session)
+            guard await sessionStore.establishAuthenticatedSession(session) else {
+                throw NetworkError.transport
+            }
             clearLoading()
             router.completeAuthentication()
         } catch {
@@ -153,7 +171,9 @@ final class AuthPresenter: ObservableObject {
 
         do {
             let session = try await interactor.signInStub()
-            sessionStore.apply(session: session)
+            guard await sessionStore.establishAuthenticatedSession(session) else {
+                throw NetworkError.transport
+            }
             viewState.isLoading = false
             router.completeAuthentication()
         } catch {

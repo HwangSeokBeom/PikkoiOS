@@ -1,7 +1,7 @@
 import Foundation
 
 struct CommunityFeedContent {
-    let featuredBanner: CommunityFeaturedBanner
+    let featuredBanner: CommunityFeaturedBanner?
     let posts: [CommunityPostSummary]
     let nextCursor: String?
     let referenceLocation: CommunityReferenceLocation?
@@ -9,6 +9,7 @@ struct CommunityFeedContent {
 
 enum CommunityFeedError: Error, Equatable {
     case authenticationRequired
+    case locationRequired(message: String)
     case unavailable(message: String)
 }
 
@@ -17,10 +18,21 @@ extension CommunityFeedError: LocalizedError {
         switch self {
         case .authenticationRequired:
             return "로그인 후 커뮤니티 피드를 확인할 수 있어요."
+        case .locationRequired(let message):
+            return message
         case .unavailable(let message):
             return message
         }
     }
+}
+
+enum CommunityFeedStatus: Equatable {
+    case loading
+    case content
+    case empty
+    case failure
+    case locationRequired
+    case authenticationRequired
 }
 
 struct CommunityEmptyState: Equatable {

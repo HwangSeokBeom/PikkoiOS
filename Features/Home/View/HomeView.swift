@@ -67,6 +67,9 @@ struct HomeView: View {
                                 },
                                 onSearchSubmit: {
                                     Task { await presenter.send(.searchSubmitted) }
+                                },
+                                onPopularKeywordTap: { keyword in
+                                    Task { await presenter.send(.popularKeywordTapped(keyword)) }
                                 }
                             )
                             .padding(.horizontal, HomeLayout.horizontalInset)

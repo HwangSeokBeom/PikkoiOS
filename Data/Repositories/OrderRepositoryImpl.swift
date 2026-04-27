@@ -258,7 +258,9 @@ actor OrderLocalSnapshotStore {
                 createdAt: $0.createdAt,
                 totalAmount: $0.totalAmount,
                 itemSummaries: $0.items,
-                pickupTime: $0.pickupTime
+                pickupTime: $0.pickupTime,
+                reviewID: $0.reviewID,
+                reviewRating: $0.reviewRating
             )
         }
     }
@@ -483,6 +485,8 @@ private extension OrderStatus {
             return "PICKED_UP"
         case .cancelled:
             return "CANCELLED"
+        case .rejected:
+            return "REJECTED"
         case .failed:
             return "FAILED"
         case .unknown(let value):

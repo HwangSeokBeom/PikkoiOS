@@ -186,7 +186,7 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
         } catch let error as CommunityComposerFeatureError {
             throw error
         } catch {
-            Logger.shared.warning("Community composer location resolution failed: \(error.localizedDescription)")
+            Logger.shared.info("Community composer continuing without a resolved location.")
             throw CommunityComposerFeatureError.unavailable(
                 message: "현재 위치를 확인하지 못했어요. 잠시 후 다시 시도해 주세요."
             )

@@ -5,6 +5,7 @@ import UIKit
 struct ProfileRootView: View {
     @StateObject private var presenter: ProfilePresenter
     @StateObject private var router: ProfileRouter
+    @State private var isLogoutConfirmationPresented = false
     private let imageLoader: any AuthorizedImageLoading
     private let makeLikedStoresView: () -> AnyView
     private let makeMyPostsView: (String) -> AnyView
@@ -134,9 +135,7 @@ struct ProfileRootView: View {
                         title: presenter.viewState.logoutActionTitle,
                         systemImage: "rectangle.portrait.and.arrow.right"
                     ) {
-                        Task {
-                            await presenter.send(.logoutTapped)
-                        }
+                        isLogoutConfirmationPresented = true
                     }
                 }
             }
@@ -173,6 +172,16 @@ struct ProfileRootView: View {
             )
         }
         .pikkoScreen(title: presenter.viewState.title)
+        .alert("로그아웃", isPresented: $isLogoutConfirmationPresented) {
+            Button("취소", role: .cancel) {}
+            Button("로그아웃", role: .destructive) {
+                Task {
+                    await presenter.send(.logoutTapped)
+                }
+            }
+        } message: {
+            Text("정말로 로그아웃 하겠습니까?")
+        }
         .task {
             await presenter.send(.onAppear)
         }

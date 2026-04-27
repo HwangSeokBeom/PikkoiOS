@@ -61,7 +61,7 @@ final class ProfilePresenter: ObservableObject {
             Logger.shared.warning("Profile logout failed: \(error.localizedDescription)")
         }
 
-        sessionStore.clear()
+        await sessionStore.clearSession()
         viewState = await interactor.loadInitialState()
     }
 

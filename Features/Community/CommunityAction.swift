@@ -10,6 +10,7 @@ enum CommunityAction {
     case sortSelected(String)
     case distanceSelected(String)
     case filterChipTapped(String)
+    case postSubmitted(String)
     case postTapped(String)
     case storeSnippetTapped(String)
     case postAppeared(String)

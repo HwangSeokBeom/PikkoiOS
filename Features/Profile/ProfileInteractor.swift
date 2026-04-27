@@ -37,6 +37,10 @@ struct ProfileInteractor: ProfileInteracting {
                 profileImagePath: profile.profileImagePath
             )
             return makeViewState(from: profile)
+        } catch let error as NetworkError where error.isAuthenticationFailure {
+            Logger.shared.warning("Profile fetch failed: authentication required")
+            await sessionStore.clearSession()
+            return makeViewState(from: nil)
         } catch {
             Logger.shared.warning("Profile fetch failed: \(error.localizedDescription)")
             return makeViewState(from: nil)

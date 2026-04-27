@@ -56,7 +56,20 @@ struct AuthInteractor: AuthInteracting {
 
     func signIn(with provider: AuthProvider, deviceToken: String?) async throws -> UserSession {
         let credential = try await socialAuthService.signIn(with: provider)
-        return try await authRepository.signIn(with: credential, deviceToken: deviceToken)
+        if provider == .apple {
+            Logger.shared.debug(
+                "[Auth] apple credential received idTokenExists=\(credential.idToken?.isEmpty == false) authorizationCodeExists=\(credential.authorizationCode?.isEmpty == false)"
+            )
+        }
+        Logger.shared.debug("[Auth] social login request started provider=\(provider.rawValue)")
+        do {
+            let session = try await authRepository.signIn(with: credential, deviceToken: deviceToken)
+            Logger.shared.debug("[Auth] social login succeeded provider=\(provider.rawValue)")
+            return session
+        } catch {
+            Logger.shared.warning("[Auth] social login failed provider=\(provider.rawValue) reason=\(error.localizedDescription)")
+            throw error
+        }
     }
 
     func signIn(email: String, password: String, deviceToken: String?) async throws -> UserSession {

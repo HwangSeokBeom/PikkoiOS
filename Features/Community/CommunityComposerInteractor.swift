@@ -89,6 +89,11 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
                 return try await communityRepository.updatePost(postID: postID, submission: submission)
             }
         } catch {
+            #if DEBUG
+            Logger.shared.debug(
+                "[CommunityCreate] failed status=\(debugStatusDescription(from: error)) reason=\(error.localizedDescription)"
+            )
+            #endif
             throw mapSubmissionError(error)
         }
     }
@@ -164,6 +169,13 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
     }
 
     private func resolveRequiredLocation() async throws -> CLLocation {
+        if let selectedLocation = SelectedLocationStore.shared.selectedLocation {
+            return CLLocation(
+                latitude: selectedLocation.latitude,
+                longitude: selectedLocation.longitude
+            )
+        }
+
         if let currentLocation = locationService.currentLocation {
             return currentLocation
         }
@@ -186,7 +198,7 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
         } catch let error as CommunityComposerFeatureError {
             throw error
         } catch {
-            Logger.shared.warning("Community composer location resolution failed: \(error.localizedDescription)")
+            Logger.shared.info("Community composer continuing without a resolved location.")
             throw CommunityComposerFeatureError.unavailable(
                 message: "현재 위치를 확인하지 못했어요. 잠시 후 다시 시도해 주세요."
             )
@@ -267,6 +279,41 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
             return .unavailable(message: "첨부 파일 업로드 응답을 해석하지 못했어요.")
         case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .configuration:
             return .unavailable(message: networkError.localizedDescription)
+        }
+    }
+
+    private func debugStatusDescription(from error: Error) -> String {
+        guard let networkError = error as? NetworkError else {
+            return "unknown"
+        }
+
+        switch networkError {
+        case .invalidRequest, .abnormalRequest:
+            return "400/422"
+        case .unauthorized:
+            return "401"
+        case .forbidden:
+            return "403"
+        case .notFound:
+            return "404"
+        case .conflict:
+            return "409"
+        case .refreshTokenExpired:
+            return "418"
+        case .accessTokenExpired:
+            return "419"
+        case .configuration:
+            return "420"
+        case .rateLimited:
+            return "429"
+        case .businessAuthorization:
+            return "445"
+        case .server:
+            return "5xx"
+        case .decoding:
+            return "2xx-decoding"
+        case .transport:
+            return "transport"
         }
     }
 }
