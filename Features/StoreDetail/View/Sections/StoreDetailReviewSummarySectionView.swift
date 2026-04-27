@@ -4,6 +4,7 @@ struct StoreDetailReviewSummarySectionView: View {
     let ratingSummary: StoreDetailRatingSummary
     let reviewPreview: StoreDetailReviewPreview
     let ratingBars: [StoreDetailReviewRatingBar]
+    var onWriteTapped: (() -> Void)?
     var onEditTapped: (() -> Void)?
     var onDeleteTapped: (() -> Void)?
 
@@ -13,7 +14,10 @@ struct StoreDetailReviewSummarySectionView: View {
         VStack(alignment: .leading, spacing: PikkoSpacing.md) {
             SectionHeader(
                 title: "리뷰 요약",
-                subtitle: reviewPreview.metricSummary
+                subtitle: reviewPreview.metricSummary,
+                actionTitle: reviewPreview.showsActions ? nil : "리뷰 작성",
+                actionSystemImage: reviewPreview.showsActions ? nil : "star.bubble.fill",
+                action: reviewPreview.showsActions ? nil : onWriteTapped
             )
 
             VStack(alignment: .leading, spacing: PikkoSpacing.md) {

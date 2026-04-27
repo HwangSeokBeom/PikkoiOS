@@ -50,12 +50,15 @@ final class APIClient: APIClientProtocol {
                     didRetryAfterRefresh: true
                 )
             default:
+                let mappedError = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
                 if httpResponse.statusCode == 444 {
                     Logger.shared.error(
                         "Received 444 for \(endpoint.method.rawValue) \(endpoint.path). Check Swagger path/method alignment."
                     )
                 }
-                let mappedError = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
+                Logger.shared.warning(
+                    "HTTP request failed. endpoint=\(endpoint.method.rawValue) \(endpoint.path) statusCode=\(httpResponse.statusCode) message=\(mappedError.localizedDescription)"
+                )
                 switch mappedError {
                 case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .forbidden:
                     await tokenRefreshCoordinator.invalidateSession()
@@ -105,7 +108,7 @@ final class APIClient: APIClientProtocol {
         statusCode: Int,
         endpoint: Endpoint<ResponseDTO>
     ) throws -> ResponseDTO {
-        if ResponseDTO.self == EmptyResponse.self, data.isEmpty || statusCode == 204 {
+        if ResponseDTO.self == EmptyResponse.self {
             return EmptyResponse() as! ResponseDTO
         }
 

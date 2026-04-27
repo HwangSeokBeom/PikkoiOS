@@ -23,6 +23,56 @@ struct HomeBannerItem: Identifiable, Equatable {
     let payloadValue: String
 }
 
+enum HomeNearbyStoreTab: String, CaseIterable, Equatable {
+    case nearby
+    case realtimeDistance
+
+    var title: String {
+        switch self {
+        case .nearby:
+            return "주변 매장"
+        case .realtimeDistance:
+            return "실시간 거리"
+        }
+    }
+
+    var systemImage: String? {
+        switch self {
+        case .nearby:
+            return "location.circle.fill"
+        case .realtimeDistance:
+            return "figure.walk"
+        }
+    }
+}
+
+enum HomeNearbyStoreSortOrder: Equatable {
+    case nearest
+    case farthest
+
+    mutating func toggle() {
+        self = self == .nearest ? .farthest : .nearest
+    }
+
+    var title: String {
+        switch self {
+        case .nearest:
+            return "거리순"
+        case .farthest:
+            return "먼거리순"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .nearest:
+            return "arrow.up"
+        case .farthest:
+            return "arrow.down"
+        }
+    }
+}
+
 struct HomeViewState {
     var locationLabel = "현재 위치 주변"
     var searchText = ""
@@ -36,6 +86,10 @@ struct HomeViewState {
     var bannerSectionMessage: String?
     var popularStoresSectionMessage: String?
     var nearbyStoresSectionMessage: String?
+    var selectedNearbyStoreTab: HomeNearbyStoreTab = .nearby
+    var nearbyStoreSortOrder: HomeNearbyStoreSortOrder = .nearest
+    var nearbyDistanceSortTitle: String { nearbyStoreSortOrder.title }
+    var nearbyDistanceSortSystemImage: String { nearbyStoreSortOrder.systemImage }
     var nextCursor: String?
     var emptyState: HomeEmptyState?
     var isLoading = true

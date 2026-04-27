@@ -5,6 +5,7 @@ import Foundation
 protocol StoreDetailInteracting {
     func loadInitialContent() async throws -> StoreDetailContent
     func updateLikeStatus(isLiked: Bool) async throws -> Bool
+    func findReviewableOrderCode() async throws -> String?
     func deleteReview(reviewID: String) async throws
 }
 
@@ -13,17 +14,20 @@ struct StoreDetailInteractor: StoreDetailInteracting {
     private let storeID: String
     private let storeRepository: StoreRepository
     private let reviewRepository: ReviewRepository
+    private let orderRepository: OrderRepository
     private let locationService: any LocationServiceProtocol
 
     init(
         storeID: String,
         storeRepository: StoreRepository,
         reviewRepository: ReviewRepository,
+        orderRepository: OrderRepository,
         locationService: any LocationServiceProtocol
     ) {
         self.storeID = storeID
         self.storeRepository = storeRepository
         self.reviewRepository = reviewRepository
+        self.orderRepository = orderRepository
         self.locationService = locationService
     }
 
@@ -55,6 +59,17 @@ struct StoreDetailInteractor: StoreDetailInteracting {
             return try await storeRepository.updateLikeStatus(storeID: storeID, isLiked: isLiked)
         } catch {
             throw mapBlockingError(error)
+        }
+    }
+
+    func findReviewableOrderCode() async throws -> String? {
+        do {
+            let page = try await orderRepository.fetchOrders(cursor: nil, filter: nil)
+            return page.items.first {
+                $0.storeID == storeID && $0.status == .completed
+            }?.orderCode
+        } catch {
+            throw mapReviewMutationError(error)
         }
     }
 

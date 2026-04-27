@@ -38,7 +38,7 @@ struct HomeBuilder {
         self.makeAuthView = makeAuthView
     }
 
-    func build() -> HomeRootView {
+    func build(resetTrigger: Int = 0) -> HomeRootView {
         let router = HomeRouter()
         let interactor = HomeInteractor(
             storeRepository: storeRepository,
@@ -58,7 +58,8 @@ struct HomeBuilder {
             makeStoreDetailView: makeStoreDetailView,
             makeStoreSearchView: makeStoreSearchView,
             makeBannerWebView: makeBannerWebView,
-            makeAuthView: makeAuthView
+            makeAuthView: makeAuthView,
+            resetTrigger: resetTrigger
         )
     }
 }

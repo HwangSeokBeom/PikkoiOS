@@ -1,6 +1,15 @@
 import SwiftUI
 
 struct CartView: View {
+    private enum Layout {
+        static let itemImageSize: CGFloat = 68
+        static let imageTextSpacing: CGFloat = 12
+        static let textControlSpacing: CGFloat = 8
+        static let itemVerticalSpacing: CGFloat = 6
+        static let quantityControlWidth: CGFloat = 100
+        static let quantityControlHeight: CGFloat = 38
+    }
+
     @ObservedObject var presenter: CartPresenter
     let imageLoader: any AuthorizedImageLoading
 
@@ -34,7 +43,7 @@ struct CartView: View {
                     }
                     .padding(.horizontal, PikkoSpacing.xl)
                     .padding(.top, PikkoSpacing.xl)
-                    .padding(.bottom, PikkoSpacing.xxl + 84)
+                    .padding(.bottom, PikkoSpacing.xxl + RootTabBarMetrics.scrollContentBottomInset)
                 }
             }
         }
@@ -68,7 +77,7 @@ struct CartView: View {
     }
 
     private func itemRow(_ item: CartItemViewState) -> some View {
-        HStack(alignment: .top, spacing: PikkoSpacing.md) {
+        HStack(alignment: .top, spacing: Layout.imageTextSpacing) {
             AuthorizedAsyncImage(
                 path: item.imagePath,
                 loader: imageLoader,
@@ -76,53 +85,75 @@ struct CartView: View {
                 cornerRadius: PikkoRadius.card,
                 showsProgress: false
             )
-            .frame(width: 76, height: 76)
+            .frame(width: Layout.itemImageSize, height: Layout.itemImageSize)
+            .clipped()
+            .layoutPriority(0)
 
-            VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+            VStack(alignment: .leading, spacing: Layout.itemVerticalSpacing) {
                 Text(item.name)
                     .font(PikkoTypography.cardTitle)
                     .foregroundStyle(PikkoColor.primaryText)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Text(item.optionSummaryText)
                     .font(PikkoTypography.caption)
                     .foregroundStyle(PikkoColor.secondaryText)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
 
                 Text("\(item.unitPriceText) / 1개")
                     .font(PikkoTypography.caption)
                     .foregroundStyle(PikkoColor.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
                 Text(item.subtotalText)
                     .font(PikkoTypography.bodyStrong)
                     .foregroundStyle(PikkoColor.accentStrong)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .minimumScaleFactor(0.9)
+                    .layoutPriority(2)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
 
-            Spacer(minLength: PikkoSpacing.md)
+            Spacer(minLength: Layout.textControlSpacing)
 
-            HStack(spacing: PikkoSpacing.sm) {
-                circleControl(systemImage: "minus") {
-                    Task { await presenter.send(.decrementTapped(item.id)) }
-                }
-
-                Text("\(item.quantity)")
-                    .font(PikkoTypography.bodyStrong)
-                    .foregroundStyle(PikkoColor.primaryText)
-                    .frame(minWidth: 20)
-
-                circleControl(systemImage: "plus") {
-                    Task { await presenter.send(.incrementTapped(item.id)) }
-                }
-            }
-            .padding(.horizontal, PikkoSpacing.sm)
-            .frame(height: 40)
-            .background(PikkoColor.surfaceMuted)
-            .clipShape(Capsule())
+            quantityControl(for: item)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
         }
+        .frame(minHeight: Layout.itemImageSize, alignment: .top)
         .padding(.bottom, PikkoSpacing.lg)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(PikkoColor.divider)
                 .frame(height: 1)
         }
+    }
+
+    private func quantityControl(for item: CartItemViewState) -> some View {
+        HStack(spacing: PikkoSpacing.xs) {
+            circleControl(systemImage: "minus") {
+                Task { await presenter.send(.decrementTapped(item.id)) }
+            }
+
+            Text("\(item.quantity)")
+                .font(PikkoTypography.bodyStrong)
+                .foregroundStyle(PikkoColor.primaryText)
+                .frame(minWidth: 20)
+
+            circleControl(systemImage: "plus") {
+                Task { await presenter.send(.incrementTapped(item.id)) }
+            }
+        }
+        .padding(.horizontal, PikkoSpacing.xs)
+        .frame(width: Layout.quantityControlWidth, height: Layout.quantityControlHeight)
+        .background(PikkoColor.surfaceMuted)
+        .clipShape(Capsule())
     }
 
     private var bottomCTA: some View {
@@ -154,14 +185,15 @@ struct CartView: View {
             }
         }
         .padding(.horizontal, PikkoSpacing.xl)
-        .padding(.top, PikkoSpacing.md)
-        .padding(.bottom, PikkoSpacing.md)
+        .padding(.top, PikkoSpacing.sm)
+        .padding(.bottom, PikkoSpacing.sm + RootTabBarMetrics.scrollContentBottomInset)
         .background(PikkoColor.surfaceElevated)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(PikkoColor.divider)
                 .frame(height: 1)
         }
+        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: -3)
     }
 
     private func circleControl(systemImage: String, action: @escaping () -> Void) -> some View {
@@ -169,7 +201,7 @@ struct CartView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(PikkoColor.accentStrong)
-                .frame(width: 28, height: 28)
+                .frame(width: 24, height: 24)
                 .background(.white)
                 .clipShape(Circle())
         }

@@ -1,6 +1,11 @@
 import SwiftUI
 
 struct CheckoutView: View {
+    private enum Layout {
+        static let scrollBottomInset: CGFloat = PikkoSpacing.xxl + RootTabBarMetrics.scrollContentBottomInset
+        static let ctaBottomInset: CGFloat = PikkoSpacing.sm + RootTabBarMetrics.scrollContentBottomInset
+    }
+
     @ObservedObject var presenter: CheckoutPresenter
 
     var body: some View {
@@ -57,21 +62,7 @@ struct CheckoutView: View {
                                     .font(PikkoTypography.caption)
                                     .foregroundStyle(PikkoColor.secondaryText)
 
-                                TextField(
-                                    "가게에 전달할 요청사항이 있으면 입력해 주세요",
-                                    text: Binding(
-                                        get: { presenter.viewState.pickupMemo },
-                                        set: { newValue in
-                                            Task { await presenter.send(.pickupMemoChanged(newValue)) }
-                                        }
-                                    ),
-                                    axis: .vertical
-                                )
-                                .font(PikkoTypography.body)
-                                .padding(.horizontal, PikkoSpacing.md)
-                                .padding(.vertical, PikkoSpacing.sm)
-                                .background(PikkoColor.surfaceMuted)
-                                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                                memoInput
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -145,7 +136,7 @@ struct CheckoutView: View {
                     }
                     .padding(.horizontal, PikkoSpacing.xl)
                     .padding(.top, PikkoSpacing.xl)
-                    .padding(.bottom, PikkoSpacing.xxl + 80)
+                    .padding(.bottom, Layout.scrollBottomInset)
                 }
             }
         }
@@ -176,7 +167,7 @@ struct CheckoutView: View {
             }
             .padding(.horizontal, PikkoSpacing.xl)
             .padding(.top, PikkoSpacing.md)
-            .padding(.bottom, PikkoSpacing.md)
+            .padding(.bottom, Layout.ctaBottomInset)
             .background(PikkoColor.surfaceElevated)
             .overlay(alignment: .top) {
                 Rectangle()
@@ -203,6 +194,46 @@ struct CheckoutView: View {
         }
 
         return "가격 검증을 먼저 수행한 뒤 주문을 생성하고, 결제 성공 시 서버 검증까지 이어집니다."
+    }
+
+    private var pickupMemoBinding: Binding<String> {
+        Binding(
+            get: { presenter.viewState.pickupMemo },
+            set: { newValue in
+                Task { await presenter.send(.pickupMemoChanged(newValue)) }
+            }
+        )
+    }
+
+    private var memoInput: some View {
+        ZStack(alignment: .topLeading) {
+            TextEditor(text: pickupMemoBinding)
+                .font(PikkoTypography.body)
+                .foregroundStyle(PikkoColor.primaryText)
+                .scrollContentBackground(.hidden)
+                .textInputAutocapitalization(.never)
+                .padding(.horizontal, PikkoSpacing.md)
+                .padding(.vertical, PikkoSpacing.xs)
+
+            if presenter.viewState.pickupMemo.isEmpty {
+                Text("가게에 전달할 요청사항이 있으면 입력해 주세요")
+                    .font(PikkoTypography.body)
+                    .foregroundStyle(PikkoColor.secondaryText)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2...3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .allowsHitTesting(false)
+                    .padding(.horizontal, PikkoSpacing.lg)
+                    .padding(.vertical, PikkoSpacing.md)
+            }
+        }
+        .frame(minHeight: 96, alignment: .topLeading)
+        .background(PikkoColor.surfaceMuted)
+        .overlay {
+            RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                .stroke(PikkoColor.line.opacity(0.65), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
     }
 
     private func infoRow(title: String, value: String) -> some View {

@@ -66,7 +66,12 @@ struct CommunityInteractor: CommunityInteracting {
                 referenceLocation: locationContext.referenceLocation
             )
         } catch {
-            throw map(error)
+            let mappedError = map(error)
+            if case .authenticationRequired = mappedError {
+                throw mappedError
+            }
+            Logger.shared.warning("Community feed falling back to local content: \(mappedError.localizedDescription)")
+            return makeFallbackContent(query: query)
         }
     }
 
@@ -122,6 +127,38 @@ struct CommunityInteractor: CommunityInteracting {
         default:
             return .createdAt
         }
+    }
+
+    private func makeFallbackContent(query: String?) -> CommunityFeedContent {
+        let normalizedQuery = normalizedQuery(query)?.lowercased()
+        let posts = [
+            CommunityPostSummary(
+                id: "local-community-fallback-1",
+                category: "디저트",
+                title: "근처 픽업 후기를 준비 중이에요",
+                content: "네트워크 응답을 받지 못해 임시 게시글을 보여드려요. 연결이 복구되면 실제 커뮤니티 글로 자동 갱신됩니다.",
+                creator: CommunityPostAuthor(id: "local-fallback-user", nick: "픽코", profileImagePath: nil),
+                mediaPaths: ["community-fallback-dessert"],
+                store: nil,
+                isLiked: false,
+                likeCount: 0,
+                longitude: nil,
+                latitude: nil,
+                createdAt: Date(),
+                updatedAt: nil
+            )
+        ]
+        let filteredPosts = posts.filter {
+            guard let normalizedQuery else { return true }
+            return $0.title.lowercased().contains(normalizedQuery)
+                || $0.content.lowercased().contains(normalizedQuery)
+        }
+        return CommunityFeedContent(
+            featuredBanner: .mock,
+            posts: filteredPosts,
+            nextCursor: nil,
+            referenceLocation: nil
+        )
     }
 
     private func resolveLocationContext(requestIfNeeded: Bool) async -> CommunityLocationContext {

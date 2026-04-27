@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 @MainActor
@@ -13,10 +14,12 @@ final class OrderPresenter: ObservableObject {
     private var isRequestInFlight = false
     private var hasAutoNavigatedHighlightedOrder = false
     private var allOrders: [OrderSummary] = []
+    private var cancellables = Set<AnyCancellable>()
 
     init(interactor: OrderInteracting, router: OrderRouting) {
         self.interactor = interactor
         self.router = router
+        bindOrderStatusChanges()
     }
 
     func send(_ action: OrderAction) async {
@@ -43,6 +46,9 @@ final class OrderPresenter: ObservableObject {
         case .orderTapped(let orderID):
             router.routeToOrderDetail(orderID: orderID)
 
+        case .cancelConfirmed(let orderID):
+            await cancelOrder(orderID: orderID)
+
         case .orderAppeared(let orderID):
             guard orderID == viewState.orders.last?.id,
                   viewState.canLoadMore,
@@ -64,6 +70,7 @@ final class OrderPresenter: ObservableObject {
         setLoadingFlags(for: mode, isLoading: true)
         if mode != .loadMore {
             viewState.errorMessage = nil
+            viewState.successMessage = nil
         }
 
         do {
@@ -185,8 +192,97 @@ final class OrderPresenter: ObservableObject {
             createdAtText: createdAtText,
             pickupTimeText: pickupTimeText,
             totalPriceText: currencyFormatter.string(from: order.totalAmount),
-            isHighlighted: order.id == viewState.highlightedOrderID
+            isHighlighted: order.id == viewState.highlightedOrderID,
+            canCancel: order.canCancel,
+            isCancelling: viewState.cancellingOrderIDs.contains(order.id)
         )
+    }
+
+    private func cancelOrder(orderID: String) async {
+        guard let order = allOrders.first(where: { $0.id == orderID }),
+              order.canCancel,
+              !viewState.cancellingOrderIDs.contains(orderID) else { return }
+
+        viewState.cancellingOrderIDs.insert(orderID)
+        viewState.errorMessage = nil
+        viewState.successMessage = nil
+        applyOrders(resetErrorMessage: false)
+
+        do {
+            let detail = try await interactor.cancelOrder(orderCode: order.orderCode)
+            upsert(detail: detail)
+            viewState.successMessage = "주문이 취소되었어요."
+        } catch {
+            let featureError = (error as? OrderFeatureError)
+                ?? .unavailable(message: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
+            viewState.errorMessage = featureError.userMessage
+        }
+
+        viewState.cancellingOrderIDs.remove(orderID)
+        applyOrders(resetErrorMessage: false)
+    }
+
+    private func upsert(detail: OrderDetail) {
+        let summary = makeSummary(from: detail)
+        if let index = allOrders.firstIndex(where: { $0.id == detail.orderID || $0.orderCode == detail.orderCode }) {
+            allOrders[index] = summary
+        } else {
+            allOrders.insert(summary, at: 0)
+        }
+    }
+
+    private func makeSummary(from detail: OrderDetail) -> OrderSummary {
+        OrderSummary(
+            id: detail.orderID,
+            orderCode: detail.orderCode,
+            storeID: detail.storeID,
+            storeName: detail.storeName,
+            storeImagePath: detail.storeImagePath,
+            status: detail.status,
+            createdAt: detail.createdAt,
+            totalAmount: detail.totalAmount,
+            itemSummaries: detail.items,
+            pickupTime: detail.pickupTime
+        )
+    }
+
+    private func bindOrderStatusChanges() {
+        NotificationCenter.default.publisher(for: .pikkoOrderStatusDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                guard let event = notification.userInfo?[OrderStatusChangeNotificationUserInfoKey.event] as? OrderStatusChangeNotification else {
+                    return
+                }
+
+                Task { @MainActor [weak self] in
+                    self?.apply(statusChange: event)
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func apply(statusChange event: OrderStatusChangeNotification) {
+        guard let index = allOrders.firstIndex(where: { order in
+            order.orderCode == event.orderCode || event.orderID == order.id
+        }) else {
+            return
+        }
+
+        let existing = allOrders[index]
+        allOrders[index] = OrderSummary(
+            id: existing.id,
+            orderCode: existing.orderCode,
+            storeID: existing.storeID,
+            storeName: existing.storeName,
+            storeImagePath: existing.storeImagePath,
+            status: event.status,
+            createdAt: existing.createdAt,
+            totalAmount: existing.totalAmount,
+            itemSummaries: existing.itemSummaries,
+            pickupTime: existing.pickupTime
+        )
+        viewState.cancellingOrderIDs.remove(existing.id)
+        applyOrders(resetErrorMessage: false)
     }
 
     private func makeEmptyState() -> OrderEmptyState {

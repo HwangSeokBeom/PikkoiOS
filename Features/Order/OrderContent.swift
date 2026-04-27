@@ -61,3 +61,17 @@ struct OrderEmptyState: Equatable {
     let actionTitle: String
     let requiresAuthentication: Bool
 }
+
+struct OrderStatusChangeNotification: Sendable {
+    let orderID: String?
+    let orderCode: String
+    let status: OrderStatus
+}
+
+extension Notification.Name {
+    static let pikkoOrderStatusDidChange = Notification.Name("pikko.order.statusDidChange")
+}
+
+enum OrderStatusChangeNotificationUserInfoKey {
+    static let event = "event"
+}

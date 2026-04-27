@@ -81,13 +81,64 @@ final class StoreDetailPresenterCartTests: XCTestCase {
         XCTAssertEqual(router.routedCartStoreID, "store-1")
     }
 
+    func testReviewWriteUnavailableShowsEligibilityBannerState() async {
+        let router = SpyStoreDetailRouter()
+        let presenter = makePresenter(
+            content: makeContent(storeID: "store-1", storeName: "새싹 카페"),
+            cartStore: CartStore(cartRepository: InMemoryCartRepository()),
+            router: router
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.reviewWriteTapped)
+
+        XCTAssertEqual(
+            presenter.viewState.reviewEligibilityMessage,
+            "픽업 완료된 주문 내역에서 리뷰를 작성할 수 있어요."
+        )
+        XCTAssertEqual(presenter.viewState.reviewEligibilityScrollTrigger, 1)
+        XCTAssertNil(presenter.viewState.errorMessage)
+        XCTAssertNil(router.routedReviewContext)
+
+        await presenter.send(.reviewWriteTapped)
+
+        XCTAssertEqual(presenter.viewState.reviewEligibilityScrollTrigger, 2)
+    }
+
+    func testReviewWriteAvailableRoutesToReviewComposer() async {
+        let router = SpyStoreDetailRouter()
+        let presenter = makePresenter(
+            content: makeContent(storeID: "store-1", storeName: "새싹 카페"),
+            cartStore: CartStore(cartRepository: InMemoryCartRepository()),
+            router: router,
+            reviewableOrderCode: "D123456"
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.reviewWriteTapped)
+
+        XCTAssertNil(presenter.viewState.reviewEligibilityMessage)
+        XCTAssertEqual(
+            router.routedReviewContext,
+            ReviewComposerContext(
+                storeID: "store-1",
+                storeName: "새싹 카페",
+                mode: .create(orderCode: "D123456")
+            )
+        )
+    }
+
     private func makePresenter(
         content: StoreDetailContent,
         cartStore: CartStore,
-        router: SpyStoreDetailRouter
+        router: SpyStoreDetailRouter,
+        reviewableOrderCode: String? = nil
     ) -> StoreDetailPresenter {
         StoreDetailPresenter(
-            interactor: StubStoreDetailInteractor(content: content),
+            interactor: StubStoreDetailInteractor(
+                content: content,
+                reviewableOrderCode: reviewableOrderCode
+            ),
             router: router,
             cartStore: cartStore
         )
@@ -146,6 +197,7 @@ final class StoreDetailPresenterCartTests: XCTestCase {
 @MainActor
 private struct StubStoreDetailInteractor: StoreDetailInteracting {
     let content: StoreDetailContent
+    var reviewableOrderCode: String?
 
     func loadInitialContent() async throws -> StoreDetailContent {
         content
@@ -153,6 +205,10 @@ private struct StubStoreDetailInteractor: StoreDetailInteracting {
 
     func updateLikeStatus(isLiked: Bool) async throws -> Bool {
         isLiked
+    }
+
+    func findReviewableOrderCode() async throws -> String? {
+        reviewableOrderCode
     }
 
     func deleteReview(reviewID: String) async throws {}

@@ -5,5 +5,6 @@ enum OrderDetailAction: Equatable {
     case retryTapped
     case storeTapped
     case reviewTapped
+    case cancelConfirmed
     case loginRequiredTapped
 }

@@ -67,6 +67,7 @@ private extension OrderRootView {
                 if !isPresented {
                     presentedOrderID = nil
                     router.clearPendingRoute()
+                    Task { await presenter.send(.refreshRequested) }
                 }
             }
         )

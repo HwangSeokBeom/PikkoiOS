@@ -31,3 +31,7 @@ struct OrderCreateMenuItemDTO: Encodable, Sendable {
         case quantity
     }
 }
+
+struct OrderStatusUpdateRequestDTO: Encodable, Sendable {
+    let nextStatus: String
+}

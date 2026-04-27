@@ -82,6 +82,110 @@ final class HomePresenterTests: XCTestCase {
         XCTAssertTrue(presenter.viewState.nearbyStores.isEmpty)
     }
 
+    func testNearbySortButtonKeepsNearbyTabAndTogglesSortOrder() async {
+        let interactor = StubHomeInteractor(
+            loadHomeResult: .success(
+                makeHomeContent(
+                    stores: [
+                        makeStoreSummary(id: "far", name: "먼 가게", distanceMeters: 900),
+                        makeStoreSummary(id: "near", name: "가까운 가게", distanceMeters: 120),
+                        makeStoreSummary(id: "middle", name: "중간 가게", distanceMeters: 450),
+                        makeStoreSummary(id: "unknown", name: "거리 미확인", distanceMeters: nil)
+                    ]
+                )
+            )
+        )
+        let presenter = HomePresenter(
+            interactor: interactor,
+            router: SpyHomeRouter()
+        )
+
+        await presenter.send(.onAppear)
+        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .nearby)
+        XCTAssertEqual(presenter.viewState.nearbyStoreSortOrder, .nearest)
+        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["near", "middle", "far", "unknown"])
+
+        await presenter.send(.nearbyDistanceSortTapped)
+
+        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .nearby)
+        XCTAssertEqual(presenter.viewState.nearbyStoreSortOrder, .farthest)
+        XCTAssertEqual(presenter.viewState.nearbyDistanceSortTitle, "먼거리순")
+        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["far", "middle", "near", "unknown"])
+    }
+
+    func testRealtimeSortButtonKeepsRealtimeTabAndTogglesSortOrder() async {
+        let presenter = HomePresenter(
+            interactor: StubHomeInteractor(
+                loadHomeResult: .success(
+                    makeHomeContent(
+                        stores: [
+                            makeStoreSummary(id: "far", name: "먼 가게", distanceMeters: 900),
+                            makeStoreSummary(id: "near", name: "가까운 가게", distanceMeters: 120)
+                        ]
+                    )
+                )
+            ),
+            router: SpyHomeRouter()
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.nearbyStoreTabTapped(.realtimeDistance))
+        await presenter.send(.nearbyDistanceSortTapped)
+
+        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .realtimeDistance)
+        XCTAssertEqual(presenter.viewState.nearbyStoreSortOrder, .farthest)
+        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["far", "near"])
+    }
+
+    func testNearbyTabTapPreservesSortOrder() async {
+        let presenter = HomePresenter(
+            interactor: StubHomeInteractor(
+                loadHomeResult: .success(
+                    makeHomeContent(
+                        stores: [
+                            makeStoreSummary(id: "far", name: "먼 가게", distanceMeters: 900),
+                            makeStoreSummary(id: "near", name: "가까운 가게", distanceMeters: 120)
+                        ]
+                    )
+                )
+            ),
+            router: SpyHomeRouter()
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.nearbyDistanceSortTapped)
+        await presenter.send(.nearbyStoreTabTapped(.realtimeDistance))
+        await presenter.send(.nearbyStoreTabTapped(.nearby))
+
+        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .nearby)
+        XCTAssertEqual(presenter.viewState.nearbyStoreSortOrder, .farthest)
+        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["far", "near"])
+    }
+
+    func testRealtimeTabTapPreservesSortOrder() async {
+        let presenter = HomePresenter(
+            interactor: StubHomeInteractor(
+                loadHomeResult: .success(
+                    makeHomeContent(
+                        stores: [
+                            makeStoreSummary(id: "far", name: "먼 가게", distanceMeters: 900),
+                            makeStoreSummary(id: "near", name: "가까운 가게", distanceMeters: 120)
+                        ]
+                    )
+                )
+            ),
+            router: SpyHomeRouter()
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.nearbyDistanceSortTapped)
+        await presenter.send(.nearbyStoreTabTapped(.realtimeDistance))
+
+        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .realtimeDistance)
+        XCTAssertEqual(presenter.viewState.nearbyStoreSortOrder, .farthest)
+        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["far", "near"])
+    }
+
     func testHomePresenterSkipsHomeAPIsWhenSessionIsUnauthenticated() async {
         let interactor = StubHomeInteractor(
             loadHomeResult: .failure(NetworkError.transport)
@@ -146,11 +250,54 @@ final class HomePresenterTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.searchText, "베이커리")
     }
 
-    private func makeStoreSummary() -> StoreSummary {
+    func testBannerTapRoutesInjectedBannerEvenWhenIDsMatch() async {
+        let router = SpyHomeRouter()
+        let presenter = HomePresenter(
+            interactor: StubHomeInteractor(
+                loadHomeResult: .success(
+                    HomeContent(
+                        locationLabel: "문래역, 영등포구",
+                        popularKeywords: [],
+                        banners: [
+                            Banner(
+                                id: "WEBVIEW:/event",
+                                name: "banner1",
+                                imagePath: "/banner1.png",
+                                payloadType: "WEBVIEW",
+                                payloadValue: "/banner1"
+                            ),
+                            Banner(
+                                id: "WEBVIEW:/event",
+                                name: "banner2",
+                                imagePath: "/banner2.png",
+                                payloadType: "WEBVIEW",
+                                payloadValue: "/banner2"
+                            )
+                        ],
+                        popularStores: [],
+                        nearbyStoresPage: CursorPage(items: [], nextCursor: nil)
+                    )
+                )
+            ),
+            router: router
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.bannerTapped(id: presenter.viewState.banners[1].id, index: 1))
+
+        XCTAssertEqual(router.routedBanner?.title, "banner2")
+        XCTAssertEqual(router.routedBanner?.payloadValue, "/banner2")
+    }
+
+    private func makeStoreSummary(
+        id: String = "store-1",
+        name: String = "픽코 베이커리",
+        distanceMeters: Double? = 120
+    ) -> StoreSummary {
         StoreSummary(
-            id: "store-1",
+            id: id,
             category: "디저트",
-            name: "픽코 베이커리",
+            name: name,
             closeTime: "20:00",
             imagePaths: [],
             isPicchelin: false,
@@ -162,7 +309,17 @@ final class HomePresenterTests: XCTestCase {
             totalReviewCount: 3,
             longitude: nil,
             latitude: nil,
-            distanceMeters: 120
+            distanceMeters: distanceMeters
+        )
+    }
+
+    private func makeHomeContent(stores: [StoreSummary]) -> HomeContent {
+        HomeContent(
+            locationLabel: "문래역, 영등포구",
+            popularKeywords: [],
+            banners: [],
+            popularStores: [],
+            nearbyStoresPage: CursorPage(items: stores, nextCursor: nil)
         )
     }
 
@@ -265,11 +422,12 @@ private final class StubHomeInteractor: HomeInteracting {
 @MainActor
 private final class SpyHomeRouter: HomeRouting {
     private(set) var routedSearchQuery: String?
+    private(set) var routedBanner: HomeBannerItem?
 
     func routeToAuth() {}
     func routeToLocationPicker() {}
     func routeToSearch(query: String) { routedSearchQuery = query }
-    func routeToBanner(_ banner: HomeBannerItem) {}
+    func routeToBanner(_ banner: HomeBannerItem) { routedBanner = banner }
     func routeToStoreDetail(storeID: String) {}
     func clearPendingRoute() {}
 }

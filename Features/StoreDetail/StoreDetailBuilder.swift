@@ -6,6 +6,7 @@ struct StoreDetailBuilder {
     private let storeID: String
     private let storeRepository: StoreRepository
     private let reviewRepository: ReviewRepository
+    private let orderRepository: OrderRepository
     private let cartStore: CartStore
     private let locationService: any LocationServiceProtocol
     private let mapLauncher: any MapLauncherProtocol
@@ -19,6 +20,7 @@ struct StoreDetailBuilder {
         storeID: String,
         storeRepository: StoreRepository,
         reviewRepository: ReviewRepository,
+        orderRepository: OrderRepository,
         cartStore: CartStore,
         locationService: any LocationServiceProtocol,
         mapLauncher: any MapLauncherProtocol,
@@ -31,6 +33,7 @@ struct StoreDetailBuilder {
         self.storeID = storeID
         self.storeRepository = storeRepository
         self.reviewRepository = reviewRepository
+        self.orderRepository = orderRepository
         self.cartStore = cartStore
         self.locationService = locationService
         self.mapLauncher = mapLauncher
@@ -47,6 +50,7 @@ struct StoreDetailBuilder {
             storeID: storeID,
             storeRepository: storeRepository,
             reviewRepository: reviewRepository,
+            orderRepository: orderRepository,
             locationService: locationService
         )
         let presenter = StoreDetailPresenter(

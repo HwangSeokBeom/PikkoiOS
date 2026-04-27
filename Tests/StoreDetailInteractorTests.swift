@@ -14,6 +14,7 @@ final class StoreDetailInteractorTests: XCTestCase {
                 reviewsResult: .failure(NetworkError.transport),
                 ratingsResult: .success([StoreReviewRatingBreakdown(rating: 5, count: 3)])
             ),
+            orderRepository: StubOrderRepository(),
             locationService: StubLocationService()
         )
 
@@ -35,6 +36,7 @@ final class StoreDetailInteractorTests: XCTestCase {
                 detailResult: .failure(NetworkError.unauthorized)
             ),
             reviewRepository: StubReviewRepository(),
+            orderRepository: StubOrderRepository(),
             locationService: StubLocationService()
         )
 
@@ -208,6 +210,37 @@ private struct StubReviewRepository: ReviewRepository {
         limit: Int
     ) async throws -> CursorPage<UserStoreReview> {
         CursorPage(items: [], nextCursor: nil)
+    }
+}
+
+private struct StubOrderRepository: OrderRepository {
+    var ordersResult: Result<CursorPage<OrderSummary>, Error> = .success(
+        CursorPage(items: [], nextCursor: nil)
+    )
+
+    func fetchOrders(cursor: String?, filter: String?) async throws -> CursorPage<OrderSummary> {
+        try ordersResult.get()
+    }
+
+    func fetchOrderDetail(orderID: String) async throws -> OrderDetail {
+        throw NetworkError.notFound(message: "주문 정보를 찾을 수 없어요.")
+    }
+
+    func cancelOrder(orderCode: String) async throws -> OrderDetail {
+        _ = orderCode
+        throw NetworkError.invalidRequest
+    }
+
+    func validatePayment(impUID: String) async throws -> ValidatedPaymentReceipt {
+        throw NetworkError.invalidRequest
+    }
+
+    func validatePrice(_ request: CheckoutPriceValidationRequest) async throws -> CheckoutPriceValidationResult {
+        .valid
+    }
+
+    func createOrder(_ submission: CheckoutOrderSubmission) async throws -> CreatedOrder {
+        throw NetworkError.invalidRequest
     }
 }
 

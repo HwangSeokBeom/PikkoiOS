@@ -6,6 +6,7 @@ protocol OrderRemoteDataSourceProtocol: Sendable {
     func validatePayment(impUID: String) async throws -> ReceiptOrderResponseDTO
     func validatePrice(_ request: CheckoutPriceValidationRequestDTO) async throws -> CheckoutPriceValidationResponseDTO
     func createOrder(_ request: OrderCreateRequestDTO) async throws -> OrderCreateResponseDTO
+    func updateOrderStatus(orderCode: String, nextStatus: String) async throws
 }
 
 struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
@@ -102,5 +103,25 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
             authorizationPolicy: .accessToken
         )
         return try await apiClient.execute(endpoint)
+    }
+
+    func updateOrderStatus(orderCode: String, nextStatus: String) async throws {
+        let encodedOrderCode = orderCode.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? orderCode
+        let request = OrderStatusUpdateRequestDTO(nextStatus: nextStatus)
+        let path = "/v1/orders/\(encodedOrderCode)"
+        let endpoint = Endpoint<EmptyResponse>(
+            path: path,
+            method: .put,
+            body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(request)),
+            authorizationPolicy: .accessToken
+        )
+        do {
+            _ = try await apiClient.execute(endpoint)
+        } catch {
+            Logger.shared.warning(
+                "Order status update failed. endpoint=PUT \(path) body={nextStatus:\(nextStatus)} message=\(error.localizedDescription)"
+            )
+            throw error
+        }
     }
 }

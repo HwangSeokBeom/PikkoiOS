@@ -10,14 +10,14 @@ struct FloatingQuickActionView: View {
                 ZStack {
                     Circle()
                         .fill(PikkoColor.surface)
-                        .frame(width: 74, height: 74)
+                        .frame(width: 58, height: 58)
 
                     Circle()
                         .fill(PikkoColor.accent)
-                        .frame(width: 60, height: 60)
+                        .frame(width: 50, height: 50)
                         .overlay {
                             Image(systemName: "sparkles")
-                                .font(.system(size: 22, weight: .bold))
+                                .font(.system(size: 19, weight: .bold))
                                 .foregroundStyle(.white)
                         }
                 }
@@ -30,7 +30,7 @@ struct FloatingQuickActionView: View {
                         .frame(height: 20)
                         .background(PikkoColor.accentStrong)
                         .clipShape(Capsule())
-                        .offset(x: 5, y: 4)
+                        .offset(x: 2, y: 5)
                 }
             }
         }

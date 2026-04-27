@@ -60,6 +60,10 @@ enum OrderStatus: Equatable, Sendable {
             return false
         }
     }
+
+    var isCancellable: Bool {
+        self == .pending
+    }
 }
 
 struct OrderSummary: Equatable, Sendable, Identifiable {
@@ -73,6 +77,10 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
     let totalAmount: Decimal
     let itemSummaries: [OrderItemSummary]
     let pickupTime: Date?
+
+    var canCancel: Bool {
+        status.isCancellable
+    }
 }
 
 struct OrderItemSummary: Equatable, Sendable, Identifiable {
@@ -96,4 +104,3 @@ struct OrderStatusTimelineEntry: Equatable, Sendable, Identifiable {
     let completed: Bool
     let changedAt: Date?
 }
-

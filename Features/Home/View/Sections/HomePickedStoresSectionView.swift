@@ -3,7 +3,12 @@ import SwiftUI
 struct HomePickedStoresSectionView: View {
     let stores: [StoreCard.Model]
     let emptyMessage: String?
+    let selectedTab: HomeNearbyStoreTab
+    let distanceSortTitle: String
+    let distanceSortSystemImage: String
     let imageLoader: any AuthorizedImageLoading
+    let onTabTap: (HomeNearbyStoreTab) -> Void
+    let onDistanceSortTap: () -> Void
     let onLikeTap: (String) -> Void
     let onStoreTap: (String) -> Void
     let onStoreAppear: (String) -> Void
@@ -12,21 +17,33 @@ struct HomePickedStoresSectionView: View {
         VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
             SectionHeader(
                 title: "내 주변 가게",
-                actionTitle: "거리순",
-                actionSystemImage: "line.3.horizontal.decrease",
+                actionTitle: distanceSortTitle,
+                actionSystemImage: distanceSortSystemImage,
+                action: onDistanceSortTap,
                 size: .compact
             )
 
             HStack(spacing: PikkoSpacing.xs) {
-                TagChip(
-                    title: "주변 매장",
-                    systemImage: "location.circle.fill",
-                    isSelected: true,
-                    appearance: .filled,
-                    size: .compact
-                )
-                TagChip(title: "실시간 거리", appearance: .subtle, size: .compact)
+                ForEach(HomeNearbyStoreTab.allCases, id: \.self) { tab in
+                    let isSelected = selectedTab == tab
+
+                    TagChip(
+                        title: tab.title,
+                        systemImage: tab.systemImage,
+                        isSelected: isSelected,
+                        appearance: isSelected ? .filled : .subtle,
+                        action: {
+                            onTabTap(tab)
+                        },
+                        size: .compact
+                    )
+                    .contentShape(Rectangle())
+                    .zIndex(1)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .zIndex(2)
 
             if stores.isEmpty {
                 sectionFallbackView(
@@ -39,6 +56,9 @@ struct HomePickedStoresSectionView: View {
                             model: store,
                             loader: imageLoader,
                             style: .list,
+                            onCardTapped: {
+                                onStoreTap(store.id)
+                            },
                             onLikeTapped: {
                                 onLikeTap(store.id)
                             }
@@ -46,11 +66,9 @@ struct HomePickedStoresSectionView: View {
                         .onAppear {
                             onStoreAppear(store.id)
                         }
-                        .onTapGesture {
-                            onStoreTap(store.id)
-                        }
                     }
                 }
+                .zIndex(0)
             }
         }
     }

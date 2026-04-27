@@ -79,6 +79,8 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>현재 위치 주변의 픽업 가능한 매장을 보여주기 위해 위치 정보를 사용합니다.</string>
 	<key>PIKKO_APP_ENV</key>
 	<string>$(PIKKO_APP_ENV)</string>
 	<key>PIKKOBaseURL</key>

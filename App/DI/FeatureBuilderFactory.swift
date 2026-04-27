@@ -24,7 +24,7 @@ struct FeatureBuilderFactory {
         ).build()
     }
 
-    func makeHomeView() -> HomeRootView {
+    func makeHomeView(resetTrigger: Int = 0) -> HomeRootView {
         HomeBuilder(
             storeRepository: container.storeRepository,
             bannerRepository: container.bannerRepository,
@@ -44,7 +44,7 @@ struct FeatureBuilderFactory {
             makeAuthView: {
                 AnyView(makeAuthView(context: .protectedResource))
             }
-        ).build()
+        ).build(resetTrigger: resetTrigger)
     }
 
     func makeStoreDetailView(storeID: String = "mock-store") -> StoreDetailRootView {
@@ -52,6 +52,7 @@ struct FeatureBuilderFactory {
             storeID: storeID,
             storeRepository: container.storeRepository,
             reviewRepository: container.reviewRepository,
+            orderRepository: container.orderRepository,
             cartStore: appState.cartStore,
             locationService: container.locationService,
             mapLauncher: container.mapLauncher,

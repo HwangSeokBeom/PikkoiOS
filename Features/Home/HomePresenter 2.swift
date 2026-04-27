@@ -12,6 +12,8 @@ final class HomePresenter: ObservableObject {
     private var hasLoaded = false
     private var isPaging = false
     private var isConfigurationBlocked = false
+    private var nearbyStoreSummaries: [StoreSummary] = []
+    private var realtimeDistanceStoreSummaries: [StoreSummary] = []
 
     init(
         interactor: HomeInteracting,
@@ -50,9 +52,17 @@ final class HomePresenter: ObservableObject {
             viewState.selectedCategory = viewState.categories.first(where: { $0.id == categoryID })
             guard !isConfigurationBlocked else { return }
             await loadHome(isRefresh: false)
-        case .bannerTapped(let bannerID):
-            guard let banner = viewState.banners.first(where: { $0.id == bannerID }) else { return }
+        case .bannerTapped(let bannerID, let index):
+            guard viewState.banners.indices.contains(index) else { return }
+            let banner = viewState.banners[index]
+            guard banner.id == bannerID else { return }
             router.routeToBanner(banner)
+        case .nearbyStoreTabTapped(let tab):
+            viewState.selectedNearbyStoreTab = tab
+            applyNearbyStores()
+        case .nearbyDistanceSortTapped:
+            viewState.nearbyStoreSortOrder.toggle()
+            applyNearbyStores()
         case .popularStoreTapped(let storeID), .nearbyStoreTapped(let storeID):
             router.routeToStoreDetail(storeID: storeID)
         case .nearbyStoreAppeared(let storeID):
@@ -120,7 +130,9 @@ final class HomePresenter: ObservableObject {
                 category: selectedCategoryAPIValue,
                 nextCursor: nextCursor
             )
-            viewState.nearbyStores.append(contentsOf: nextPage.items.map(makeStoreCardModel))
+            nearbyStoreSummaries.append(contentsOf: nextPage.items)
+            realtimeDistanceStoreSummaries.append(contentsOf: nextPage.items)
+            applyNearbyStores()
             viewState.nextCursor = nextPage.nextCursor
         } catch {
             viewState.errorMessage = resolveErrorMessage(from: error)
@@ -162,7 +174,9 @@ final class HomePresenter: ObservableObject {
         viewState.popularKeywords = content.popularKeywords
         viewState.banners = content.banners.map(makeBannerItem)
         viewState.popularStores = content.popularStores.map(makeStoreCardModel)
-        viewState.nearbyStores = content.nearbyStoresPage.items.map(makeStoreCardModel)
+        nearbyStoreSummaries = content.nearbyStoresPage.items
+        realtimeDistanceStoreSummaries = content.nearbyStoresPage.items
+        applyNearbyStores()
         viewState.popularKeywordsSectionMessage = nil
         viewState.bannerSectionMessage = nil
         viewState.popularStoresSectionMessage = nil
@@ -187,8 +201,64 @@ final class HomePresenter: ObservableObject {
     }
 
     private func applyLikeStatus(_ isLiked: Bool, to storeID: String) {
+        nearbyStoreSummaries = nearbyStoreSummaries.map { updatedLikeSummary($0, storeID: storeID, isLiked: isLiked) }
+        realtimeDistanceStoreSummaries = realtimeDistanceStoreSummaries.map { updatedLikeSummary($0, storeID: storeID, isLiked: isLiked) }
         viewState.popularStores = viewState.popularStores.map { updatedLikeModel($0, storeID: storeID, isLiked: isLiked) }
         viewState.nearbyStores = viewState.nearbyStores.map { updatedLikeModel($0, storeID: storeID, isLiked: isLiked) }
+    }
+
+    private func applyNearbyStores() {
+        let sourceStores: [StoreSummary]
+        switch viewState.selectedNearbyStoreTab {
+        case .nearby:
+            sourceStores = nearbyStoreSummaries
+        case .realtimeDistance:
+            sourceStores = realtimeDistanceStoreSummaries
+        }
+
+        let stores = sortedNearbyStores(
+            sourceStores,
+            tab: viewState.selectedNearbyStoreTab,
+            sortOrder: viewState.nearbyStoreSortOrder
+        )
+        viewState.nearbyStores = stores.map(makeStoreCardModel)
+    }
+
+    private func sortedNearbyStores(
+        _ stores: [StoreSummary],
+        tab: HomeNearbyStoreTab,
+        sortOrder: HomeNearbyStoreSortOrder
+    ) -> [StoreSummary] {
+        stores.sorted { lhs, rhs in
+            let lhsKey = nearbySortKey(for: lhs, tab: tab)
+            let rhsKey = nearbySortKey(for: rhs, tab: tab)
+
+            switch (lhsKey, rhsKey) {
+            case let (lhsKey?, rhsKey?):
+                if lhsKey == rhsKey {
+                    return lhs.name < rhs.name
+                }
+
+                return sortOrder == .nearest
+                    ? lhsKey < rhsKey
+                    : lhsKey > rhsKey
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            case (nil, nil):
+                return lhs.name < rhs.name
+            }
+        }
+    }
+
+    private func nearbySortKey(for store: StoreSummary, tab: HomeNearbyStoreTab) -> Double? {
+        switch tab {
+        case .nearby:
+            return store.distanceMeters
+        case .realtimeDistance:
+            return store.distanceMeters
+        }
     }
 
     private func updatedLikeModel(_ model: StoreCard.Model, storeID: String, isLiked: Bool) -> StoreCard.Model {
@@ -223,6 +293,40 @@ final class HomePresenter: ObservableObject {
             tags: model.tags,
             isLiked: isLiked,
             isPickupAvailable: model.isPickupAvailable
+        )
+    }
+
+    private func updatedLikeSummary(_ store: StoreSummary, storeID: String, isLiked: Bool) -> StoreSummary {
+        guard store.id == storeID else {
+            return store
+        }
+
+        let delta: Int
+        switch (store.isLiked, isLiked) {
+        case (true, false):
+            delta = -1
+        case (false, true):
+            delta = 1
+        default:
+            delta = 0
+        }
+
+        return StoreSummary(
+            id: store.id,
+            category: store.category,
+            name: store.name,
+            closeTime: store.closeTime,
+            imagePaths: store.imagePaths,
+            isPicchelin: store.isPicchelin,
+            isLiked: isLiked,
+            likeCount: max(store.likeCount + delta, 0),
+            hashTags: store.hashTags,
+            totalRating: store.totalRating,
+            totalOrderCount: store.totalOrderCount,
+            totalReviewCount: store.totalReviewCount,
+            longitude: store.longitude,
+            latitude: store.latitude,
+            distanceMeters: store.distanceMeters
         )
     }
 

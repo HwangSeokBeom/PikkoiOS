@@ -2,20 +2,23 @@ import SwiftUI
 
 struct HomeBannerSectionView: View {
     private enum Layout {
-        static let height: CGFloat = 96
+        static let height: CGFloat = 100
+        static let autoSlideIntervalNanoseconds: UInt64 = 3_500_000_000
     }
 
     let banners: [HomeBannerItem]
     let imageLoader: any AuthorizedImageLoading
-    let onTap: (String) -> Void
+    let onTap: (String, Int) -> Void
 
     @State private var selectedIndex = 0
+    @State private var autoSlideGeneration = 0
+    @State private var isAutoSlideActive = false
 
     var body: some View {
         TabView(selection: $selectedIndex) {
             ForEach(Array(banners.enumerated()), id: \.offset) { index, banner in
                 Button {
-                    onTap(banner.id)
+                    onTap(banner.id, index)
                 } label: {
                     bannerCard(for: banner)
                 }
@@ -25,11 +28,40 @@ struct HomeBannerSectionView: View {
         }
         .frame(height: Layout.height)
         .tabViewStyle(.page(indexDisplayMode: .never))
+        .onAppear {
+            startAutoSlideIfNeeded()
+        }
+        .onDisappear {
+            stopAutoSlide()
+        }
         .onChange(of: banners.count) { _, newValue in
             if newValue == 0 {
                 selectedIndex = 0
             } else {
                 selectedIndex = min(selectedIndex, newValue - 1)
+            }
+
+            if newValue > 1 {
+                startAutoSlideIfNeeded()
+            } else {
+                stopAutoSlide()
+            }
+        }
+        .onChange(of: selectedIndex) { _, _ in
+            restartAutoSlideIfNeeded()
+        }
+        .task(id: autoSlideGeneration) {
+            guard isAutoSlideActive, banners.count > 1 else { return }
+
+            do {
+                try await Task.sleep(nanoseconds: Layout.autoSlideIntervalNanoseconds)
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled, isAutoSlideActive, banners.count > 1 else { return }
+            withAnimation(.easeInOut(duration: 0.28)) {
+                selectedIndex = (selectedIndex + 1) % banners.count
             }
         }
     }
@@ -70,5 +102,30 @@ struct HomeBannerSectionView: View {
     private var currentPage: Int {
         guard !banners.isEmpty else { return 0 }
         return min(selectedIndex + 1, banners.count)
+    }
+
+    private func startAutoSlideIfNeeded() {
+        guard banners.count > 1 else {
+            stopAutoSlide()
+            return
+        }
+
+        isAutoSlideActive = true
+        autoSlideGeneration += 1
+    }
+
+    private func stopAutoSlide() {
+        isAutoSlideActive = false
+        autoSlideGeneration += 1
+    }
+
+    private func restartAutoSlideIfNeeded() {
+        guard isAutoSlideActive else { return }
+
+        if banners.count > 1 {
+            autoSlideGeneration += 1
+        } else {
+            stopAutoSlide()
+        }
     }
 }

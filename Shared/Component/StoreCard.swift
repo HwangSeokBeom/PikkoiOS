@@ -26,6 +26,7 @@ struct StoreCard: View {
     let model: Model
     let loader: any AuthorizedImageLoading
     var style: LayoutStyle = .list
+    var onCardTapped: (() -> Void)?
     var onLikeTapped: (() -> Void)?
 
     var body: some View {
@@ -42,6 +43,7 @@ struct StoreCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
         .pikkoShadow(PikkoShadow.card)
+        .contentShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
     }
 
     private var imageSection: some View {
@@ -60,6 +62,10 @@ struct StoreCard: View {
             }
             .frame(height: imageHeight)
             .clipped()
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onCardTapped?()
+            }
 
             HStack(alignment: .top) {
                 Button {
@@ -124,6 +130,10 @@ struct StoreCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onCardTapped?()
+        }
     }
 
     private func infoPill(systemImage: String, text: String) -> some View {

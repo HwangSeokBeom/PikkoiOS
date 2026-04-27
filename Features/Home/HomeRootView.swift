@@ -9,6 +9,7 @@ struct HomeRootView: View {
     private let makeStoreSearchView: (String) -> AnyView
     private let makeBannerWebView: (HomeBannerItem) -> AnyView
     private let makeAuthView: () -> AnyView
+    private let resetTrigger: Int
 
     @State private var presentedStoreID: String?
     @State private var presentedSearchQuery: String?
@@ -21,7 +22,8 @@ struct HomeRootView: View {
         makeStoreDetailView: @escaping (String) -> StoreDetailRootView,
         makeStoreSearchView: @escaping (String) -> AnyView,
         makeBannerWebView: @escaping (HomeBannerItem) -> AnyView,
-        makeAuthView: @escaping () -> AnyView
+        makeAuthView: @escaping () -> AnyView,
+        resetTrigger: Int = 0
     ) {
         _presenter = StateObject(wrappedValue: presenter)
         _router = StateObject(wrappedValue: router)
@@ -30,6 +32,7 @@ struct HomeRootView: View {
         self.makeStoreSearchView = makeStoreSearchView
         self.makeBannerWebView = makeBannerWebView
         self.makeAuthView = makeAuthView
+        self.resetTrigger = resetTrigger
     }
 
     var body: some View {
@@ -38,7 +41,8 @@ struct HomeRootView: View {
             imageLoader: imageLoader,
             onAuthTap: {
                 Task { await presenter.send(.loginRequiredTapped) }
-            }
+            },
+            resetTrigger: resetTrigger
         )
         .task {
             await presenter.send(.onAppear)
@@ -72,6 +76,12 @@ struct HomeRootView: View {
         }
         .fullScreenCover(isPresented: authPresentedBinding) {
             makeAuthView()
+        }
+        .onChange(of: resetTrigger) { _, _ in
+            presentedStoreID = nil
+            presentedSearchQuery = nil
+            presentedBanner = nil
+            router.clearPendingRoute()
         }
     }
 

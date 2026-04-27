@@ -6,6 +6,7 @@ enum OrderAction: Equatable {
     case retryTapped
     case filterTapped(OrderListFilter)
     case orderTapped(String)
+    case cancelConfirmed(String)
     case orderAppeared(String)
     case loginRequiredTapped
     case exploreStoresTapped

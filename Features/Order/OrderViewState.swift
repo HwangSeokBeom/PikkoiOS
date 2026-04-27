@@ -12,8 +12,10 @@ struct OrderViewState: Equatable {
     var canLoadMore = false
     var nextCursor: String?
     var errorMessage: String?
+    var successMessage: String?
     var emptyState: OrderEmptyState?
     var requiresAuthentication = false
+    var cancellingOrderIDs: Set<String> = []
 }
 
 struct OrderListItemViewState: Equatable, Identifiable {
@@ -27,4 +29,6 @@ struct OrderListItemViewState: Equatable, Identifiable {
     let pickupTimeText: String?
     let totalPriceText: String
     let isHighlighted: Bool
+    let canCancel: Bool
+    let isCancelling: Bool
 }

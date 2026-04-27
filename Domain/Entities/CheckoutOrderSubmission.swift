@@ -2,6 +2,7 @@ import Foundation
 
 struct CheckoutOrderSubmission: Equatable, Sendable {
     let storeID: String
+    let storeName: String
     let items: [CheckoutOrderMenuSubmission]
     let totalPriceAmount: Decimal
     let address: CheckoutAddress?
@@ -20,11 +21,15 @@ struct CheckoutOrderSubmission: Equatable, Sendable {
         pickupMemo: String
     ) {
         self.storeID = draft.storeID
+        self.storeName = draft.storeName
         self.items = draft.items.map {
             CheckoutOrderMenuSubmission(
                 menuID: $0.menuID,
+                menuName: $0.menuName,
                 quantity: $0.quantity,
-                optionSummaryText: $0.optionSummaryText
+                optionSummaryText: $0.optionSummaryText,
+                imagePath: $0.imagePath,
+                unitPriceAmount: $0.unitPriceAmount
             )
         }
         self.totalPriceAmount = draft.subtotalAmount
@@ -51,8 +56,11 @@ struct CheckoutSubmissionInput: Equatable, Sendable {
 
 struct CheckoutOrderMenuSubmission: Equatable, Sendable {
     let menuID: String
+    let menuName: String
     let quantity: Int
     let optionSummaryText: String?
+    let imagePath: String?
+    let unitPriceAmount: Decimal
 }
 
 struct CheckoutAddress: Equatable, Sendable {

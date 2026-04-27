@@ -471,6 +471,11 @@ private actor SpyOrderRepository: OrderRepository {
         throw NetworkError.notFound(message: "주문 정보를 찾을 수 없어요.")
     }
 
+    func cancelOrder(orderCode: String) async throws -> OrderDetail {
+        _ = orderCode
+        throw NetworkError.invalidRequest
+    }
+
     func validatePayment(impUID: String) async throws -> ValidatedPaymentReceipt {
         _ = impUID
         return ValidatedPaymentReceipt(

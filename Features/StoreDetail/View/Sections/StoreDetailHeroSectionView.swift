@@ -31,7 +31,7 @@ struct StoreDetailHeroSectionView: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
-            .frame(height: 330)
+            .frame(height: 300)
 
             HStack {
                 circleButton(systemImage: "chevron.left", action: onBackTap)
@@ -39,9 +39,9 @@ struct StoreDetailHeroSectionView: View {
                 circleButton(systemImage: isLiked ? "heart.fill" : "heart", action: onLikeTap)
             }
             .padding(.horizontal, PikkoSpacing.lg)
-            .padding(.top, 58)
+            .padding(.top, PikkoSpacing.lg)
         }
-        .frame(height: 330)
+        .frame(height: 300)
         .background(PikkoColor.surfaceMuted)
     }
 

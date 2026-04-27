@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 @MainActor
@@ -10,6 +11,7 @@ final class OrderDetailPresenter: ObservableObject {
     private let dateParser = DateParser()
 
     private var hasLoaded = false
+    private var cancellables = Set<AnyCancellable>()
 
     init(
         initialOrderID: String,
@@ -21,6 +23,7 @@ final class OrderDetailPresenter: ObservableObject {
         self.interactor = interactor
         self.router = router
         self.mapper = mapper
+        bindOrderStatusChanges()
     }
 
     func send(_ action: OrderDetailAction) async {
@@ -56,6 +59,9 @@ final class OrderDetailPresenter: ObservableObject {
                 )
             )
 
+        case .cancelConfirmed:
+            await cancelOrder()
+
         case .loginRequiredTapped:
             router.routeToAuth()
         }
@@ -85,6 +91,7 @@ final class OrderDetailPresenter: ObservableObject {
         viewState.storeCloseText = detail.storeCloseTime.map { "마감 \($0)" }
         viewState.storeImagePath = detail.storeImagePath
         viewState.statusTitle = detail.status.displayTitle
+        viewState.orderStatus = detail.status
         viewState.createdAtText = dateParser.string(from: detail.createdAt, format: "M월 d일 a h:mm")
         viewState.paidAtText = detail.paidAt.map { "결제 \($0.formatted(date: .abbreviated, time: .shortened))" }
         viewState.pickupTimeText = detail.pickupTime.map { "픽업 예상 \($0.formatted(date: .abbreviated, time: .shortened))" }
@@ -112,6 +119,26 @@ final class OrderDetailPresenter: ObservableObject {
         viewState.emptyState = nil
         viewState.hasLoadedContent = true
         applyReviewCTA(detail)
+    }
+
+    private func cancelOrder() async {
+        guard viewState.canCancelOrder else { return }
+
+        viewState.isCancelling = true
+        viewState.cancelErrorMessage = nil
+        viewState.cancelSuccessMessage = nil
+
+        do {
+            let detail = try await interactor.cancelOrder(orderCode: viewState.orderCode)
+            apply(detail: detail)
+            viewState.cancelSuccessMessage = "주문이 취소되었어요."
+        } catch {
+            let featureError = (error as? OrderFeatureError)
+                ?? .unavailable(message: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
+            viewState.cancelErrorMessage = featureError.userMessage
+        }
+
+        viewState.isCancelling = false
     }
 
     private func applyReviewCTA(_ detail: OrderDetail) {
@@ -148,5 +175,49 @@ final class OrderDetailPresenter: ObservableObject {
             return .current
         }
         return entry.completed ? .completed : .upcoming
+    }
+
+    private func bindOrderStatusChanges() {
+        NotificationCenter.default.publisher(for: .pikkoOrderStatusDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                guard let event = notification.userInfo?[OrderStatusChangeNotificationUserInfoKey.event] as? OrderStatusChangeNotification else {
+                    return
+                }
+
+                Task { @MainActor [weak self] in
+                    self?.apply(statusChange: event)
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func apply(statusChange event: OrderStatusChangeNotification) {
+        guard viewState.orderCode == event.orderCode || event.orderID.map({ $0 == viewState.orderID }) == true else {
+            return
+        }
+
+        viewState.orderStatus = event.status
+        viewState.statusTitle = event.status.displayTitle
+
+        viewState.timelineStages = viewState.timelineStages.map {
+            OrderStatusTimelineView.Stage(
+                id: $0.id,
+                title: $0.title,
+                timeText: $0.timeText,
+                state: .completed
+            )
+        }
+
+        if !viewState.timelineStages.contains(where: { $0.title == event.status.displayTitle }) {
+            viewState.timelineStages.append(
+                OrderStatusTimelineView.Stage(
+                    id: "\(event.status.displayTitle)-\(event.orderCode)",
+                    title: event.status.displayTitle,
+                    timeText: "방금 전",
+                    state: .current
+                )
+            )
+        }
     }
 }

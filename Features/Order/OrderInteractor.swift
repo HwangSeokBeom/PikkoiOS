@@ -4,6 +4,7 @@ import Foundation
 protocol OrderInteracting {
     func loadInitialState() async -> OrderViewState
     func fetchOrders(cursor: String?, filter: OrderListFilter) async throws -> CursorPage<OrderSummary>
+    func cancelOrder(orderCode: String) async throws -> OrderDetail
 }
 
 @MainActor
@@ -47,9 +48,20 @@ struct OrderInteractor: OrderInteracting {
         }
     }
 
-    private func map(error: Error) -> OrderFeatureError {
+    func cancelOrder(orderCode: String) async throws -> OrderDetail {
+        do {
+            return try await orderRepository.cancelOrder(orderCode: orderCode)
+        } catch {
+            throw map(error: error, fallbackMessage: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
+        }
+    }
+
+    private func map(
+        error: Error,
+        fallbackMessage: String = "주문 내역을 불러오지 못했어요."
+    ) -> OrderFeatureError {
         guard let networkError = error as? NetworkError else {
-            return .unavailable(message: "주문 내역을 불러오지 못했어요.")
+            return .unavailable(message: fallbackMessage)
         }
 
         if networkError.isAuthenticationFailure {
@@ -61,6 +73,8 @@ struct OrderInteractor: OrderInteracting {
         }
 
         switch networkError {
+        case .abnormalRequest(let message):
+            return .unavailable(message: message)
         case .notFound:
             return .notFound
         case .businessAuthorization(let message),

@@ -94,7 +94,8 @@ final class AppDIContainer {
         let resolvedOrderRepository = OrderRepositoryImpl(
             remoteDataSource: OrderRemoteDataSource(apiClient: resolvedAPIClient),
             checkoutMapper: checkoutMapper,
-            mapper: orderMapper
+            mapper: orderMapper,
+            localSnapshotStore: OrderLocalSnapshotStore(store: resolvedUserDefaultsStore)
         )
         let resolvedAuthRepository = authRepository ?? AuthRepositoryImpl(
             remoteDataSource: AuthRemoteDataSource(apiClient: resolvedAPIClient),

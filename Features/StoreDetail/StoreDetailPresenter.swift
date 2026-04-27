@@ -41,6 +41,11 @@ final class StoreDetailPresenter: ObservableObject {
         case .likeTapped:
             await toggleLike()
         case .directionsTapped:
+            guard storeDetail?.latitude != nil, storeDetail?.longitude != nil else {
+                viewState.errorMessage = "거리 정보가 없습니다."
+                return
+            }
+
             router.routeToDirections(
                 storeName: viewState.storeName,
                 address: storeDetail?.address,
@@ -59,6 +64,8 @@ final class StoreDetailPresenter: ObservableObject {
             updateMenuQuantity(menuID: menuID, delta: 1)
         case .menuDecrementTapped(let menuID):
             updateMenuQuantity(menuID: menuID, delta: -1)
+        case .reviewWriteTapped:
+            await routeToReviewComposerForCompletedOrder()
         case .reviewEditTapped:
             guard let reviewID = viewState.reviewPreview.id else { return }
             router.routeToReviewComposer(
@@ -112,6 +119,7 @@ final class StoreDetailPresenter: ObservableObject {
         distanceMeters = content.distanceMeters
         viewState.errorMessage = content.warningMessage
         viewState.successMessage = nil
+        viewState.reviewEligibilityMessage = nil
         viewState.emptyState = nil
         viewState.hasLoadedContent = true
 
@@ -158,7 +166,7 @@ final class StoreDetailPresenter: ObservableObject {
         viewState.stickyCartSummary = StoreDetailStickyCartSummary(
             totalPriceText: itemCount > 0 ? summary.subtotalText : "0원",
             itemCountText: "\(itemCount)",
-            buttonTitle: itemCount > 0 ? "장바구니 보기" : "메뉴를 담아주세요",
+            buttonTitle: itemCount > 0 ? "결제하기" : "메뉴를 담아주세요",
             isEnabled: itemCount > 0
         )
     }
@@ -203,6 +211,30 @@ final class StoreDetailPresenter: ObservableObject {
                 totalReviewCount: max((storeDetail?.totalReviewCount ?? 1) - 1, 0)
             )
             viewState.successMessage = "리뷰를 삭제했어요."
+        } catch {
+            viewState.errorMessage = resolveErrorMessage(from: error)
+        }
+    }
+
+    private func routeToReviewComposerForCompletedOrder() async {
+        viewState.errorMessage = nil
+        viewState.successMessage = nil
+        viewState.reviewEligibilityMessage = nil
+
+        do {
+            guard let orderCode = try await interactor.findReviewableOrderCode() else {
+                viewState.reviewEligibilityMessage = "픽업 완료된 주문 내역에서 리뷰를 작성할 수 있어요."
+                viewState.reviewEligibilityScrollTrigger += 1
+                return
+            }
+
+            router.routeToReviewComposer(
+                context: ReviewComposerContext(
+                    storeID: viewState.storeID,
+                    storeName: viewState.storeName,
+                    mode: .create(orderCode: orderCode)
+                )
+            )
         } catch {
             viewState.errorMessage = resolveErrorMessage(from: error)
         }

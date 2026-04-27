@@ -8,6 +8,7 @@ struct RootTabView: View {
     @State private var orderPath = NavigationPath()
     @State private var communityPath = NavigationPath()
     @State private var profilePath = NavigationPath()
+    @State private var homeResetTrigger = 0
     @State private var isQuickActionPresented = false
 
     init(
@@ -25,7 +26,7 @@ struct RootTabView: View {
 
             ZStack {
                 RootTabContainerView(path: $homePath, isActive: appState.selectedTab == .home) {
-                    featureBuilderFactory.makeHomeView()
+                    featureBuilderFactory.makeHomeView(resetTrigger: homeResetTrigger)
                 }
 
                 RootTabContainerView(path: $orderPath, isActive: appState.selectedTab == .order) {
@@ -46,7 +47,7 @@ struct RootTabView: View {
             RootTabBarView(
                 selectedTab: appState.selectedTab,
                 onSelect: { tab in
-                    appState.selectedTab = tab
+                    handleTabSelection(tab)
                 },
                 onQuickAction: {
                     isQuickActionPresented = true
@@ -58,5 +59,14 @@ struct RootTabView: View {
                 featureBuilderFactory.makeCartView()
             }
         }
+    }
+
+    private func handleTabSelection(_ tab: RootTab) {
+        if tab == .home {
+            homePath = NavigationPath()
+            homeResetTrigger += 1
+        }
+
+        appState.selectedTab = tab
     }
 }

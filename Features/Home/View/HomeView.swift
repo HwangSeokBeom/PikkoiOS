@@ -1,17 +1,22 @@
 import SwiftUI
 
 struct HomeView: View {
+    private enum ScrollAnchor {
+        static let top = "home-scroll-top"
+    }
+
     private enum HomeLayout {
         static let horizontalInset: CGFloat = 16
         static let sectionSpacing: CGFloat = 18
         static let topPadding: CGFloat = 4
-        static let bottomInset: CGFloat = 28
+        static let bottomInset: CGFloat = 8
     }
 
     @ObservedObject var presenter: HomePresenter
 
     let imageLoader: any AuthorizedImageLoading
     let onAuthTap: () -> Void
+    let resetTrigger: Int
 
     var body: some View {
         Group {
@@ -41,77 +46,97 @@ struct HomeView: View {
                     .padding(PikkoSpacing.xl)
                 }
             } else {
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(alignment: .leading, spacing: HomeLayout.sectionSpacing) {
-                        if let errorMessage = presenter.viewState.errorMessage {
-                            ToastView(message: errorMessage, tone: .warning)
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(alignment: .leading, spacing: HomeLayout.sectionSpacing) {
+                            Color.clear
+                                .frame(height: 0)
+                                .id(ScrollAnchor.top)
+
+                            if let errorMessage = presenter.viewState.errorMessage {
+                                ToastView(message: errorMessage, tone: .warning)
+                                    .padding(.horizontal, HomeLayout.horizontalInset)
+                            }
+
+                            HomeHeaderSectionView(
+                                locationLabel: presenter.viewState.locationLabel,
+                                searchText: searchTextBinding,
+                                popularKeywords: presenter.viewState.popularKeywords,
+                                onLocationTap: {
+                                    Task { await presenter.send(.locationTapped) }
+                                },
+                                onSearchSubmit: {
+                                    Task { await presenter.send(.searchSubmitted) }
+                                }
+                            )
+                            .padding(.horizontal, HomeLayout.horizontalInset)
+
+                            HomeCategorySectionView(
+                                categories: presenter.viewState.categories,
+                                selectedCategoryID: presenter.viewState.selectedCategory?.id,
+                                onSelect: { categoryID in
+                                    Task { await presenter.send(.categoryTapped(categoryID)) }
+                                }
+                            )
+                            .padding(.horizontal, HomeLayout.horizontalInset)
+
+                            if !presenter.viewState.popularStores.isEmpty {
+                                HomePopularStoresSectionView(
+                                    stores: presenter.viewState.popularStores,
+                                    imageLoader: imageLoader,
+                                    onLikeTap: { storeID in
+                                        Task { await presenter.send(.likeTapped(storeID)) }
+                                    },
+                                    onStoreTap: { storeID in
+                                        Task { await presenter.send(.popularStoreTapped(storeID)) }
+                                    }
+                                )
                                 .padding(.horizontal, HomeLayout.horizontalInset)
-                        }
-
-                        HomeHeaderSectionView(
-                            locationLabel: presenter.viewState.locationLabel,
-                            searchText: searchTextBinding,
-                            popularKeywords: presenter.viewState.popularKeywords,
-                            onLocationTap: {
-                                Task { await presenter.send(.locationTapped) }
-                            },
-                            onSearchSubmit: {
-                                Task { await presenter.send(.searchSubmitted) }
                             }
-                        )
-                        .padding(.horizontal, HomeLayout.horizontalInset)
 
-                        HomeCategorySectionView(
-                            categories: presenter.viewState.categories,
-                            selectedCategoryID: presenter.viewState.selectedCategory?.id,
-                            onSelect: { categoryID in
-                                Task { await presenter.send(.categoryTapped(categoryID)) }
+                            if !presenter.viewState.banners.isEmpty {
+                                HomeBannerSectionView(
+                                    banners: presenter.viewState.banners,
+                                    imageLoader: imageLoader,
+                                    onTap: { bannerID, index in
+                                        Task { await presenter.send(.bannerTapped(id: bannerID, index: index)) }
+                                    }
+                                )
+                                .padding(.horizontal, HomeLayout.horizontalInset)
                             }
-                        )
-                        .padding(.horizontal, HomeLayout.horizontalInset)
 
-                        if !presenter.viewState.popularStores.isEmpty {
-                            HomePopularStoresSectionView(
-                                stores: presenter.viewState.popularStores,
+                            HomePickedStoresSectionView(
+                                stores: presenter.viewState.nearbyStores,
+                                emptyMessage: presenter.viewState.nearbyStoresSectionMessage,
+                                selectedTab: presenter.viewState.selectedNearbyStoreTab,
+                                distanceSortTitle: presenter.viewState.nearbyDistanceSortTitle,
+                                distanceSortSystemImage: presenter.viewState.nearbyDistanceSortSystemImage,
                                 imageLoader: imageLoader,
+                                onTabTap: { tab in
+                                    Task { await presenter.send(.nearbyStoreTabTapped(tab)) }
+                                },
+                                onDistanceSortTap: {
+                                    Task { await presenter.send(.nearbyDistanceSortTapped) }
+                                },
                                 onLikeTap: { storeID in
                                     Task { await presenter.send(.likeTapped(storeID)) }
                                 },
                                 onStoreTap: { storeID in
-                                    Task { await presenter.send(.popularStoreTapped(storeID)) }
+                                    Task { await presenter.send(.nearbyStoreTapped(storeID)) }
+                                },
+                                onStoreAppear: { storeID in
+                                    Task { await presenter.send(.nearbyStoreAppeared(storeID)) }
                                 }
                             )
                             .padding(.horizontal, HomeLayout.horizontalInset)
                         }
-
-                        if !presenter.viewState.banners.isEmpty {
-                            HomeBannerSectionView(
-                                banners: presenter.viewState.banners,
-                                imageLoader: imageLoader,
-                                onTap: { bannerID in
-                                    Task { await presenter.send(.bannerTapped(bannerID)) }
-                                }
-                            )
-                            .padding(.horizontal, HomeLayout.horizontalInset)
-                        }
-
-                        HomePickedStoresSectionView(
-                            stores: presenter.viewState.nearbyStores,
-                            emptyMessage: presenter.viewState.nearbyStoresSectionMessage,
-                            imageLoader: imageLoader,
-                            onLikeTap: { storeID in
-                                Task { await presenter.send(.likeTapped(storeID)) }
-                            },
-                            onStoreTap: { storeID in
-                                Task { await presenter.send(.nearbyStoreTapped(storeID)) }
-                            },
-                            onStoreAppear: { storeID in
-                                Task { await presenter.send(.nearbyStoreAppeared(storeID)) }
-                            }
-                        )
-                        .padding(.horizontal, HomeLayout.horizontalInset)
+                        .padding(.top, HomeLayout.topPadding)
                     }
-                    .padding(.top, HomeLayout.topPadding)
+                    .onChange(of: resetTrigger) { _, _ in
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            proxy.scrollTo(ScrollAnchor.top, anchor: .top)
+                        }
+                    }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     Color.clear.frame(height: HomeLayout.bottomInset)

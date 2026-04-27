@@ -18,14 +18,22 @@ struct OrderDetailViewState: Equatable {
     var paymentStatusText: String?
     var paymentMethodText: String?
     var memoText: String?
+    var orderStatus: OrderStatus?
     var items: [OrderDetailItemViewState] = []
     var timelineStages: [OrderStatusTimelineView.Stage] = []
     var isLoading = false
+    var isCancelling = false
     var hasLoadedContent = false
     var emptyState: OrderEmptyState?
     var errorMessage: String?
+    var cancelErrorMessage: String?
+    var cancelSuccessMessage: String?
     var reviewActionTitle: String?
     var isReviewActionEnabled = false
+
+    var canCancelOrder: Bool {
+        orderStatus?.isCancellable == true && !isCancelling
+    }
 }
 
 struct OrderDetailItemViewState: Equatable, Identifiable {

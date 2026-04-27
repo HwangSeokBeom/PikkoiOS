@@ -10,6 +10,7 @@ enum StoreDetailAction {
     case menuFilterTapped(String)
     case menuIncrementTapped(String)
     case menuDecrementTapped(String)
+    case reviewWriteTapped
     case reviewEditTapped
     case reviewDeleteTapped
     case stickyCTATapped

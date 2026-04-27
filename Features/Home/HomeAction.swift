@@ -8,7 +8,9 @@ enum HomeAction {
     case searchTextChanged(String)
     case searchSubmitted
     case categoryTapped(String)
-    case bannerTapped(String)
+    case bannerTapped(id: String, index: Int)
+    case nearbyStoreTabTapped(HomeNearbyStoreTab)
+    case nearbyDistanceSortTapped
     case popularStoreTapped(String)
     case nearbyStoreTapped(String)
     case nearbyStoreAppeared(String)

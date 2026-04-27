@@ -20,6 +20,8 @@ struct StoreDetailViewState: Equatable {
     var isLoading = true
     var errorMessage: String?
     var successMessage: String?
+    var reviewEligibilityMessage: String?
+    var reviewEligibilityScrollTrigger = 0
 }
 
 struct StoreDetailEmptyState: Equatable {

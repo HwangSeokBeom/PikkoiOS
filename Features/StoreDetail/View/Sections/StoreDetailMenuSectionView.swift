@@ -1,6 +1,16 @@
 import SwiftUI
 
 struct StoreDetailMenuSectionView: View {
+    private enum Layout {
+        static let menuImageSize: CGFloat = 88
+        static let imageTextSpacing: CGFloat = 16
+        static let textVerticalSpacing: CGFloat = 8
+        static let addButtonMinWidth: CGFloat = 108
+        static let addButtonHeight: CGFloat = 42
+        static let quantityControlWidth: CGFloat = 116
+        static let quantityControlHeight: CGFloat = 40
+    }
+
     let menuFilters: [StoreDetailMenuFilter]
     let selectedFilterID: String
     let sections: [StoreDetailMenuSection]
@@ -55,8 +65,8 @@ struct StoreDetailMenuSectionView: View {
     }
 
     private func menuRow(_ menu: StoreDetailMenuItem) -> some View {
-        HStack(alignment: .top, spacing: PikkoSpacing.md) {
-            VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+        HStack(alignment: .top, spacing: Layout.imageTextSpacing) {
+            VStack(alignment: .leading, spacing: Layout.textVerticalSpacing) {
                 if let badgeText = menu.badgeText {
                     Text(badgeText)
                         .font(PikkoTypography.micro)
@@ -71,21 +81,30 @@ struct StoreDetailMenuSectionView: View {
                     .font(PikkoTypography.cardTitle)
                     .foregroundStyle(PikkoColor.primaryText)
                     .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Text(menu.description)
                     .font(PikkoTypography.body)
                     .foregroundStyle(PikkoColor.secondaryText)
                     .multilineTextAlignment(.leading)
-                    .lineLimit(3)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
 
                 Text(menu.priceText)
                     .font(PikkoTypography.title)
                     .foregroundStyle(PikkoColor.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .minimumScaleFactor(0.9)
+                    .layoutPriority(2)
 
                 quantityControl(for: menu)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-
-            Spacer(minLength: PikkoSpacing.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(2)
 
             ZStack {
                 AuthorizedAsyncImage(
@@ -95,19 +114,24 @@ struct StoreDetailMenuSectionView: View {
                     cornerRadius: PikkoRadius.card,
                     showsProgress: false
                 )
-                .frame(width: 102, height: 102)
+                .frame(width: Layout.menuImageSize, height: Layout.menuImageSize)
+                .clipped()
 
                 if menu.isSoldOut {
                     RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
                         .fill(Color.black.opacity(0.34))
-                        .frame(width: 102, height: 102)
+                        .frame(width: Layout.menuImageSize, height: Layout.menuImageSize)
 
                     Text("품절")
                         .font(PikkoTypography.cardTitle)
                         .foregroundStyle(.white)
                 }
             }
+            .frame(width: Layout.menuImageSize, height: Layout.menuImageSize)
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+            .layoutPriority(0)
         }
+        .frame(minHeight: Layout.menuImageSize + PikkoSpacing.lg, alignment: .top)
         .padding(.bottom, PikkoSpacing.lg)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -123,14 +147,9 @@ struct StoreDetailMenuSectionView: View {
                 .font(PikkoTypography.caption)
                 .foregroundStyle(PikkoColor.secondaryText)
         } else if menu.quantity == 0 {
-            SecondaryButton(
-                title: "담기",
-                systemImage: "plus",
-                action: { onIncrementTap(menu.id) }
-            )
-            .frame(maxWidth: 112)
+            addButton(action: { onIncrementTap(menu.id) })
         } else {
-            HStack(spacing: PikkoSpacing.sm) {
+            HStack(spacing: PikkoSpacing.xs) {
                 circleControl(systemImage: "minus", action: { onDecrementTap(menu.id) })
 
                 Text("\(menu.quantity)")
@@ -141,10 +160,36 @@ struct StoreDetailMenuSectionView: View {
                 circleControl(systemImage: "plus", action: { onIncrementTap(menu.id) })
             }
             .padding(.horizontal, PikkoSpacing.sm)
-            .frame(height: 40)
+            .frame(width: Layout.quantityControlWidth, height: Layout.quantityControlHeight)
             .background(PikkoColor.surfaceMuted)
             .clipShape(Capsule())
         }
+    }
+
+    private func addButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: PikkoSpacing.xs) {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .bold))
+
+                Text("담기")
+                    .font(PikkoTypography.bodyStrong)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .foregroundStyle(PikkoColor.accentStrong)
+            .padding(.horizontal, PikkoSpacing.md)
+            .frame(minWidth: Layout.addButtonMinWidth)
+            .frame(height: Layout.addButtonHeight)
+            .background(.white)
+            .overlay {
+                RoundedRectangle(cornerRadius: Layout.addButtonHeight / 2, style: .continuous)
+                    .stroke(PikkoColor.accent.opacity(0.35), lineWidth: 1)
+            }
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("메뉴 담기")
     }
 
     private func circleControl(systemImage: String, action: @escaping () -> Void) -> some View {

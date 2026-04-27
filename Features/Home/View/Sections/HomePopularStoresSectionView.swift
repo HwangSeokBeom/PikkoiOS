@@ -18,14 +18,14 @@ struct HomePopularStoresSectionView: View {
                                 model: store,
                                 loader: imageLoader,
                                 style: .featured,
+                                onCardTapped: {
+                                    onStoreTap(store.id)
+                                },
                                 onLikeTapped: {
                                     onLikeTap(store.id)
                                 }
                             )
                             .frame(width: 184)
-                            .onTapGesture {
-                                onStoreTap(store.id)
-                            }
                         }
                     }
                 }

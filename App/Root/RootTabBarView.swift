@@ -1,12 +1,19 @@
 import SwiftUI
 
+enum RootTabBarMetrics {
+    static let contentHeight: CGFloat = 58
+    static let minimumContentGap: CGFloat = 16
+    static let scrollContentBottomInset: CGFloat = contentHeight + minimumContentGap
+}
+
 struct RootTabBarView: View {
     private enum Layout {
-        static let height: CGFloat = 92
-        static let floatingOffset: CGFloat = -16
-        static let itemsTopPadding: CGFloat = 22
-        static let itemsBottomPadding: CGFloat = 8
-        static let centerSlotWidth: CGFloat = 78
+        static let height: CGFloat = RootTabBarMetrics.contentHeight
+        static let floatingOffset: CGFloat = -6
+        static let itemsTopPadding: CGFloat = 8
+        static let itemsBottomPadding: CGFloat = 2
+        static let centerSlotWidth: CGFloat = 62
+        static let itemHeight: CGFloat = 40
     }
 
     let selectedTab: RootTab
@@ -56,9 +63,9 @@ struct RootTabBarView: View {
         return Button {
             onSelect(tab)
         } label: {
-            VStack(spacing: 6) {
+            VStack(spacing: 2) {
                 Image(systemName: isSelected ? tab.activeSystemImage : tab.inactiveSystemImage)
-                    .font(.system(size: 19, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(isSelected ? PikkoColor.accentStrong : PikkoColor.gray400)
 
                 Text(tab.title)
@@ -66,7 +73,7 @@ struct RootTabBarView: View {
                     .foregroundStyle(isSelected ? PikkoColor.accentStrong : PikkoColor.tertiaryText)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 50)
+            .frame(height: Layout.itemHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
