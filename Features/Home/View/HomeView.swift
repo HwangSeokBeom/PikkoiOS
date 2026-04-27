@@ -9,7 +9,7 @@ struct HomeView: View {
         static let horizontalInset: CGFloat = 16
         static let sectionSpacing: CGFloat = 18
         static let topPadding: CGFloat = 4
-        static let bottomInset: CGFloat = 8
+        static let bottomInset: CGFloat = RootTabBarMetrics.scrollContentBottomInset
     }
 
     @ObservedObject var presenter: HomePresenter
@@ -134,6 +134,7 @@ struct HomeView: View {
                             .padding(.horizontal, HomeLayout.horizontalInset)
                         }
                         .padding(.top, HomeLayout.topPadding)
+                        .padding(.bottom, HomeLayout.bottomInset)
                     }
                     .onChange(of: resetTrigger) { _, _ in
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -142,7 +143,7 @@ struct HomeView: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    Color.clear.frame(height: HomeLayout.bottomInset)
+                    Color.clear.frame(height: PikkoSpacing.sm)
                 }
                 .background(PikkoColor.background.ignoresSafeArea())
                 .refreshable {

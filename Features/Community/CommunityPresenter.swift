@@ -10,6 +10,7 @@ final class CommunityPresenter: ObservableObject {
     private let sessionStore: SessionStore
     private let routesSearchSubmissions: Bool
     private let distanceFormatter = DistanceFormatter()
+    private let distanceCalculator = CommunityDistanceCalculator()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
 
     private var hasLoaded = false
@@ -18,6 +19,8 @@ final class CommunityPresenter: ObservableObject {
     private var referenceLocation: CommunityReferenceLocation?
     private var isPaging = false
     private var recentlySubmittedPostID: String?
+    private var feedRequestID = 0
+    private var updatingLikePostIDs: Set<String> = []
 
     init(
         interactor: CommunityInteracting,
@@ -71,9 +74,11 @@ final class CommunityPresenter: ObservableObject {
             }
             router.routeToComposer()
         case .sortSelected(let sortID):
-            guard let selectedSort = viewState.sortOptions.first(where: { $0.id == sortID }) else { return }
+            guard let selectedSort = CommunitySort(rawValue: sortID) else { return }
+            guard viewState.selectedSort != selectedSort else { return }
             viewState.selectedSort = selectedSort
             viewState.nextCursor = nil
+            applyFilters()
             await loadFeed(isRefresh: false)
         case .distanceSelected(let distanceID):
             guard let selectedDistance = viewState.distanceOptions.first(where: { $0.id == distanceID }) else { return }
@@ -81,13 +86,14 @@ final class CommunityPresenter: ObservableObject {
             viewState.nextCursor = nil
             await loadFeed(isRefresh: false)
         case .filterChipTapped(let chipID):
-            guard viewState.filterChips.contains(where: { $0.id == chipID }) else { return }
-            if viewState.selectedFilterChipIDs.contains(chipID) {
-                viewState.selectedFilterChipIDs.remove(chipID)
+            guard let filter = CommunityFilter(rawValue: chipID) else { return }
+            if viewState.selectedFilters.contains(filter) {
+                viewState.selectedFilters.remove(filter)
             } else {
-                viewState.selectedFilterChipIDs.insert(chipID)
+                viewState.selectedFilters.insert(filter)
             }
             viewState.nextCursor = nil
+            applyFilters()
             await loadFeed(isRefresh: false)
         case .postSubmitted(let postID):
             await handleSubmittedPost(postID: postID)
@@ -99,10 +105,15 @@ final class CommunityPresenter: ObservableObject {
             await loadNextPageIfNeeded(triggeredBy: postID)
         case .likeTapped(let postID):
             await toggleLike(for: postID)
+        case .postChangeReceived(let event):
+            applyPostChange(event)
         }
     }
 
     private func loadFeed(isRefresh: Bool, reason: String? = nil) async {
+        feedRequestID += 1
+        let requestID = feedRequestID
+
         if isRefresh || hasLoaded {
             viewState.isRefreshing = true
         } else {
@@ -125,9 +136,11 @@ final class CommunityPresenter: ObservableObject {
                 selectedDistance: viewState.selectedDistance,
                 selectedSort: viewState.selectedSort
             )
+            guard requestID == feedRequestID else { return }
             apply(content: content)
             hasLoaded = true
         } catch {
+            guard requestID == feedRequestID else { return }
             viewState.errorMessage = resolveErrorMessage(from: error)
             if allPosts.isEmpty {
                 viewState.featuredBanner = nil
@@ -157,41 +170,42 @@ final class CommunityPresenter: ObservableObject {
            referenceLocation != nil {
             filteredPosts = filteredPosts.filter { post in
                 guard let distance = distance(from: post) else {
-                    return true
+                    return false
                 }
                 return distance <= maxDistance
             }
+            #if DEBUG
+            Logger.shared.debug("[CommunityList] distanceFilter=\(Int(maxDistance))m resultCount=\(filteredPosts.count)")
+            #endif
         }
 
-        for selectedFilterID in viewState.selectedFilterChipIDs {
+        for selectedFilter in viewState.selectedFilters {
             filteredPosts = filteredPosts.filter { post in
-                switch selectedFilterID {
-                case "nearby":
+                switch selectedFilter {
+                case .nearbyOnly:
                     guard let distance = distance(from: post) else {
                         return false
                     }
                     return distance <= 500
-                case "video":
+                case .videoOnly:
                     return post.mediaPaths.contains(where: {
                         MediaTypeResolver.resolve(from: $0) == .video
                     })
-                case "store":
+                case .storeTag:
                     return post.store != nil
-                default:
-                    return true
                 }
             }
         }
 
-        switch viewState.selectedSort.id {
-        case CommunitySortOption.popular.id:
+        switch viewState.selectedSort {
+        case .popular:
             filteredPosts.sort { lhs, rhs in
                 if lhs.likeCount == rhs.likeCount {
                     return (distance(from: lhs) ?? .greatestFiniteMagnitude) < (distance(from: rhs) ?? .greatestFiniteMagnitude)
                 }
                 return lhs.likeCount > rhs.likeCount
             }
-        case CommunitySortOption.nearest.id:
+        case .nearest:
             filteredPosts.sort { lhs, rhs in
                 let lhsDistance = distance(from: lhs) ?? .greatestFiniteMagnitude
                 let rhsDistance = distance(from: rhs) ?? .greatestFiniteMagnitude
@@ -200,7 +214,7 @@ final class CommunityPresenter: ObservableObject {
                 }
                 return lhsDistance < rhsDistance
             }
-        default:
+        case .latest:
             filteredPosts.sort { lhs, rhs in
                 switch (lhs.createdAt, rhs.createdAt) {
                 case let (lhsDate?, rhsDate?):
@@ -213,7 +227,6 @@ final class CommunityPresenter: ObservableObject {
                     return lhs.title < rhs.title
                 }
             }
-            break
         }
 
         viewState.posts = filteredPosts.map(makeCommunityCardModel)
@@ -225,7 +238,7 @@ final class CommunityPresenter: ObservableObject {
         recentlySubmittedPostID = postID
         activeQuery = nil
         viewState.searchText = ""
-        viewState.selectedFilterChipIDs.removeAll()
+        viewState.selectedFilters.removeAll()
         viewState.selectedSort = .latest
         viewState.nextCursor = nil
 
@@ -263,7 +276,7 @@ final class CommunityPresenter: ObservableObject {
                 viewState.searchText = ""
             }
 
-            viewState.selectedFilterChipIDs.removeAll()
+            viewState.selectedFilters.removeAll()
 
             applyFilters()
             #if DEBUG
@@ -309,9 +322,15 @@ final class CommunityPresenter: ObservableObject {
     }
 
     private func toggleLike(for postID: String) async {
+        guard !updatingLikePostIDs.contains(postID) else {
+            return
+        }
         guard let index = allPosts.firstIndex(where: { $0.id == postID }) else {
             return
         }
+
+        updatingLikePostIDs.insert(postID)
+        defer { updatingLikePostIDs.remove(postID) }
 
         let currentPost = allPosts[index]
         let updatedLikeStatus = !currentPost.isLiked
@@ -370,11 +389,50 @@ final class CommunityPresenter: ObservableObject {
                 updatedAt: optimisticPost.updatedAt
             )
             applyFilters()
+            postCommunityChange(for: allPosts[confirmedIndex])
         } catch {
             allPosts = previousPosts
             applyFilters()
             viewState.errorMessage = resolveErrorMessage(from: error)
         }
+    }
+
+    private func applyPostChange(_ event: CommunityPostChangeNotification) {
+        guard let index = allPosts.firstIndex(where: { $0.id == event.postID }) else {
+            return
+        }
+
+        let currentPost = allPosts[index]
+        allPosts[index] = CommunityPostSummary(
+            id: currentPost.id,
+            category: currentPost.category,
+            title: currentPost.title,
+            content: currentPost.content,
+            creator: currentPost.creator,
+            mediaPaths: currentPost.mediaPaths,
+            store: currentPost.store,
+            isLiked: event.isLiked ?? currentPost.isLiked,
+            likeCount: event.likeCount ?? currentPost.likeCount,
+            longitude: currentPost.longitude,
+            latitude: currentPost.latitude,
+            createdAt: currentPost.createdAt,
+            updatedAt: currentPost.updatedAt
+        )
+        applyFilters()
+    }
+
+    private func postCommunityChange(for post: CommunityPostSummary) {
+        let event = CommunityPostChangeNotification(
+            postID: post.id,
+            isLiked: post.isLiked,
+            likeCount: post.likeCount,
+            commentCount: nil
+        )
+        NotificationCenter.default.post(
+            name: .pikkoCommunityPostDidChange,
+            object: nil,
+            userInfo: [CommunityPostChangeNotificationUserInfoKey.event: event]
+        )
     }
 
     private func makeCommunityCardModel(from post: CommunityPostSummary) -> CommunityCard.Model {
@@ -403,15 +461,17 @@ final class CommunityPresenter: ObservableObject {
     }
 
     private func distance(from post: CommunityPostSummary) -> Double? {
-        guard let referenceLocation,
-              let longitude = post.longitude,
-              let latitude = post.latitude else {
-            return nil
-        }
-
-        let userLocation = CLLocation(latitude: referenceLocation.latitude, longitude: referenceLocation.longitude)
-        let postLocation = CLLocation(latitude: latitude, longitude: longitude)
-        return userLocation.distance(from: postLocation)
+        let distance = distanceCalculator.distanceMeters(
+            from: referenceLocation,
+            toLongitude: post.longitude,
+            latitude: post.latitude
+        )
+        #if DEBUG
+        Logger.shared.debug(
+            "[CommunityDistance] postID=\(post.id) hasGeo=\(post.longitude != nil && post.latitude != nil) distance=\(distance.map { String(Int($0.rounded())) } ?? "nil")"
+        )
+        #endif
+        return distance
     }
 
     private func makeDistanceText(from post: CommunityPostSummary) -> String {
@@ -419,7 +479,7 @@ final class CommunityPresenter: ObservableObject {
             return "-"
         }
 
-        return distanceFormatter.string(fromMeters: distance).uppercased()
+        return distanceFormatter.string(fromMeters: distance)
     }
 
     private func makeRelativeTimeText(from date: Date?) -> String {

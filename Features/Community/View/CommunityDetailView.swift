@@ -40,8 +40,7 @@ struct CommunityDetailView: View {
 
                         if let postCard = presenter.viewState.postCard {
                             SectionHeader(
-                                title: "게시글",
-                                subtitle: "postID \(presenter.viewState.postID)"
+                                title: "게시글"
                             )
 
                             CommunityCard(
@@ -89,7 +88,7 @@ struct CommunityDetailView: View {
                     }
                     .padding(.horizontal, PikkoSpacing.xl)
                     .padding(.top, PikkoSpacing.xl)
-                    .padding(.bottom, PikkoSpacing.xxl)
+                    .padding(.bottom, PikkoSpacing.xxl + 76 + RootTabBarMetrics.scrollContentBottomInset)
                 }
             }
         }

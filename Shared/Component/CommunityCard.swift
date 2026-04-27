@@ -36,7 +36,9 @@ struct CommunityCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.md) {
             authorHeader
-            mediaMosaic
+            if !model.media.isEmpty {
+                mediaMosaic
+            }
             contentSection
             if let storeSnippet = model.storeSnippet {
                 snippetView(storeSnippet)
@@ -77,17 +79,30 @@ struct CommunityCard: View {
 
     private var mediaMosaic: some View {
         ZStack(alignment: .topLeading) {
-            GeometryReader { geometry in
-                let height = geometry.size.width * 0.7
-                HStack(spacing: PikkoSpacing.xs) {
-                    mediaTile(model.media[safe: 0], showsPlayOverlay: true)
-                        .frame(width: primaryWidth(totalWidth: geometry.size.width), height: height)
+            if model.media.count == 1 {
+                mediaTile(model.media[0], showsPlayOverlay: true)
+                    .frame(maxWidth: .infinity, minHeight: 168, maxHeight: .infinity)
+            } else {
+                GeometryReader { geometry in
+                    HStack(spacing: PikkoSpacing.xs) {
+                        mediaTile(model.media[safe: 0], showsPlayOverlay: true)
+                            .frame(width: primaryWidth(totalWidth: geometry.size.width))
 
-                    VStack(spacing: PikkoSpacing.xs) {
-                        mediaTile(model.media[safe: 1], showsPlayOverlay: false)
-                        mediaTile(model.media[safe: 2], showsPlayOverlay: false, trailingCount: max(model.media.count - 3, 0))
+                        if model.media.count == 2 {
+                            mediaTile(model.media[safe: 1], showsPlayOverlay: false)
+                                .frame(width: secondaryWidth(totalWidth: geometry.size.width))
+                        } else {
+                            VStack(spacing: PikkoSpacing.xs) {
+                                mediaTile(model.media[safe: 1], showsPlayOverlay: false)
+                                mediaTile(
+                                    model.media[safe: 2],
+                                    showsPlayOverlay: false,
+                                    trailingCount: max(model.media.count - 3, 0)
+                                )
+                            }
+                            .frame(width: secondaryWidth(totalWidth: geometry.size.width))
+                        }
                     }
-                    .frame(width: secondaryWidth(totalWidth: geometry.size.width), height: height)
                 }
             }
 
@@ -104,7 +119,8 @@ struct CommunityCard: View {
             .buttonStyle(.plain)
             .padding(PikkoSpacing.xs)
         }
-        .frame(height: 248)
+        .frame(height: mediaHeight)
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
     }
 
     private var contentSection: some View {
@@ -115,11 +131,18 @@ struct CommunityCard: View {
                 .lineLimit(2)
 
             HStack(spacing: PikkoSpacing.md) {
-                HStack(spacing: 4) {
-                    Image(systemName: model.isLiked ? "heart.fill" : "heart")
-                        .foregroundStyle(PikkoColor.warmYellow)
-                    Text(model.likeText)
+                Button {
+                    onLikeTapped?()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: model.isLiked ? "heart.fill" : "heart")
+                            .foregroundStyle(PikkoColor.warmYellow)
+                        Text(model.likeText)
+                    }
+                    .frame(minWidth: 56, minHeight: 32, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
 
                 HStack(spacing: 4) {
                     Image(systemName: "paperplane.fill")
@@ -184,6 +207,8 @@ struct CommunityCard: View {
                 contentMode: .fill,
                 cornerRadius: PikkoRadius.card
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
 
             if showsPlayOverlay, media != nil, MediaTypeResolver.resolve(from: media?.path ?? "") == .video {
                 Image(systemName: "play.circle.fill")
@@ -208,6 +233,11 @@ struct CommunityCard: View {
                 }
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+    }
+
+    private var mediaHeight: CGFloat {
+        model.media.count == 1 ? 190 : 210
     }
 
     private func primaryWidth(totalWidth: CGFloat) -> CGFloat {
@@ -230,7 +260,7 @@ struct CommunityCard: View {
                 title: "입안에서 피어나는 봄, 도넛 한 입",
                 bodyText: "가게 문을 열자마자 퍼지는 달콤한 향기, 작은 도넛 위에 얹힌 새싹처럼 싱그러운 상상력. 한 입 베어물면 부드럽게 퍼지는 포근한 맛에 잠시 멈춰 서서 봄날을 음미하게 돼요.",
                 likeText: "12개",
-                distanceText: "102M",
+                distanceText: "102m",
                 media: [
                     .init(id: "media-1", path: "media-video.mov"),
                     .init(id: "media-2", path: "media-photo-a"),

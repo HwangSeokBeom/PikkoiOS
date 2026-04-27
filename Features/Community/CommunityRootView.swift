@@ -61,6 +61,12 @@ struct CommunityRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .pikkoSelectedLocationDidChange)) { _ in
             Task { await presenter.send(.refreshRequested) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .pikkoCommunityPostDidChange)) { notification in
+            guard let event = notification.userInfo?[CommunityPostChangeNotificationUserInfoKey.event] as? CommunityPostChangeNotification else {
+                return
+            }
+            Task { await presenter.send(.postChangeReceived(event)) }
+        }
         .onChange(of: router.pendingRoute) { _, route in
             switch route {
             case .storeDetail(let storeID):

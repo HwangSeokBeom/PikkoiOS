@@ -15,4 +15,5 @@ enum CommunityAction {
     case storeSnippetTapped(String)
     case postAppeared(String)
     case likeTapped(String)
+    case postChangeReceived(CommunityPostChangeNotification)
 }

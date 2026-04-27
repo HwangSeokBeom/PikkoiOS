@@ -6,12 +6,12 @@ protocol CommunityInteracting {
     func loadFeed(
         query: String?,
         selectedDistance: CommunityDistanceOption,
-        selectedSort: CommunitySortOption
+        selectedSort: CommunitySort
     ) async throws -> CommunityFeedContent
 
     func loadMorePosts(
         selectedDistance: CommunityDistanceOption,
-        selectedSort: CommunitySortOption,
+        selectedSort: CommunitySort,
         nextCursor: String
     ) async throws -> CommunityFeedContent
 
@@ -23,6 +23,7 @@ protocol CommunityInteracting {
 struct CommunityInteractor: CommunityInteracting {
     private let communityRepository: CommunityRepository
     private let locationService: any LocationServiceProtocol
+    private let distanceCalculator = CommunityDistanceCalculator()
 
     init(
         communityRepository: CommunityRepository,
@@ -35,7 +36,7 @@ struct CommunityInteractor: CommunityInteracting {
     func loadFeed(
         query: String?,
         selectedDistance: CommunityDistanceOption,
-        selectedSort: CommunitySortOption
+        selectedSort: CommunitySort
     ) async throws -> CommunityFeedContent {
         do {
             if let query = normalizedQuery(query) {
@@ -44,6 +45,7 @@ struct CommunityInteractor: CommunityInteracting {
                 Logger.shared.debug(
                     "[CommunityList] request query cursor=nil sort=\(selectedSort.id) distance=\(selectedDistance.title) hasLocation=\(referenceLocation != nil)"
                 )
+                Logger.shared.debug("[CommunityDistance] selected latExists=\(referenceLocation?.latitude != nil) lonExists=\(referenceLocation?.longitude != nil)")
                 #endif
                 let posts = try await communityRepository.searchPosts(title: query)
                 #if DEBUG
@@ -62,6 +64,7 @@ struct CommunityInteractor: CommunityInteracting {
             Logger.shared.debug(
                 "[CommunityList] request query cursor=nil sort=\(selectedSort.id) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil)"
             )
+            Logger.shared.debug("[CommunityDistance] selected latExists=\(locationContext.referenceLocation?.latitude != nil) lonExists=\(locationContext.referenceLocation?.longitude != nil)")
             #endif
             let page = try await communityRepository.fetchGeolocationPosts(
                 category: nil,
@@ -90,7 +93,7 @@ struct CommunityInteractor: CommunityInteracting {
 
     func loadMorePosts(
         selectedDistance: CommunityDistanceOption,
-        selectedSort: CommunitySortOption,
+        selectedSort: CommunitySort,
         nextCursor: String
     ) async throws -> CommunityFeedContent {
         do {
@@ -99,6 +102,7 @@ struct CommunityInteractor: CommunityInteracting {
             Logger.shared.debug(
                 "[CommunityList] request query cursor=\(nextCursor) sort=\(selectedSort.id) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil)"
             )
+            Logger.shared.debug("[CommunityDistance] selected latExists=\(locationContext.referenceLocation?.latitude != nil) lonExists=\(locationContext.referenceLocation?.longitude != nil)")
             #endif
             let page = try await communityRepository.fetchGeolocationPosts(
                 category: nil,
@@ -149,24 +153,32 @@ struct CommunityInteractor: CommunityInteracting {
         return trimmed
     }
 
-    private func serverSortOrder(for selectedSort: CommunitySortOption) -> CommunityPostSortOrder {
-        switch selectedSort.id {
-        case CommunitySortOption.popular.id:
+    private func serverSortOrder(for selectedSort: CommunitySort) -> CommunityPostSortOrder {
+        switch selectedSort {
+        case .popular:
             return .likes
-        default:
+        case .latest, .nearest:
             return .createdAt
         }
     }
 
     private func resolveReferenceLocation() async -> CommunityReferenceLocation? {
-        if let selectedLocation = SelectedLocationStore.shared.selectedLocation {
+        if let selectedLocation = SelectedLocationStore.shared.selectedLocation,
+           distanceCalculator.isValidCoordinate(
+               latitude: selectedLocation.latitude,
+               longitude: selectedLocation.longitude
+           ) {
             return .init(
                 longitude: selectedLocation.longitude,
                 latitude: selectedLocation.latitude
             )
         }
 
-        guard let currentLocation = locationService.currentLocation else {
+        guard let currentLocation = locationService.currentLocation,
+              distanceCalculator.isValidCoordinate(
+                  latitude: currentLocation.coordinate.latitude,
+                  longitude: currentLocation.coordinate.longitude
+              ) else {
             return nil
         }
 
@@ -177,7 +189,11 @@ struct CommunityInteractor: CommunityInteracting {
     }
 
     private func resolveLocationContext(requestIfNeeded: Bool) async throws -> CommunityLocationContext {
-        if let selectedLocation = SelectedLocationStore.shared.selectedLocation {
+        if let selectedLocation = SelectedLocationStore.shared.selectedLocation,
+           distanceCalculator.isValidCoordinate(
+               latitude: selectedLocation.latitude,
+               longitude: selectedLocation.longitude
+           ) {
             return CommunityLocationContext(
                 referenceLocation: .init(
                     longitude: selectedLocation.longitude,
@@ -188,7 +204,11 @@ struct CommunityInteractor: CommunityInteracting {
             )
         }
 
-        if let currentLocation = locationService.currentLocation {
+        if let currentLocation = locationService.currentLocation,
+           distanceCalculator.isValidCoordinate(
+               latitude: currentLocation.coordinate.latitude,
+               longitude: currentLocation.coordinate.longitude
+           ) {
             return makeLocationContext(from: currentLocation)
         }
 
@@ -198,6 +218,12 @@ struct CommunityInteractor: CommunityInteracting {
 
         do {
             let location = try await locationService.requestCurrentLocation()
+            guard distanceCalculator.isValidCoordinate(
+                latitude: location.coordinate.latitude,
+                longitude: location.coordinate.longitude
+            ) else {
+                throw CommunityFeedError.locationRequired(message: "현재 위치 좌표를 확인하지 못했어요. 위치를 선택한 뒤 다시 시도해 주세요.")
+            }
             return makeLocationContext(from: location)
         } catch LocationServiceError.authorizationNotDetermined {
             locationService.requestWhenInUseAuthorization()

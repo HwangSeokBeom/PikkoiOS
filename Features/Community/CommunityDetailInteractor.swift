@@ -18,6 +18,7 @@ struct CommunityDetailInteractor: CommunityDetailInteracting {
     private let communityRepository: CommunityRepository
     private let locationService: any LocationServiceProtocol
     private let sessionStore: SessionStore
+    private let distanceCalculator = CommunityDistanceCalculator()
 
     init(
         postID: String,
@@ -122,14 +123,34 @@ struct CommunityDetailInteractor: CommunityDetailInteracting {
     }
 
     private func makeDistanceMeters(from summary: CommunityPostSummary) -> Double? {
-        guard let currentLocation = locationService.currentLocation,
-              let latitude = summary.latitude,
-              let longitude = summary.longitude else {
-            return nil
+        let referenceLocation: CommunityReferenceLocation?
+        if let selectedLocation = SelectedLocationStore.shared.selectedLocation,
+           distanceCalculator.isValidCoordinate(
+               latitude: selectedLocation.latitude,
+               longitude: selectedLocation.longitude
+           ) {
+            referenceLocation = CommunityReferenceLocation(
+                longitude: selectedLocation.longitude,
+                latitude: selectedLocation.latitude
+            )
+        } else if let currentLocation = locationService.currentLocation,
+                  distanceCalculator.isValidCoordinate(
+                      latitude: currentLocation.coordinate.latitude,
+                      longitude: currentLocation.coordinate.longitude
+                  ) {
+            referenceLocation = CommunityReferenceLocation(
+                longitude: currentLocation.coordinate.longitude,
+                latitude: currentLocation.coordinate.latitude
+            )
+        } else {
+            referenceLocation = nil
         }
 
-        let postLocation = CLLocation(latitude: latitude, longitude: longitude)
-        return currentLocation.distance(from: postLocation)
+        return distanceCalculator.distanceMeters(
+            from: referenceLocation,
+            toLongitude: summary.longitude,
+            latitude: summary.latitude
+        )
     }
 
     private func applyCurrentUser(to detail: CommunityPostDetail) -> CommunityPostDetail {

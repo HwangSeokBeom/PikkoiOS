@@ -47,7 +47,10 @@ struct ChatViewState: Equatable {
     }
 
     var canSend: Bool {
-        !isSending && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        selectedRoomID != nil
+            && !isLoading
+            && !isSending
+            && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var showsInternalBackButton: Bool {

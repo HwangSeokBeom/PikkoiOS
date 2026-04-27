@@ -180,7 +180,7 @@ struct ChatRootView: View {
         }
         .padding(.horizontal, PikkoSpacing.lg)
         .padding(.top, PikkoSpacing.sm)
-        .padding(.bottom, PikkoSpacing.sm)
+        .padding(.bottom, PikkoSpacing.sm + RootTabBarMetrics.scrollContentBottomInset)
         .background(PikkoColor.background.opacity(0.96))
     }
 

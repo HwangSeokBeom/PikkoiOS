@@ -2,8 +2,9 @@ import SwiftUI
 
 enum RootTabBarMetrics {
     static let contentHeight: CGFloat = 58
-    static let minimumContentGap: CGFloat = 16
-    static let scrollContentBottomInset: CGFloat = contentHeight + minimumContentGap
+    static let floatingCenterOverlap: CGFloat = 18
+    static let minimumContentGap: CGFloat = 28
+    static let scrollContentBottomInset: CGFloat = contentHeight + floatingCenterOverlap + minimumContentGap
 }
 
 struct RootTabBarView: View {

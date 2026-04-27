@@ -102,16 +102,16 @@ struct CommunityComposerContent: Equatable {
         return CommunityComposerContent(
             mode: .edit(postID: postID),
             navigationTitle: "수정하기",
-            eyebrow: "Community Editor",
+            eyebrow: "커뮤니티 글 수정",
             title: "기존 게시글을 그대로 이어서 수정할 수 있어요",
-            message: "서버 상세 응답을 기준으로 draft를 채우고, 필요한 필드만 수정한 뒤 저장합니다. 새 첨부 파일은 업로드 후 기존 목록에 추가됩니다.",
+            message: "내용과 첨부 이미지를 확인한 뒤 필요한 부분만 바꿔 저장해 주세요.",
             categoryOptions: categoryOptions,
             selectedCategoryID: selectedCategoryID,
             initialDraft: initialDraft,
             titlePlaceholder: "제목을 수정해 주세요",
             bodyPlaceholder: "게시글 내용을 수정해 보세요.",
             footerTitle: "수정 모드",
-            footerMessage: "저장에 성공하면 최신 postID 기준 상세 화면으로 다시 이동합니다.",
+            footerMessage: "저장 후 게시글 상세 화면으로 돌아갑니다.",
             submitTitle: "저장"
         )
     }

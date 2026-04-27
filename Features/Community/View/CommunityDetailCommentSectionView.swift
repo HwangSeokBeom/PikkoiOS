@@ -195,9 +195,11 @@ struct CommunityDetailCommentComposerBar: View {
     let onAuthTapped: () -> Void
 
     var body: some View {
+        let canSubmit = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSubmitting
+
         HStack(alignment: .bottom, spacing: PikkoSpacing.sm) {
             TextField(
-                requiresAuthentication ? "로그인 후 댓글을 작성할 수 있어요" : "댓글을 남겨보세요",
+                requiresAuthentication ? "로그인 후 댓글을 작성할 수 있어요" : "댓글을 입력해 주세요",
                 text: Binding(
                     get: { text },
                     set: { newValue in
@@ -207,6 +209,8 @@ struct CommunityDetailCommentComposerBar: View {
                 axis: .vertical
             )
             .font(PikkoTypography.body)
+            .foregroundStyle(PikkoColor.primaryText)
+            .tint(PikkoColor.accentStrong)
             .padding(.horizontal, PikkoSpacing.md)
             .padding(.vertical, PikkoSpacing.sm)
             .background(PikkoColor.surfaceElevated)
@@ -223,6 +227,7 @@ struct CommunityDetailCommentComposerBar: View {
                 PrimaryButton(
                     title: "등록",
                     isLoading: isSubmitting,
+                    isEnabled: canSubmit,
                     size: .compact,
                     action: onSubmitTapped
                 )
@@ -231,7 +236,7 @@ struct CommunityDetailCommentComposerBar: View {
         }
         .padding(.horizontal, PikkoSpacing.xl)
         .padding(.top, PikkoSpacing.sm)
-        .padding(.bottom, PikkoSpacing.md)
+        .padding(.bottom, PikkoSpacing.md + RootTabBarMetrics.scrollContentBottomInset)
         .background(.ultraThinMaterial)
     }
 }

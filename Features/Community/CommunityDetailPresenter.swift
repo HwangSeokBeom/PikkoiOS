@@ -16,6 +16,7 @@ final class CommunityDetailPresenter: ObservableObject {
     private var comments: [CommunityComment] = []
     private var nextCommentCursor: String?
     private var isLoadingMoreComments = false
+    private var isUpdatingLikeStatus = false
 
     init(
         postID: String,
@@ -171,7 +172,11 @@ final class CommunityDetailPresenter: ObservableObject {
     }
 
     private func toggleLikeStatus() async {
+        guard !isUpdatingLikeStatus else { return }
         guard let currentDetail = detail else { return }
+
+        isUpdatingLikeStatus = true
+        defer { isUpdatingLikeStatus = false }
 
         let currentSummary = currentDetail.summary
         let optimisticLikeStatus = !currentSummary.isLiked
@@ -196,6 +201,9 @@ final class CommunityDetailPresenter: ObservableObject {
                 comments: comments
             )
             syncAllViewState()
+            if let updatedSummary = detail?.summary {
+                postCommunityChange(summary: updatedSummary)
+            }
         } catch {
             detail = previousDetail
             syncAllViewState()
@@ -232,6 +240,9 @@ final class CommunityDetailPresenter: ObservableObject {
             viewState.commentSection.isSubmittingComment = false
             syncDetailComments()
             syncAllViewState()
+            if let detail {
+                postCommunityChange(summary: detail.summary)
+            }
         } catch {
             viewState.commentSection.isSubmittingComment = false
             applyCommentFailure(error)
@@ -292,6 +303,9 @@ final class CommunityDetailPresenter: ObservableObject {
             viewState.commentSection.errorMessage = nil
             syncDetailComments()
             syncAllViewState()
+            if let detail {
+                postCommunityChange(summary: detail.summary)
+            }
         } catch {
             viewState.commentSection.isSubmittingComment = false
             applyCommentFailure(error)
@@ -320,6 +334,9 @@ final class CommunityDetailPresenter: ObservableObject {
             viewState.commentSection.errorMessage = nil
             syncDetailComments()
             syncAllViewState()
+            if let detail {
+                postCommunityChange(summary: detail.summary)
+            }
         } catch {
             viewState.commentSection.isSubmittingComment = false
             applyCommentFailure(error)
@@ -499,6 +516,20 @@ final class CommunityDetailPresenter: ObservableObject {
             latitude: summary.latitude,
             createdAt: summary.createdAt,
             updatedAt: summary.updatedAt
+        )
+    }
+
+    private func postCommunityChange(summary: CommunityPostSummary) {
+        let event = CommunityPostChangeNotification(
+            postID: summary.id,
+            isLiked: summary.isLiked,
+            likeCount: summary.likeCount,
+            commentCount: comments.reduce(0) { $0 + $1.totalCountIncludingReplies }
+        )
+        NotificationCenter.default.post(
+            name: .pikkoCommunityPostDidChange,
+            object: nil,
+            userInfo: [CommunityPostChangeNotificationUserInfoKey.event: event]
         )
     }
 
@@ -720,7 +751,7 @@ final class CommunityDetailPresenter: ObservableObject {
             return "-"
         }
 
-        return distanceFormatter.string(fromMeters: distanceMeters).uppercased()
+        return distanceFormatter.string(fromMeters: distanceMeters)
     }
 
     private func makeRelativeTimeText(from date: Date?) -> String {

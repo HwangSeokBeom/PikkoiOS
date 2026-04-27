@@ -116,6 +116,7 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func sendMessage() async {
+        guard !viewState.isSending else { return }
         guard let roomID = viewState.selectedRoomID else { return }
         let content = viewState.messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else { return }

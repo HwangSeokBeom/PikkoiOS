@@ -71,7 +71,7 @@ struct CommunityFeedSectionView: View {
                 title: "입안에서 피어나는 봄, 도넛 한 입",
                 bodyText: "가게 문을 열자마자 퍼지는 달콤한 향기와 포근한 맛이 하루를 천천히 풀어줬어요.",
                 likeText: "12개",
-                distanceText: "102M",
+                distanceText: "102m",
                 media: [
                     .init(id: "a", path: "community-donut-video.mov"),
                     .init(id: "b", path: "community-donut-photo-a"),

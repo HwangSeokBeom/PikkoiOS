@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 
 struct CommunityFeedContent {
     let featuredBanner: CommunityFeaturedBanner?
@@ -63,16 +64,67 @@ struct CommunityReferenceLocation: Equatable, Sendable {
     let latitude: Double
 }
 
-struct CommunitySortOption: Identifiable, Equatable {
-    let id: String
-    let title: String
+struct CommunityDistanceCalculator: Sendable {
+    func distanceMeters(
+        from reference: CommunityReferenceLocation?,
+        toLongitude longitude: Double?,
+        latitude: Double?
+    ) -> Double? {
+        guard let reference,
+              isValidCoordinate(latitude: reference.latitude, longitude: reference.longitude),
+              let longitude,
+              let latitude,
+              isValidCoordinate(latitude: latitude, longitude: longitude) else {
+            return nil
+        }
 
-    static let latest = CommunitySortOption(id: "latest", title: "최신순")
-    static let popular = CommunitySortOption(id: "popular", title: "인기순")
-    static let nearest = CommunitySortOption(id: "nearest", title: "가까운순")
+        let referenceLocation = CLLocation(latitude: reference.latitude, longitude: reference.longitude)
+        let postLocation = CLLocation(latitude: latitude, longitude: longitude)
+        return referenceLocation.distance(from: postLocation)
+    }
 
-    static let all: [CommunitySortOption] = [.latest, .popular, .nearest]
+    func isValidCoordinate(latitude: Double, longitude: Double) -> Bool {
+        latitude.isFinite
+            && longitude.isFinite
+            && (-90...90).contains(latitude)
+            && (-180...180).contains(longitude)
+            && !(latitude == 0 && longitude == 0)
+    }
 }
+
+enum CommunitySort: String, CaseIterable, Identifiable, Equatable {
+    case latest
+    case popular
+    case nearest
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .latest:
+            return "최신순"
+        case .popular:
+            return "인기순"
+        case .nearest:
+            return "가까운순"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .latest:
+            return "clock"
+        case .popular:
+            return "heart"
+        case .nearest:
+            return "location"
+        }
+    }
+
+    static let all: [CommunitySort] = allCases
+}
+
+typealias CommunitySortOption = CommunitySort
 
 struct CommunityDistanceOption: Identifiable, Equatable {
     let id: String
@@ -91,14 +143,51 @@ struct CommunityDistanceOption: Identifiable, Equatable {
     static let defaultOption = all[1]
 }
 
-struct CommunityFilterChip: Identifiable, Equatable {
-    let id: String
-    let title: String
-    let systemImage: String?
+enum CommunityFilter: String, CaseIterable, Identifiable, Equatable, Hashable {
+    case nearbyOnly = "nearby"
+    case videoOnly = "video"
+    case storeTag = "store"
 
-    static let defaults: [CommunityFilterChip] = [
-        CommunityFilterChip(id: "nearby", title: "근처만", systemImage: "location"),
-        CommunityFilterChip(id: "video", title: "영상포함", systemImage: "play.rectangle"),
-        CommunityFilterChip(id: "store", title: "가게태그", systemImage: "storefront")
-    ]
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .nearbyOnly:
+            return "근처만"
+        case .videoOnly:
+            return "영상포함"
+        case .storeTag:
+            return "가게태그"
+        }
+    }
+
+    var systemImage: String? {
+        switch self {
+        case .nearbyOnly:
+            return "location"
+        case .videoOnly:
+            return "play.rectangle"
+        case .storeTag:
+            return "storefront"
+        }
+    }
+
+    static let defaults: [CommunityFilter] = allCases
+}
+
+typealias CommunityFilterChip = CommunityFilter
+
+struct CommunityPostChangeNotification: Sendable {
+    let postID: String
+    let isLiked: Bool?
+    let likeCount: Int?
+    let commentCount: Int?
+}
+
+extension Notification.Name {
+    static let pikkoCommunityPostDidChange = Notification.Name("pikko.community.postDidChange")
+}
+
+enum CommunityPostChangeNotificationUserInfoKey {
+    static let event = "event"
 }
