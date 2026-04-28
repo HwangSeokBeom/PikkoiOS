@@ -12,6 +12,7 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
     private var socket: SocketIOClient?
     private var activeRoomID: String?
     private var activeNamespace: String?
+    private var isDisconnecting = false
 
     init(
         configuration: AppConfiguration,
@@ -23,8 +24,19 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         self.mapper = mapper
     }
 
+    deinit {
+        Logger.shared.debug("[ChatSocket] deinit roomId=\(activeRoomID ?? "-") namespace=\(activeNamespace ?? "-")")
+    }
+
     func connect(roomID: String, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
-        disconnect()
+        if activeRoomID == roomID, socket?.status == .connected || socket?.status == .connecting {
+            Logger.shared.debug("[ChatSocket] connect ignored roomId=\(roomID) reason=already-active")
+            return
+        }
+
+        if activeRoomID != nil {
+            disconnect()
+        }
 
         guard configuration.hasValidSeSACKey else {
             throw NetworkError.configuration(configuration.seSACKeyError ?? .missingSeSACKey)
@@ -55,9 +67,9 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
             .forceWebsockets(true),
             .extraHeaders(headers)
         ]
-#if DEBUG
-        socketConfig.insert(.log(true))
-#endif
+        if configuration.isChatSocketDebugEnabled {
+            socketConfig.insert(.log(true))
+        }
 
         let manager = SocketManager(socketURL: originURL, config: socketConfig)
         let socket = manager.socket(forNamespace: namespace)
@@ -73,6 +85,15 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
     }
 
     func disconnect() {
+        guard socket != nil || manager != nil else {
+            return
+        }
+        guard !isDisconnecting else {
+            return
+        }
+        isDisconnecting = true
+        defer { isDisconnecting = false }
+
         let namespace = activeNamespace
         socket?.removeAllHandlers()
         socket?.disconnect()

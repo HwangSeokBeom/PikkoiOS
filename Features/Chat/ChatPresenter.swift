@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 @MainActor
@@ -16,6 +17,8 @@ final class ChatPresenter: ObservableObject {
     private var roomListRequestID = 0
     private var messageRequestID = 0
     private var realtimeRoomID: String?
+    private var currentContext: ChatRoomContext?
+    private var cancellables = Set<AnyCancellable>()
 
     init(interactor: ChatInteracting, router: ChatRouting) {
         self.interactor = interactor
@@ -32,6 +35,8 @@ final class ChatPresenter: ObservableObject {
         dateFormatter.locale = Locale(identifier: "ko_KR")
         dateFormatter.dateFormat = "yyyy년 M월 d일"
         self.dateFormatter = dateFormatter
+
+        bindRoomUpdates()
     }
 
     func send(_ action: ChatAction) async {
@@ -57,7 +62,9 @@ final class ChatPresenter: ObservableObject {
                 await loadRooms(isRefresh: true)
             }
         case .onDisappear:
-            interactor.stopRealtime()
+            if viewState.isExternalDetailPresentation {
+                interactor.stopRealtime()
+            }
         case .primaryButtonTapped:
             if viewState.requiresAuthentication {
                 router.routeToPrimaryDestination()
@@ -102,7 +109,7 @@ final class ChatPresenter: ObservableObject {
         do {
             let loadedRooms = try await interactor.loadInitialRoomList()
             guard requestID == roomListRequestID else { return }
-            rooms = loadedRooms
+            rooms = deduplicatedRooms(loadedRooms)
             applyRooms()
             viewState.errorMessage = nil
         } catch is CancellationError {
@@ -122,7 +129,7 @@ final class ChatPresenter: ObservableObject {
             let room = try await interactor.createOrFetchStoreChatRoom()
             selectedRoom = room
             viewState.selectedRoomID = room.id
-            viewState.title = interactor.target?.preferredTitle ?? roomTitle(room)
+            applyContext(interactor.makeContext(for: room, entryPoint: .storeDetail))
             await loadCachedMessagesAndStartLiveSync(roomID: room.id, isRefresh: false)
         } catch {
             apply(error: error, emptyTitle: "채팅을 시작하지 못했어요", isRefresh: false)
@@ -140,7 +147,7 @@ final class ChatPresenter: ObservableObject {
             let room = try await interactor.createOrFetchUserChatRoom()
             selectedRoom = room
             viewState.selectedRoomID = room.id
-            viewState.title = interactor.target?.preferredTitle ?? roomTitle(room)
+            applyContext(interactor.makeContext(for: room, entryPoint: .userProfile))
             await loadCachedMessagesAndStartLiveSync(roomID: room.id, isRefresh: false)
         } catch {
             apply(error: error, emptyTitle: "채팅을 시작하지 못했어요", isRefresh: false)
@@ -153,13 +160,21 @@ final class ChatPresenter: ObservableObject {
         viewState.mode = .roomDetail
         viewState.selectedRoomID = roomID
         viewState.title = title
+        currentContext = ChatRoomContext(
+            entryPoint: .chatList,
+            roomID: roomID,
+            opponentID: nil,
+            storeID: nil,
+            displayTitle: title,
+            canUseStoreScopedTitle: false
+        )
         await loadCachedMessagesAndStartLiveSync(roomID: roomID, isRefresh: false)
     }
 
     private func showRoom(_ room: ChatRoom) async {
         viewState.mode = .roomDetail
         viewState.selectedRoomID = room.id
-        viewState.title = roomTitle(room)
+        applyContext(interactor.makeContext(for: room, entryPoint: .chatList))
         await loadCachedMessagesAndStartLiveSync(roomID: room.id, isRefresh: false)
     }
 
@@ -206,6 +221,7 @@ final class ChatPresenter: ObservableObject {
             try await interactor.startRealtime(roomID: roomID) { [weak self] message in
                 guard let self, self.viewState.selectedRoomID == message.roomID else { return }
                 self.merge(message)
+                self.updateRoomList(with: message)
                 self.applyMessages()
             }
         } catch {
@@ -258,6 +274,7 @@ final class ChatPresenter: ObservableObject {
             applyMessages()
             let message = try await interactor.sendMessage(roomID: roomID, content: content, files: files)
             messages = try await interactor.replacePendingMessage(localID: pendingMessage.id, with: message)
+            updateRoomList(with: message)
             applyMessages()
         } catch {
             if let pendingMessageID {
@@ -307,11 +324,13 @@ final class ChatPresenter: ObservableObject {
     private func applyRooms() {
         viewState.mode = .roomList
         viewState.title = "채팅"
+        rooms = deduplicatedRooms(rooms)
         viewState.rooms = rooms.map(makeRoomRow)
         viewState.messages = []
         viewState.selectedRoomID = nil
+        currentContext = nil
         viewState.emptyTitle = viewState.rooms.isEmpty ? "아직 채팅방이 없어요" : nil
-        viewState.emptyMessage = viewState.rooms.isEmpty ? "가게 상세에서 문의를 시작하면 대화가 여기에 표시돼요." : nil
+        viewState.emptyMessage = viewState.rooms.isEmpty ? "상대방과 대화를 시작하면 여기에 표시돼요." : nil
         viewState.primaryActionTitle = viewState.rooms.isEmpty ? "다시 불러오기" : nil
         viewState.requiresAuthentication = false
     }
@@ -394,6 +413,68 @@ final class ChatPresenter: ObservableObject {
 
     private func displayParticipant(for room: ChatRoom) -> ChatParticipant? {
         room.participants.first { $0.id != interactor.currentUserID } ?? room.participants.first
+    }
+
+    private func bindRoomUpdates() {
+        NotificationCenter.default.publisher(for: .pikkoChatRoomDidUpdate)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                guard let self,
+                      let message = notification.userInfo?[ChatRoomUpdateNotificationKey.message] as? ChatMessage else {
+                    return
+                }
+                self.updateRoomList(with: message)
+                if self.viewState.mode == .roomList {
+                    self.applyRooms()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func updateRoomList(with message: ChatMessage) {
+        guard let index = rooms.firstIndex(where: { $0.id == message.roomID }) else {
+            return
+        }
+        rooms[index] = rooms[index].updating(lastMessage: message)
+        rooms = deduplicatedRooms(rooms)
+    }
+
+    private func applyContext(_ context: ChatRoomContext) {
+        currentContext = context
+        viewState.title = context.displayTitle
+        if context.storeID != nil && !context.canUseStoreScopedTitle {
+            Logger.shared.debug(
+                "[ChatRoomContext] storeScopedTitle disabled roomId=\(context.roomID) storeId=\(context.storeID ?? "-") title=\(context.displayTitle)"
+            )
+        }
+    }
+
+    private func deduplicatedRooms(_ rooms: [ChatRoom]) -> [ChatRoom] {
+        var byID: [String: ChatRoom] = [:]
+        for room in rooms {
+            if let existing = byID[room.id] {
+                byID[room.id] = preferredRoom(existing, room)
+            } else {
+                byID[room.id] = room
+            }
+        }
+        return byID.values.sorted { lhs, rhs in
+            latestActivityDate(lhs) > latestActivityDate(rhs)
+        }
+    }
+
+    private func preferredRoom(_ lhs: ChatRoom, _ rhs: ChatRoom) -> ChatRoom {
+        if lhs.lastMessage == nil, rhs.lastMessage != nil {
+            return rhs
+        }
+        if rhs.lastMessage == nil, lhs.lastMessage != nil {
+            return lhs
+        }
+        return latestActivityDate(rhs) > latestActivityDate(lhs) ? rhs : lhs
+    }
+
+    private func latestActivityDate(_ room: ChatRoom) -> Date {
+        room.lastMessage?.createdAt ?? room.updatedAt ?? room.createdAt ?? .distantPast
     }
 
     private func relativeTime(from date: Date?) -> String {

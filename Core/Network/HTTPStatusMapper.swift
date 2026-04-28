@@ -8,7 +8,7 @@ enum HTTPStatusMapper {
         case 400, 422:
             return .abnormalRequest(message: message)
         case 444:
-            return .abnormalRequest(message: message)
+            return .notFound(message: message)
         case 401:
             return .authenticationFailed(message: message)
         case 403:
@@ -83,7 +83,7 @@ private enum ResponseMessageParser {
     private static func defaultMessage(for statusCode: Int) -> String {
         switch statusCode {
         case 444:
-            return "The API path or method does not match the server contract."
+            return "The requested file was not found or is blocked."
         case 404:
             return "The requested resource was not found."
         case 409:

@@ -121,6 +121,7 @@
 		5FD6CC88F1D54A170A6330DB /* HTTPMethod.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5304DF39A31E6507B7C1F1B0 /* HTTPMethod.swift */; };
 		601A97C5518504DDB80A3B85 /* BannerMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1BD0E66A052A6E9248DE095 /* BannerMapper.swift */; };
 		60541163EAE78D659C136A4B /* SessionSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC26488C77E52D8BCADF144 /* SessionSnapshotStore.swift */; };
+		61799BAB318EA21393F23DB4 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 16950DB1075C0A3DF4A0F38E /* LaunchScreen.storyboard */; };
 		61E85B93D88578AD83FA98AA /* HomePickedStoresSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A281A1C18D9B373233883C93 /* HomePickedStoresSectionView.swift */; };
 		6233A478B86A903C705BA460 /* CheckoutInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3009260FACE4EA323359DCD7 /* CheckoutInteractor.swift */; };
 		6251D002D9C3DED676A2014A /* ReviewRepositoryImpl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD6BD93C980479682947630 /* ReviewRepositoryImpl.swift */; };
@@ -162,6 +163,7 @@
 		8AD1527CDAF6B05ECE2A8D4F /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6703058683691B7FEA04117F /* EmptyStateView.swift */; };
 		8B4AFC06A5AD48AF7A7FA6EF /* SectionHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FD873BB268B64DBD7C300FB /* SectionHeader.swift */; };
 		8E219E6EA7157BFA499CA409 /* RatingSummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0B6953D78E04249555044F /* RatingSummaryView.swift */; };
+		906BE9D308097B080A3F7F28 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BA33765EF28755ED29E8F5A7 /* Assets.xcassets */; };
 		9205BC99B4B732AB49263693 /* AuthorizedFileURLResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD978256E14D3E198FCE66BF /* AuthorizedFileURLResolver.swift */; };
 		932BDFCF0577585D69005DD8 /* ReviewRemoteDataSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D6D1B485D96F3EA22001C0 /* ReviewRemoteDataSource.swift */; };
 		93D0504D9E28864DD9475A07 /* AppBootstrapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 009965ECD7B2F51B84FCFE1D /* AppBootstrapperTests.swift */; };
@@ -340,6 +342,7 @@
 		15B8A48B1955CBE3BFB936C2 /* OrderInteractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderInteractor.swift; sourceTree = "<group>"; };
 		1671D5DB7C50AFCC4CD54BD8 /* CheckoutMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutMapper.swift; sourceTree = "<group>"; };
 		1683C1F36A161F6055D6CD30 /* CommunityDetailRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityDetailRouter.swift; sourceTree = "<group>"; };
+		16950DB1075C0A3DF4A0F38E /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		16DB843D97AB3AFB23C2FA6C /* StoreDetailPresenterCartTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreDetailPresenterCartTests.swift; sourceTree = "<group>"; };
 		18BDFEF13BD2429C85A0D8F6 /* InMemoryAuthRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InMemoryAuthRepository.swift; sourceTree = "<group>"; };
 		192108E5C5F20F198A9182B0 /* CommunityPost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityPost.swift; sourceTree = "<group>"; };
@@ -516,6 +519,7 @@
 		B827F0E1F79F4E34C1DA4289 /* CommunityDetailContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityDetailContent.swift; sourceTree = "<group>"; };
 		B832CC73ACBF4F4F71672A0F /* AppDIContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDIContainer.swift; sourceTree = "<group>"; };
 		B9ADC54145916CCC4A6E00B8 /* CartViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartViewState.swift; sourceTree = "<group>"; };
+		BA33765EF28755ED29E8F5A7 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		BA4C3DCC9EF2D23D0A99A8FA /* OrderCreateResponseDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderCreateResponseDTO.swift; sourceTree = "<group>"; };
 		BA66ACCFF62F151F71275C6A /* CommunityBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityBuilder.swift; sourceTree = "<group>"; };
 		BADF0BAEA1036C7A100D9831 /* RootTabContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootTabContainerView.swift; sourceTree = "<group>"; };
@@ -641,6 +645,7 @@
 				B6A374D500EE172F218CAA91 /* DesignSystem */,
 				6EE2490C578957AEB2E4A978 /* Domain */,
 				5D0FC668B2AF27261964667F /* Features */,
+				6D1C47BC137685E3C49F4E27 /* Resources */,
 				FD0ADFB857B0C21175C617F1 /* Shared */,
 				4BF4748D7AF0BA70E16EA45B /* Tests */,
 				051CC8A4FB17C1F51C07C42E /* Products */,
@@ -987,6 +992,15 @@
 				892B2F67665FE968540604D0 /* SocialLoginResponseDTO.swift */,
 			);
 			path = Auth;
+			sourceTree = "<group>";
+		};
+		6D1C47BC137685E3C49F4E27 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				BA33765EF28755ED29E8F5A7 /* Assets.xcassets */,
+				16950DB1075C0A3DF4A0F38E /* LaunchScreen.storyboard */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		6E8431132E1C2798191FC8E1 /* Component */ = {
@@ -1509,6 +1523,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				906BE9D308097B080A3F7F28 /* Assets.xcassets in Resources */,
+				61799BAB318EA21393F23DB4 /* LaunchScreen.storyboard in Resources */,
 				1666C21344FAA9EE03F2BD8A /* README.md in Resources */,
 				2D7B158A643B57FC793FFDE9 /* Secrets.xcconfig.sample in Resources */,
 			);
@@ -1914,6 +1930,7 @@
 				INFOPLIST_KEY_KAKAO_NATIVE_APP_KEY = "$(KAKAO_NATIVE_APP_KEY)";
 				INFOPLIST_KEY_PIKKO_APP_ENV = "$(PIKKO_APP_ENV)";
 				INFOPLIST_KEY_PIKKO_BASE_URL = "$(PIKKO_BASE_URL)";
+				INFOPLIST_KEY_PIKKO_CHAT_SOCKET_DEBUG_ENABLED = "$(PIKKO_CHAT_SOCKET_DEBUG_ENABLED)";
 				INFOPLIST_KEY_PIKKO_INTERNAL_STUB_AUTH_ENABLED = "$(PIKKO_INTERNAL_STUB_AUTH_ENABLED)";
 				INFOPLIST_KEY_PIKKO_SESAC_KEY = "$(PIKKO_SESAC_KEY)";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -2026,6 +2043,7 @@
 				INFOPLIST_KEY_KAKAO_NATIVE_APP_KEY = "$(KAKAO_NATIVE_APP_KEY)";
 				INFOPLIST_KEY_PIKKO_APP_ENV = "$(PIKKO_APP_ENV)";
 				INFOPLIST_KEY_PIKKO_BASE_URL = "$(PIKKO_BASE_URL)";
+				INFOPLIST_KEY_PIKKO_CHAT_SOCKET_DEBUG_ENABLED = "$(PIKKO_CHAT_SOCKET_DEBUG_ENABLED)";
 				INFOPLIST_KEY_PIKKO_INTERNAL_STUB_AUTH_ENABLED = "$(PIKKO_INTERNAL_STUB_AUTH_ENABLED)";
 				INFOPLIST_KEY_PIKKO_SESAC_KEY = "$(PIKKO_SESAC_KEY)";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;

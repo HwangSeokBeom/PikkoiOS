@@ -89,6 +89,8 @@
 	<string>$(PIKKO_BASE_URL)</string>
 	<key>PIKKO_INTERNAL_STUB_AUTH_ENABLED</key>
 	<string>$(PIKKO_INTERNAL_STUB_AUTH_ENABLED)</string>
+	<key>PIKKO_CHAT_SOCKET_DEBUG_ENABLED</key>
+	<string>$(PIKKO_CHAT_SOCKET_DEBUG_ENABLED)</string>
 	<key>PIKKO_SESAC_KEY</key>
 	<string>$(PIKKO_SESAC_KEY)</string>
 	<key>UIBackgroundModes</key>

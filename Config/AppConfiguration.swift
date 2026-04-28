@@ -80,6 +80,7 @@ struct AppConfiguration: Sendable {
         static let googleReversedClientID = "GOOGLE_REVERSED_CLIENT_ID"
         static let googleReversedClientIDAliases = [googleReversedClientID, "GoogleReversedClientID"]
         static let internalStubAuthEnabled = "PIKKO_INTERNAL_STUB_AUTH_ENABLED"
+        static let chatSocketDebugEnabled = "PIKKO_CHAT_SOCKET_DEBUG_ENABLED"
     }
 
     let environment: AppEnvironment
@@ -92,6 +93,7 @@ struct AppConfiguration: Sendable {
     let googleIOSClientID: String?
     let googleReversedClientID: String?
     let isInternalStubAuthEnabled: Bool
+    let isChatSocketDebugEnabled: Bool
     let authorizationHeaderFormat: TokenHeaderFormat
 
     let defaultTimeout: TimeInterval
@@ -107,6 +109,7 @@ struct AppConfiguration: Sendable {
         googleIOSClientID: String? = nil,
         googleReversedClientID: String? = nil,
         internalStubAuthEnabled: Bool? = nil,
+        chatSocketDebugEnabled: Bool? = nil,
         authorizationHeaderFormat: TokenHeaderFormat = .raw
     ) {
         let resolvedBaseURL = Self.resolveBaseURL(explicitBaseURL: baseURL, bundle: bundle)
@@ -127,6 +130,7 @@ struct AppConfiguration: Sendable {
                 googleIOSClientID: resolvedGoogleIOSClientID
             )
         self.isInternalStubAuthEnabled = internalStubAuthEnabled ?? Self.resolveInternalStubAuthEnabled(bundle: bundle)
+        self.isChatSocketDebugEnabled = chatSocketDebugEnabled ?? Self.resolveChatSocketDebugEnabled(bundle: bundle)
         self.defaultTimeout = URLSessionConfigurationFactory.defaultRequestTimeout
         self.uploadTimeout = URLSessionConfigurationFactory.uploadRequestTimeout
         self.paymentValidationTimeout = URLSessionConfigurationFactory.paymentValidationRequestTimeout
@@ -216,8 +220,16 @@ struct AppConfiguration: Sendable {
     }
 
     private static func resolveInternalStubAuthEnabled(bundle: Bundle) -> Bool {
+        configuredBool(for: BundleKey.internalStubAuthEnabled, bundle: bundle)
+    }
+
+    private static func resolveChatSocketDebugEnabled(bundle: Bundle) -> Bool {
+        configuredBool(for: BundleKey.chatSocketDebugEnabled, bundle: bundle)
+    }
+
+    private static func configuredBool(for key: String, bundle: Bundle) -> Bool {
         guard let rawValue = configuredRawString(
-            forAnyOf: [BundleKey.internalStubAuthEnabled],
+            forAnyOf: [key],
             bundle: bundle
         ) else {
             return false

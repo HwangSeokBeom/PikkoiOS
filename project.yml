@@ -75,8 +75,8 @@ targets:
       - path: Features/Home/HomeBuilder 2.swift
       - path: Features/Home/HomeInteractor 2.swift
       - path: Features/Home/HomePresenter 2.swift
-    resources:
-      - path: Resources
+      - path: Resources/Assets.xcassets
+      - path: Resources/LaunchScreen.storyboard
     postBuildScripts:
       - name: Copy GoogleService-Info.plist
         outputFiles:
@@ -142,3 +142,4 @@ targets:
         INFOPLIST_KEY_GOOGLE_IOS_CLIENT_ID: $(GOOGLE_IOS_CLIENT_ID)
         INFOPLIST_KEY_GOOGLE_REVERSED_CLIENT_ID: $(GOOGLE_REVERSED_CLIENT_ID)
         INFOPLIST_KEY_PIKKO_INTERNAL_STUB_AUTH_ENABLED: $(PIKKO_INTERNAL_STUB_AUTH_ENABLED)
+        INFOPLIST_KEY_PIKKO_CHAT_SOCKET_DEBUG_ENABLED: $(PIKKO_CHAT_SOCKET_DEBUG_ENABLED)

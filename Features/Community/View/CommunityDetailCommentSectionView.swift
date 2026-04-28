@@ -204,6 +204,7 @@ struct CommunityDetailCommentComposerBar: View {
     let onTextChanged: (String) -> Void
     let onSubmitTapped: () -> Void
     let onAuthTapped: () -> Void
+    @FocusState private var isComposerFocused: Bool
 
     var body: some View {
         let canSubmit = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSubmitting
@@ -233,6 +234,7 @@ struct CommunityDetailCommentComposerBar: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .disabled(requiresAuthentication || isSubmitting)
+            .focused($isComposerFocused)
 
             if requiresAuthentication {
                 Button("로그인") {
@@ -271,7 +273,7 @@ struct CommunityDetailCommentComposerBar: View {
         }
         .padding(.horizontal, PikkoSpacing.xl)
         .padding(.top, PikkoSpacing.sm)
-        .padding(.bottom, PikkoSpacing.sm + RootTabBarMetrics.scrollContentBottomInset)
+        .padding(.bottom, PikkoSpacing.sm + (isComposerFocused ? 0 : RootTabBarMetrics.scrollContentBottomInset))
         .background {
             PikkoColor.surface
                 .overlay(alignment: .top) {

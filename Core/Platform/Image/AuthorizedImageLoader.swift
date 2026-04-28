@@ -6,6 +6,17 @@ protocol AuthorizedImageLoading: Sendable {
     func removeCachedImage(for path: String) async throws
 }
 
+enum ImageLoadError: Error, LocalizedError, Equatable, Sendable {
+    case notFoundOrBlocked
+
+    var errorDescription: String? {
+        switch self {
+        case .notFoundOrBlocked:
+            return "이미지를 불러올 수 없어요."
+        }
+    }
+}
+
 actor AuthorizedImageLoader: AuthorizedImageLoading {
     private let logger = Logger(category: "AuthorizedImageLoader")
     private let session: URLSession
@@ -15,6 +26,9 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
     private let imageCache: ImageCache
 
     private var inFlightTasks: [URL: Task<Data, Error>] = [:]
+    private var failedURLCache: [URL: Date] = [:]
+    private var loggedFailedURLs: Set<URL> = []
+    private let failedURLCacheTTL: TimeInterval = 300
 
     init(
         session: URLSession,
@@ -43,6 +57,12 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             return cachedData
         }
 
+        if let failedAt = failedURLCache[url], Date().timeIntervalSince(failedAt) < failedURLCacheTTL {
+            throw ImageLoadError.notFoundOrBlocked
+        } else {
+            failedURLCache[url] = nil
+        }
+
         if let inFlightTask = inFlightTasks[url] {
             return try await inFlightTask.value
         }
@@ -59,7 +79,12 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             return data
         } catch {
             inFlightTasks[url] = nil
-            logger.warning("Image load failed. url=\(url.absoluteString) error=\(error.localizedDescription)")
+            if case .notFoundOrBlocked = error as? ImageLoadError {
+                failedURLCache[url] = Date()
+                logFailedURLOnce(url: url, statusDescription: error.localizedDescription)
+            } else {
+                logger.warning("Image load failed. url=\(url.absoluteString) error=\(error.localizedDescription)")
+            }
             throw error
         }
     }
@@ -109,6 +134,8 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
                  419 where !didRetryAfterRefresh:
                 _ = try await tokenRefreshCoordinator.refreshTokens()
                 return try await fetchImageData(from: url, didRetryAfterRefresh: true)
+            case 444:
+                throw ImageLoadError.notFoundOrBlocked
             default:
                 let error = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
                 switch error {
@@ -128,5 +155,13 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             logger.warning("Image transport failed. url=\(url.absoluteString) error=\(error.localizedDescription)")
             throw NetworkError.transport
         }
+    }
+
+    private func logFailedURLOnce(url: URL, statusDescription: String) {
+        guard !loggedFailedURLs.contains(url) else {
+            return
+        }
+        loggedFailedURLs.insert(url)
+        logger.warning("Image unavailable. url=\(url.absoluteString) error=\(statusDescription)")
     }
 }

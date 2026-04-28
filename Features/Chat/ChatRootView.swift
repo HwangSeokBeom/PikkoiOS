@@ -241,7 +241,7 @@ struct ChatRootView: View {
         }
         .padding(.horizontal, PikkoSpacing.lg)
         .padding(.top, PikkoSpacing.sm)
-        .padding(.bottom, PikkoSpacing.sm + RootTabBarMetrics.scrollContentBottomInset)
+        .padding(.bottom, PikkoSpacing.sm + (isComposerFocused ? 0 : RootTabBarMetrics.scrollContentBottomInset))
         .background(PikkoColor.background.opacity(0.96))
         .onChange(of: selectedPhotoItems) { _, items in
             Task { await handleImageSelection(items) }

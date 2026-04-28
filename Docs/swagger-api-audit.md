@@ -122,6 +122,7 @@
 - 프로필 탭의 `채팅` 진입점: `GET /v1/chats` 목록 조회.
 - 프로필 탭의 `유저 검색` 진입점: `GET /v1/users/search?nick=` 후 결과 선택 시 `POST /v1/chats`.
 - 채팅 상세 첨부 버튼: 이미지 선택 후 `POST /v1/chats/{room_id}/files`, 반환 file path를 `POST /v1/chats/{room_id}` body의 `files`에 포함.
+- TODO(Server): 현재 `POST /v1/chats` request body는 `opponent_id`만 지원한다. 같은 점주가 여러 가게를 보유한 경우 store별 채팅방을 분리할 수 없으므로, store별 문의 UX가 필요하면 `store_id` 또는 동등한 store context를 room 생성/조회 계약에 추가해야 한다. 클라이언트는 이 API가 추가되기 전까지 같은 `room_id`를 서로 다른 가게 채팅방처럼 표시하지 않는다.
 - DEBUG 전용 개발자 진단: `/common`, `/v1/log`, Push, Video 목록/스트림/좋아요, Admin Store/Menu 업로드·등록·수정 호출.
 
 ## 7. Debug/Admin 전용 항목
