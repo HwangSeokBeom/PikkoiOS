@@ -51,6 +51,8 @@ struct OrderRootView: View {
         .navigationDestination(isPresented: orderDetailPresentedBinding) {
             if let presentedOrderID {
                 makeOrderDetailView(presentedOrderID)
+            } else {
+                EmptyView()
             }
         }
         .fullScreenCover(isPresented: authPresentedBinding) {

@@ -33,7 +33,7 @@ struct EmailSignUpRequestDTO: Encodable, Sendable {
 
 struct KakaoLoginRequestDTO: Encodable, Sendable {
     let oauthToken: String
-    let deviceToken: String?
+    let deviceToken: String
 
     private enum CodingKeys: String, CodingKey {
         case oauthToken

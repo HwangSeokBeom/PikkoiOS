@@ -2,7 +2,7 @@ import Foundation
 
 enum HTTPStatusMapper {
     static func map(statusCode: Int, data: Data) -> NetworkError {
-        let message = ResponseMessageParser.message(from: data, statusCode: statusCode)
+        let message = message(statusCode: statusCode, data: data)
 
         switch statusCode {
         case 400, 422:
@@ -10,7 +10,7 @@ enum HTTPStatusMapper {
         case 444:
             return .abnormalRequest(message: message)
         case 401:
-            return .unauthorized
+            return .authenticationFailed(message: message)
         case 403:
             return .forbidden
         case 404:
@@ -32,6 +32,10 @@ enum HTTPStatusMapper {
         default:
             return .server(message: message)
         }
+    }
+
+    static func message(statusCode: Int, data: Data) -> String {
+        ResponseMessageParser.message(from: data, statusCode: statusCode)
     }
 }
 

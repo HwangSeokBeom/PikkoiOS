@@ -42,8 +42,72 @@ struct Logger: Sendable {
             log: logHandle,
             type: level.osLogType,
             level.rawValue,
-            message
+            SensitiveLogRedactor.redact(message)
         )
+    }
+}
+
+enum SensitiveLogRedactor {
+    private static let sensitiveKeys = [
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "accessToken",
+        "refreshToken",
+        "idToken",
+        "oauthToken",
+        "authorizationCode",
+        "authorization_code",
+        "deviceToken",
+        "device_token",
+        "Authorization",
+        "RefreshToken",
+        "code_verifier"
+    ]
+
+    static func redact(_ message: String) -> String {
+        sensitiveKeys.reduce(message) { partial, key in
+            redactValues(for: key, in: partial)
+        }
+    }
+
+    static func summary(for token: String?) -> String {
+        guard let token, !token.isEmpty else {
+            return "exists=false"
+        }
+
+        return "exists=true prefix=\(String(token.prefix(4)))... length=\(token.count)"
+    }
+
+    private static func redactValues(for key: String, in message: String) -> String {
+        var redacted = message
+        let escapedKey = NSRegularExpression.escapedPattern(for: key)
+        let replacements = [
+            (
+                pattern: "(\(escapedKey)\\s*[:=]\\s*)([^\\s,;&]+)",
+                template: "$1<redacted>"
+            ),
+            (
+                pattern: "(\"\(escapedKey)\"\\s*:\\s*\")([^\"]+)(\")",
+                template: "$1<redacted>$3"
+            )
+        ]
+
+        for replacement in replacements {
+            guard let regex = try? NSRegularExpression(pattern: replacement.pattern, options: [.caseInsensitive]) else {
+                continue
+            }
+
+            let range = NSRange(redacted.startIndex..<redacted.endIndex, in: redacted)
+            redacted = regex.stringByReplacingMatches(
+                in: redacted,
+                options: [],
+                range: range,
+                withTemplate: replacement.template
+            )
+        }
+
+        return redacted
     }
 }
 

@@ -56,16 +56,18 @@ final class AuthPresenter: ObservableObject {
     private func signIn(with provider: AuthProvider) async {
         guard !viewState.isLoading else { return }
         let wasAuthenticatedAtStart = sessionStore.isAuthenticated
+        if !wasAuthenticatedAtStart {
+            await sessionStore.prepareForLoginAttempt()
+        }
         if provider == .apple {
             Logger.shared.debug("[Auth] apple login started")
-            await sessionStore.prepareForLoginAttempt()
         }
         setLoading(provider: provider)
 
         do {
             let session = try await interactor.signIn(
                 with: provider,
-                deviceToken: sessionStore.deviceToken
+                deviceToken: sessionStore.currentDeviceToken
             )
             guard await sessionStore.establishAuthenticatedSession(session) else {
                 throw NetworkError.transport
@@ -75,13 +77,13 @@ final class AuthPresenter: ObservableObject {
             router.completeAuthentication()
         } catch {
             clearLoading()
-            if provider == .apple, !wasAuthenticatedAtStart {
+            if !wasAuthenticatedAtStart {
                 await sessionStore.clearSession()
             }
             if handleSilentCancellation(error, provider: provider) {
                 return
             }
-            let message = resolveErrorMessage(from: error)
+            let message = resolveSocialErrorMessage(from: error, provider: provider)
             viewState.errorMessage = message == viewState.configurationMessage ? nil : message
             if provider == .apple {
                 Logger.shared.warning("[Auth] social login failed provider=apple reason=\(error.localizedDescription)")
@@ -98,7 +100,7 @@ final class AuthPresenter: ObservableObject {
             let session = try await interactor.signIn(
                 email: viewState.email,
                 password: viewState.password,
-                deviceToken: sessionStore.deviceToken
+                deviceToken: sessionStore.currentDeviceToken
             )
             guard await sessionStore.establishAuthenticatedSession(session) else {
                 throw NetworkError.transport
@@ -126,7 +128,7 @@ final class AuthPresenter: ObservableObject {
                 email: viewState.email,
                 password: viewState.password,
                 nick: viewState.nick,
-                deviceToken: sessionStore.deviceToken
+                deviceToken: sessionStore.currentDeviceToken
             )
             guard await sessionStore.establishAuthenticatedSession(session) else {
                 throw NetworkError.transport
@@ -151,7 +153,7 @@ final class AuthPresenter: ObservableObject {
             try await interactor.validateEmailAvailability(email: viewState.email)
             viewState.emailValidationState = .available(message: "사용 가능한 이메일이에요.")
         } catch {
-            let message = resolveErrorMessage(from: error)
+            let message = resolveEmailValidationErrorMessage(from: error)
             viewState.emailValidationState = .unavailable(message: message)
             if error is AuthInputValidationError {
                 viewState.errorMessage = message
@@ -259,6 +261,8 @@ final class AuthPresenter: ObservableObject {
                 return "네트워크 상태를 확인해 주세요."
             case .configuration(let configurationError):
                 return configurationError.authUserMessage
+            case .authenticationFailed(let message):
+                return message.isEmpty ? "로그인 처리에 실패했어요. 잠시 후 다시 시도해 주세요." : message
             case .notFound(let message),
                  .conflict(let message),
                  .businessAuthorization(let message),
@@ -284,6 +288,29 @@ final class AuthPresenter: ObservableObject {
         }
 
         return "로그인에 실패했어요. 다시 시도해 주세요."
+    }
+
+    private func resolveEmailValidationErrorMessage(from error: Error) -> String {
+        if case NetworkError.invalidRequest = error {
+            return "이메일 형식을 다시 확인해 주세요."
+        }
+
+        return resolveErrorMessage(from: error)
+    }
+
+    private func resolveSocialErrorMessage(from error: Error, provider: AuthProvider) -> String {
+        guard let networkError = error as? NetworkError else {
+            return resolveErrorMessage(from: error)
+        }
+
+        switch (provider, networkError) {
+        case (.kakao, .authenticationFailed):
+            return "카카오 계정을 확인해 주세요."
+        case (.kakao, .conflict):
+            return "이미 다른 방법으로 가입된 계정입니다. 기존 가입 수단으로 로그인해 주세요."
+        default:
+            return resolveErrorMessage(from: error)
+        }
     }
 
     private func logFailure(_ error: Error, provider: AuthProvider) {

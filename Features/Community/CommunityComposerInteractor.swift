@@ -241,7 +241,7 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
             return .unavailable(message: "네트워크 연결을 확인한 뒤 다시 시도해 주세요.")
         case .decoding:
             return .unavailable(message: "게시글 응답을 해석하지 못했어요.")
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .configuration:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .configuration:
             return .unavailable(message: networkError.localizedDescription)
         }
     }
@@ -277,7 +277,7 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
             return .unavailable(message: "네트워크 연결을 확인한 뒤 다시 시도해 주세요.")
         case .decoding:
             return .unavailable(message: "첨부 파일 업로드 응답을 해석하지 못했어요.")
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .configuration:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .configuration:
             return .unavailable(message: networkError.localizedDescription)
         }
     }
@@ -290,7 +290,7 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
         switch networkError {
         case .invalidRequest, .abnormalRequest:
             return "400/422"
-        case .unauthorized:
+        case .unauthorized, .authenticationFailed:
             return "401"
         case .forbidden:
             return "403"

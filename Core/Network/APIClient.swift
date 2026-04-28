@@ -28,6 +28,8 @@ final class APIClient: APIClientProtocol {
     ) async throws -> ResponseDTO {
         do {
             let request = try await requestBuilder.build(for: endpoint)
+            logRequestBodyIfNeeded(endpoint: endpoint, request: request)
+            logRequestStartedIfNeeded(endpoint: endpoint)
             let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw NetworkError.transport
@@ -50,6 +52,7 @@ final class APIClient: APIClientProtocol {
                     didRetryAfterRefresh: true
                 )
             default:
+                let serverMessage = HTTPStatusMapper.message(statusCode: httpResponse.statusCode, data: data)
                 let mappedError = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
                 if httpResponse.statusCode == 444 {
                     Logger.shared.error(
@@ -57,10 +60,15 @@ final class APIClient: APIClientProtocol {
                     )
                 }
                 Logger.shared.warning(
-                    "HTTP request failed. endpoint=\(endpoint.method.rawValue) \(endpoint.path) statusCode=\(httpResponse.statusCode) message=\(mappedError.localizedDescription)"
+                    "HTTP request failed. endpoint=\(endpoint.method.rawValue) \(endpoint.path) statusCode=\(httpResponse.statusCode) serverMessage=\(serverMessage) mappedMessage=\(mappedError.localizedDescription)"
                 )
+                if endpoint.path == "/v1/users/login/kakao" {
+                    Logger.shared.warning(
+                        "[Auth] social login failed provider=kakao endpoint=\(endpoint.path) statusCode=\(httpResponse.statusCode) serverMessage=\(serverMessage)"
+                    )
+                }
                 switch mappedError {
-                case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .forbidden:
+                case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .forbidden:
                     await tokenRefreshCoordinator.invalidateSession()
                 default:
                     break
@@ -95,6 +103,41 @@ final class APIClient: APIClientProtocol {
 
             throw NetworkError.transport
         }
+    }
+
+    private func logRequestBodyIfNeeded<ResponseDTO: Decodable & Sendable>(
+        endpoint: Endpoint<ResponseDTO>,
+        request: URLRequest
+    ) {
+#if DEBUG
+        guard endpoint.path == "/v1/users/login/kakao",
+              endpoint.method == .post else {
+            return
+        }
+
+        let jsonObject = request.httpBody.flatMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+        }
+        let oauthToken = jsonObject?["oauthToken"] as? String
+        let deviceToken = jsonObject?["deviceToken"] as? String
+
+        Logger.shared.debug(
+            "[Auth] kakao login request body endpoint=/v1/users/login/kakao oauthTokenSummary=\(SensitiveLogRedactor.summary(for: oauthToken)) deviceTokenSummary=\(SensitiveLogRedactor.summary(for: deviceToken))"
+        )
+#endif
+    }
+
+    private func logRequestStartedIfNeeded<ResponseDTO: Decodable & Sendable>(
+        endpoint: Endpoint<ResponseDTO>
+    ) {
+#if DEBUG
+        guard endpoint.path == "/v1/users/login/kakao",
+              endpoint.method == .post else {
+            return
+        }
+
+        Logger.shared.debug("HTTP request started endpoint=POST /v1/users/login/kakao")
+#endif
     }
 
     private func shouldAttemptRefresh<ResponseDTO: Decodable & Sendable>(

@@ -1,6 +1,6 @@
 import Foundation
 
-enum AuthorizationPolicy: Sendable {
+enum AuthorizationPolicy: Equatable, Sendable {
     case none
     case accessToken
     case refreshToken

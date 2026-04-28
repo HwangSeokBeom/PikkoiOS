@@ -50,7 +50,7 @@ final class KakaoLoginService {
             return
         }
 
-        KakaoSDK.initSDK(appKey: kakaoNativeAppKey)
+        KakaoSDK.initSDK(appKey: kakaoNativeAppKey, loggingEnable: false)
         hasPreparedSDK = true
 #endif
     }

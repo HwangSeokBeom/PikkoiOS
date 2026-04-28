@@ -5,6 +5,7 @@ enum NetworkError: Error, Equatable, Sendable {
     case abnormalRequest(message: String)
     case configuration(AppConfigurationError)
     case unauthorized
+    case authenticationFailed(message: String)
     case accessTokenExpired
     case refreshTokenExpired
     case forbidden
@@ -28,6 +29,8 @@ extension NetworkError: LocalizedError {
             return error.userMessage
         case .unauthorized:
             return "Authentication failed."
+        case .authenticationFailed(let message):
+            return message
         case .accessTokenExpired:
             return "The access token has expired."
         case .refreshTokenExpired:
@@ -52,7 +55,7 @@ extension NetworkError: LocalizedError {
 extension NetworkError {
     var isAuthenticationFailure: Bool {
         switch self {
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .forbidden:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .forbidden:
             return true
         default:
             return false
@@ -61,7 +64,7 @@ extension NetworkError {
 
     var shouldInvalidateSessionImmediately: Bool {
         switch self {
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .forbidden:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .forbidden:
             return true
         default:
             return false

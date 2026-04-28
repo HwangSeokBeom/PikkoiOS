@@ -210,7 +210,7 @@ final class ProfilePresenter: ObservableObject {
                  .server(let message),
                  .abnormalRequest(let message):
                 return message
-            case .unauthorized, .accessTokenExpired, .refreshTokenExpired:
+            case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired:
                 return "다시 로그인한 뒤 프로필을 수정해 주세요."
             case .rateLimited:
                 return "요청이 많아요. 잠시 후 다시 시도해 주세요."

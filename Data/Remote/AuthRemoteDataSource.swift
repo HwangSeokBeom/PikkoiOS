@@ -226,6 +226,13 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
             guard let oauthToken = credential.accessToken, !oauthToken.isEmpty else {
                 throw NetworkError.invalidRequest
             }
+            guard let deviceToken = deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !deviceToken.isEmpty else {
+                Logger.shared.warning(
+                    "[Auth] kakao deviceToken missing endpoint=/v1/users/login/kakao oauthTokenSummary=\(SensitiveLogRedactor.summary(for: oauthToken))"
+                )
+                throw NetworkError.invalidRequest
+            }
             return try encoder.encode(
                 KakaoLoginRequestDTO(
                     oauthToken: oauthToken,

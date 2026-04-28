@@ -242,3 +242,14 @@ final class SessionStore: ObservableObject {
         return "\(currentUserID)|\(deviceToken)"
     }
 }
+
+@MainActor
+protocol DeviceTokenProviding: AnyObject {
+    var currentDeviceToken: String? { get }
+}
+
+extension SessionStore: DeviceTokenProviding {
+    var currentDeviceToken: String? {
+        deviceToken
+    }
+}

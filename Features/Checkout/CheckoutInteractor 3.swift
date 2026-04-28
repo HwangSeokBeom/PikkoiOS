@@ -79,7 +79,7 @@ struct CheckoutInteractor: CheckoutInteracting {
 
     private func map(error: NetworkError) -> CheckoutFeatureError {
         switch error {
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired:
             return .authenticationRequired
         case .invalidRequest, .abnormalRequest:
             return .validation(message: "입력값 또는 결제 금액을 다시 확인해 주세요.")

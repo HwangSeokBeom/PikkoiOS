@@ -58,6 +58,8 @@ struct CommunityDetailRootView: View {
         .navigationDestination(isPresented: storeDetailPresentedBinding) {
             if let presentedStoreID {
                 makeStoreDetailView(presentedStoreID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: composerPresentedBinding) {

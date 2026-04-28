@@ -89,9 +89,42 @@ final class AuthFeatureTests: XCTestCase {
 
         let recordedCredential = await repository.recordedCredential
         XCTAssertEqual(recordedCredential?.provider, .kakao)
+        let recordedDeviceToken = await repository.recordedSocialSignInDeviceToken
+        XCTAssertEqual(recordedDeviceToken, "debug-ios-simulator-device-token")
         XCTAssertTrue(sessionStore.isAuthenticated)
         XCTAssertEqual(sessionStore.currentUserID, "server-user")
         XCTAssertEqual(router.completeAuthenticationCount, 1)
+
+        let productionInteractor = AuthInteractor(
+            authRepository: SpyAuthRepository(),
+            socialAuthService: StubSocialAuthService(
+                signInResult: .success(
+                    SocialLoginCredential(
+                        provider: .kakao,
+                        accessToken: "kakao-oauth-token",
+                        idToken: "kakao-id-token",
+                        authorizationCode: nil,
+                        email: nil,
+                        nickname: nil,
+                        rawNonce: nil,
+                        userIdentifier: nil
+                    )
+                )
+            ),
+            appConfiguration: makeAppConfiguration(environment: .production)
+        )
+
+        do {
+            _ = try await productionInteractor.signIn(with: .kakao, deviceToken: nil)
+            XCTFail("Expected missing production device token to fail")
+        } catch let error as AuthDeviceTokenMissingError {
+            XCTAssertEqual(
+                error.errorDescription,
+                "푸시 알림 설정을 초기화하는 중입니다. 잠시 후 다시 시도해 주세요."
+            )
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     func testAuthViewStateDoesNotExposeGoogleProvider() {
@@ -117,6 +150,47 @@ final class AuthFeatureTests: XCTestCase {
         XCTAssertNil(presenter.viewState.errorMessage)
         XCTAssertFalse(presenter.viewState.isLoading)
         XCTAssertNil(presenter.viewState.loadingProvider)
+    }
+
+    func testAuthPresenterShowsKakaoAccountMessageForUnauthorized() async {
+        let presenter = AuthPresenter(
+            interactor: AuthInteractor(
+                authRepository: FailingAuthRepository(
+                    error: NetworkError.authenticationFailed(message: "계정을 확인해주세요.")
+                ),
+                socialAuthService: StubSocialAuthService(),
+                appConfiguration: makeAppConfiguration()
+            ),
+            router: SpyAuthRouter(),
+            sessionStore: makeSessionStore()
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.providerTapped(.kakao))
+
+        XCTAssertEqual(presenter.viewState.errorMessage, "카카오 계정을 확인해 주세요.")
+    }
+
+    func testAuthPresenterShowsDuplicateProviderMessageForKakaoConflict() async {
+        let presenter = AuthPresenter(
+            interactor: AuthInteractor(
+                authRepository: FailingAuthRepository(
+                    error: NetworkError.conflict(message: "이미 가입된 유저입니다.")
+                ),
+                socialAuthService: StubSocialAuthService(),
+                appConfiguration: makeAppConfiguration()
+            ),
+            router: SpyAuthRouter(),
+            sessionStore: makeSessionStore()
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.providerTapped(.kakao))
+
+        XCTAssertEqual(
+            presenter.viewState.errorMessage,
+            "이미 다른 방법으로 가입된 계정입니다. 기존 가입 수단으로 로그인해 주세요."
+        )
     }
 
     func testAuthPresenterSuppressesDuplicateConfigurationErrorCard() async {
@@ -367,9 +441,9 @@ final class AuthFeatureTests: XCTestCase {
         )
     }
 
-    private func makeAppConfiguration() -> AppConfiguration {
+    private func makeAppConfiguration(environment: AppEnvironment = .development) -> AppConfiguration {
         AppConfiguration(
-            environment: .development,
+            environment: environment,
             baseURL: URL(string: "https://example.com")!,
             seSACKey: "test-sesac-key",
             kakaoNativeAppKey: "kakao-key",
@@ -465,6 +539,7 @@ private final class SpyAuthRouter: AuthRouting {
 
 private actor SpyAuthRepository: AuthRepository {
     private(set) var recordedCredential: SocialLoginCredential?
+    private(set) var recordedSocialSignInDeviceToken: String?
     private(set) var recordedEmailSignIn: (email: String, password: String, deviceToken: String?)?
     private let validateEmailResult: Result<Void, Error>
     private let storedProfile: UserProfile
@@ -493,7 +568,7 @@ private actor SpyAuthRepository: AuthRepository {
 
     func signIn(with credential: SocialLoginCredential, deviceToken: String?) async throws -> UserSession {
         recordedCredential = credential
-        _ = deviceToken
+        recordedSocialSignInDeviceToken = deviceToken
         return UserSession(
             userID: "server-user",
             email: "server@example.com",

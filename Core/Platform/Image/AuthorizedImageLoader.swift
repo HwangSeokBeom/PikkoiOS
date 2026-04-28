@@ -107,7 +107,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             default:
                 let error = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
                 switch error {
-                case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .forbidden:
+                case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .forbidden:
                     await tokenRefreshCoordinator.invalidateSession()
                 default:
                     break

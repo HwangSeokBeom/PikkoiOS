@@ -283,7 +283,7 @@ struct HomeInteractor: HomeInteracting {
             return .unavailable(message: "홈 정보를 잠시 불러오지 못했어요. 잠시 후 다시 시도해 주세요.")
         case .transport:
             return .unavailable(message: "네트워크 연결을 확인한 뒤 다시 시도해 주세요.")
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired:
             return .unavailable(message: networkError.localizedDescription)
         case .configuration(let error):
             return .configurationRequired(message: error.userMessage)

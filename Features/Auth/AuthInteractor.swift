@@ -56,20 +56,60 @@ struct AuthInteractor: AuthInteracting {
 
     func signIn(with provider: AuthProvider, deviceToken: String?) async throws -> UserSession {
         let credential = try await socialAuthService.signIn(with: provider)
-        if provider == .apple {
+        let resolvedDeviceToken = try resolveDeviceToken(
+            provider: provider,
+            storedDeviceToken: deviceToken,
+            oauthToken: credential.accessToken
+        )
+        switch provider {
+        case .kakao:
             Logger.shared.debug(
-                "[Auth] apple credential received idTokenExists=\(credential.idToken?.isEmpty == false) authorizationCodeExists=\(credential.authorizationCode?.isEmpty == false)"
+                "[Auth] kakao credential received kakaoOAuthTokenSummary=\(SensitiveLogRedactor.summary(for: credential.accessToken)) kakaoIDTokenSummary=\(SensitiveLogRedactor.summary(for: credential.idToken))"
+            )
+        case .apple:
+            Logger.shared.debug(
+                "[Auth] apple credential received appleIDTokenSummary=\(SensitiveLogRedactor.summary(for: credential.idToken)) appleAuthorizationCodeSummary=\(SensitiveLogRedactor.summary(for: credential.authorizationCode))"
             )
         }
         Logger.shared.debug("[Auth] social login request started provider=\(provider.rawValue)")
         do {
-            let session = try await authRepository.signIn(with: credential, deviceToken: deviceToken)
+            let session = try await authRepository.signIn(with: credential, deviceToken: resolvedDeviceToken)
             Logger.shared.debug("[Auth] social login succeeded provider=\(provider.rawValue)")
             return session
         } catch {
             Logger.shared.warning("[Auth] social login failed provider=\(provider.rawValue) reason=\(error.localizedDescription)")
             throw error
         }
+    }
+
+    private func resolveDeviceToken(
+        provider: AuthProvider,
+        storedDeviceToken: String?,
+        oauthToken: String?
+    ) throws -> String? {
+        guard provider == .kakao else {
+            return storedDeviceToken
+        }
+
+        if let trimmed = storedDeviceToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty {
+            return trimmed
+        }
+
+#if DEBUG
+        if appConfiguration.environment != .production {
+            let fallback = "debug-ios-simulator-device-token"
+            Logger.shared.warning(
+                "[Auth] deviceToken missing; using debug fallback for kakao login. environment=\(appConfiguration.environment.rawValue) simulator=\(DeviceTokenResolutionContext.isSimulator) oauthTokenSummary=\(SensitiveLogRedactor.summary(for: oauthToken)) deviceTokenSummary=\(SensitiveLogRedactor.summary(for: fallback))"
+            )
+            return fallback
+        }
+#endif
+
+        Logger.shared.warning(
+            "[Auth] deviceToken missing for kakao login. environment=\(appConfiguration.environment.rawValue) simulator=\(DeviceTokenResolutionContext.isSimulator) oauthTokenSummary=\(SensitiveLogRedactor.summary(for: oauthToken))"
+        )
+        throw AuthDeviceTokenMissingError()
     }
 
     func signIn(email: String, password: String, deviceToken: String?) async throws -> UserSession {
@@ -122,6 +162,7 @@ struct AuthInteractor: AuthInteracting {
             case .forbidden,
                  .rateLimited,
                  .unauthorized,
+                 .authenticationFailed,
                  .accessTokenExpired,
                  .refreshTokenExpired,
                  .decoding:
@@ -206,5 +247,21 @@ enum AuthEmailValidationError: LocalizedError, Equatable {
         case .invalid(let message), .alreadyInUse(let message), .unavailable(let message):
             return message
         }
+    }
+}
+
+struct AuthDeviceTokenMissingError: LocalizedError, Equatable {
+    var errorDescription: String? {
+        "푸시 알림 설정을 초기화하는 중입니다. 잠시 후 다시 시도해 주세요."
+    }
+}
+
+private enum DeviceTokenResolutionContext {
+    static var isSimulator: Bool {
+#if targetEnvironment(simulator)
+        true
+#else
+        false
+#endif
     }
 }

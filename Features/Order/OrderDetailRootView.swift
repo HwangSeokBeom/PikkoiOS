@@ -49,6 +49,8 @@ struct OrderDetailRootView: View {
         .navigationDestination(isPresented: storeDetailPresentedBinding) {
             if let presentedStoreID {
                 makeStoreDetailView(presentedStoreID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: reviewComposerPresentedBinding) {
@@ -56,6 +58,8 @@ struct OrderDetailRootView: View {
                 makeReviewComposerView(presentedReviewContext) { _ in
                     Task { await presenter.send(.retryTapped) }
                 }
+            } else {
+                EmptyView()
             }
         }
         .onChange(of: sessionStore.isAuthenticated) { previousValue, isAuthenticated in

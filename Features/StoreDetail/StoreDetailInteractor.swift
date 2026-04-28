@@ -151,7 +151,7 @@ struct StoreDetailInteractor: StoreDetailInteracting {
             return .unavailable(message: "가게 상세 응답을 해석하지 못했어요.")
         case .transport:
             return .unavailable(message: "네트워크 연결을 확인한 뒤 다시 시도해 주세요.")
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .configuration:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .configuration:
             return .unavailable(message: networkError.localizedDescription)
         }
     }
@@ -181,7 +181,7 @@ struct StoreDetailInteractor: StoreDetailInteracting {
              .businessAuthorization(let message),
              .server(let message):
             return message
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .configuration:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .configuration:
             return networkError.localizedDescription
         }
     }

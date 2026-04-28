@@ -184,6 +184,8 @@ struct ProfileRootView: View {
         .navigationDestination(isPresented: myPostsPresentedBinding) {
             if let userID = router.presentedMyPostsUserID {
                 makeMyPostsView(userID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: likedPostsPresentedBinding) {
@@ -192,6 +194,8 @@ struct ProfileRootView: View {
         .navigationDestination(isPresented: myReviewsPresentedBinding) {
             if let userID = router.presentedMyReviewsUserID {
                 makeMyReviewsView(userID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: $isChatListPresented) {
@@ -593,7 +597,7 @@ struct StoreListInteractor: StoreListInteracting {
         switch error {
         case .configuration(let configurationError):
             return .configurationRequired(message: configurationError.userMessage)
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired:
             return .authenticationRequired
         case .invalidRequest, .abnormalRequest:
             return .unavailable(message: "요청 정보를 다시 확인해 주세요.")
@@ -1084,6 +1088,8 @@ struct UserSearchRootView: View {
         .navigationDestination(isPresented: chatPresentedBinding) {
             if let presentedOpponentID {
                 makeChatView(presentedOpponentID)
+            } else {
+                EmptyView()
             }
         }
     }
@@ -1781,6 +1787,8 @@ struct StoreListRootView: View {
         .navigationDestination(isPresented: storeDetailPresentedBinding) {
             if let presentedStoreID {
                 makeStoreDetailView(presentedStoreID)
+            } else {
+                EmptyView()
             }
         }
     }
@@ -2019,7 +2027,7 @@ struct CommunityPostListInteractor: CommunityPostListInteracting {
         switch error {
         case .configuration(let configurationError):
             return .configurationRequired(message: configurationError.userMessage)
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired:
             return .authenticationRequired
         case .invalidRequest, .abnormalRequest:
             return .unavailable(message: "요청 정보를 다시 확인해 주세요.")
@@ -2415,11 +2423,15 @@ struct CommunityPostListRootView: View {
         .navigationDestination(isPresented: postDetailPresentedBinding) {
             if let presentedPostID {
                 makeCommunityDetailView(presentedPostID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: storeDetailPresentedBinding) {
             if let presentedStoreID {
                 makeStoreDetailView(presentedStoreID)
+            } else {
+                EmptyView()
             }
         }
     }
@@ -3263,6 +3275,8 @@ struct UserReviewListRootView: View {
         .navigationDestination(isPresented: storeDetailPresentedBinding) {
             if let presentedStoreID {
                 makeStoreDetailView(presentedStoreID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: reviewComposerPresentedBinding) {
@@ -3270,6 +3284,8 @@ struct UserReviewListRootView: View {
                 makeReviewComposerView(presentedReviewContext) { _ in
                     Task { await presenter.refreshAfterMutation() }
                 }
+            } else {
+                EmptyView()
             }
         }
         .task {

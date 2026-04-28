@@ -71,16 +71,22 @@ struct HomeRootView: View {
         .navigationDestination(isPresented: storeDetailPresentedBinding) {
             if let presentedStoreID {
                 makeStoreDetailView(presentedStoreID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: searchPresentedBinding) {
             if let presentedSearchQuery {
                 makeStoreSearchView(presentedSearchQuery)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: bannerPresentedBinding) {
             if let presentedBanner {
                 makeBannerWebView(presentedBanner)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: locationSearchPresentedBinding) {

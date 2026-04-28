@@ -86,16 +86,22 @@ struct CommunityRootView: View {
         .navigationDestination(isPresented: communityDetailPresentedBinding) {
             if let presentedPostID {
                 makeCommunityDetailView(presentedPostID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: storeDetailPresentedBinding) {
             if let presentedStoreID {
                 makeStoreDetailView(presentedStoreID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: communitySearchPresentedBinding) {
             if let presentedSearchQuery {
                 makeCommunitySearchView(presentedSearchQuery)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: communityComposerPresentedBinding) {

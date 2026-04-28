@@ -53,6 +53,106 @@ final class NetworkInfrastructureTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "RefreshToken"))
     }
 
+    func testKakaoLoginUsesSwaggerPathOAuthTokenBodyAndNoAppAuthorization() async throws {
+        let apiClient = RecordingAPIClient(
+            response: LoginResponseDTO(
+                userID: "server-user",
+                email: "user@example.com",
+                nick: "픽코",
+                profileImage: nil,
+                accessToken: "server-access",
+                refreshToken: "server-refresh"
+            )
+        )
+        let dataSource = AuthRemoteDataSource(apiClient: apiClient)
+
+        _ = try await dataSource.signIn(
+            with: SocialLoginCredential(
+                provider: .kakao,
+                accessToken: "kakao-oauth-token",
+                idToken: "kakao-id-token",
+                authorizationCode: nil,
+                email: nil,
+                nickname: nil,
+                rawNonce: nil,
+                userIdentifier: nil
+            ),
+            deviceToken: "device-token"
+        )
+
+        XCTAssertEqual(apiClient.recordedPath, "/v1/users/login/kakao")
+        XCTAssertEqual(apiClient.recordedMethod, .post)
+        XCTAssertEqual(apiClient.recordedAuthorizationPolicy, Optional.some(.none))
+
+        guard case let .json(payload)? = apiClient.recordedBody else {
+            return XCTFail("Expected Kakao login JSON body")
+        }
+
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: String])
+        XCTAssertEqual(object["oauthToken"], "kakao-oauth-token")
+        XCTAssertEqual(object["deviceToken"], "device-token")
+        XCTAssertNil(object["idToken"])
+        XCTAssertNil(object["provider"])
+    }
+
+    func testKakaoLoginRejectsMissingDeviceTokenBeforeSendingEmptyString() async throws {
+        let apiClient = RecordingAPIClient(
+            response: LoginResponseDTO(
+                userID: "server-user",
+                email: "user@example.com",
+                nick: "픽코",
+                profileImage: nil,
+                accessToken: "server-access",
+                refreshToken: "server-refresh"
+            )
+        )
+        let dataSource = AuthRemoteDataSource(apiClient: apiClient)
+
+        do {
+            _ = try await dataSource.signIn(
+                with: SocialLoginCredential(
+                    provider: .kakao,
+                    accessToken: "kakao-oauth-token",
+                    idToken: "kakao-id-token",
+                    authorizationCode: nil,
+                    email: nil,
+                    nickname: nil,
+                    rawNonce: nil,
+                    userIdentifier: nil
+                ),
+                deviceToken: nil
+            )
+            XCTFail("Expected missing device token to fail before sending")
+        } catch let error as NetworkError {
+            XCTAssertEqual(error, .invalidRequest)
+        }
+
+        XCTAssertNil(apiClient.recordedPath)
+        XCTAssertNil(apiClient.recordedBody)
+    }
+
+    func testLoginResponseDecodesSwaggerMixedCaseKeys() throws {
+        let data = """
+        {
+          "user_id": "server-user",
+          "email": "user@example.com",
+          "nick": "새싹이Abc12",
+          "profileImage": "/data/profiles/user.png",
+          "accessToken": "server-access",
+          "refreshToken": "server-refresh"
+        }
+        """.data(using: .utf8)!
+
+        let response = try NetworkCoding.makeJSONDecoder().decode(LoginResponseDTO.self, from: data)
+
+        XCTAssertEqual(response.userID, "server-user")
+        XCTAssertEqual(response.email, "user@example.com")
+        XCTAssertEqual(response.nick, "새싹이Abc12")
+        XCTAssertEqual(response.profileImage, "/data/profiles/user.png")
+        XCTAssertEqual(response.accessToken, "server-access")
+        XCTAssertEqual(response.refreshToken, "server-refresh")
+    }
+
     func testRequestBuilderBuildsPickupURLWithoutCollapsingHostToV1() async throws {
         let tokenStore = StubTokenStore(tokens: nil)
         let configuration = AppConfiguration(
@@ -223,6 +323,22 @@ final class NetworkInfrastructureTests: XCTestCase {
         let error = HTTPStatusMapper.map(statusCode: 400, data: data)
 
         XCTAssertEqual(error, .abnormalRequest(message: "유효하지 않은 결제건입니다."))
+    }
+
+    func testHTTPStatusMapperPreservesUnauthorizedServerMessage() {
+        let data = #"{"message":"계정을 확인해주세요."}"#.data(using: .utf8)!
+
+        let error = HTTPStatusMapper.map(statusCode: 401, data: data)
+
+        XCTAssertEqual(error, .authenticationFailed(message: "계정을 확인해주세요."))
+    }
+
+    func testHTTPStatusMapperPreservesConflictServerMessage() {
+        let data = #"{"message":"이미 가입된 유저입니다."}"#.data(using: .utf8)!
+
+        let error = HTTPStatusMapper.map(statusCode: 409, data: data)
+
+        XCTAssertEqual(error, .conflict(message: "이미 가입된 유저입니다."))
     }
 
     func testAPIClientRefreshesOn401AndRetriesOriginalRequestOnce() async throws {
@@ -517,6 +633,7 @@ private final class RecordingAPIClient: APIClientProtocol, @unchecked Sendable {
     private(set) var recordedPath: String?
     private(set) var recordedMethod: HTTPMethod?
     private(set) var recordedBody: RequestBody?
+    private(set) var recordedAuthorizationPolicy: AuthorizationPolicy?
 
     init(fileUploadResponse: CommunityFileUploadResponseDTO) {
         self.response = fileUploadResponse
@@ -530,6 +647,7 @@ private final class RecordingAPIClient: APIClientProtocol, @unchecked Sendable {
         recordedPath = endpoint.path
         recordedMethod = endpoint.method
         recordedBody = endpoint.body
+        recordedAuthorizationPolicy = endpoint.authorizationPolicy
 
         if let response = response as? ResponseDTO {
             return response

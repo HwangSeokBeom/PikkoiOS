@@ -472,7 +472,7 @@ struct ChatInteractor: ChatInteracting {
         case .transport:
             Logger.shared.warning("[Chat] network failed error=transport")
             return .networkUnavailable(message: "네트워크 연결을 확인한 뒤 다시 시도해 주세요.")
-        case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .configuration:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .configuration:
             return .unavailable(message: networkError.localizedDescription)
         }
     }

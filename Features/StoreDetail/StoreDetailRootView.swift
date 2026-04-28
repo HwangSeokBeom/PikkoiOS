@@ -54,11 +54,15 @@ struct StoreDetailRootView: View {
         .navigationDestination(isPresented: cartPresentedBinding) {
             if let presentedCartStoreID {
                 makeCartView(presentedCartStoreID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: chatPresentedBinding) {
             if let presentedChatStoreID {
                 makeChatView(presentedChatStoreID)
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: reviewComposerPresentedBinding) {
@@ -66,6 +70,8 @@ struct StoreDetailRootView: View {
                 makeReviewComposerView(presentedReviewContext) { _ in
                     Task { await presenter.send(.retryTapped) }
                 }
+            } else {
+                EmptyView()
             }
         }
         .fullScreenCover(isPresented: authPresentedBinding) {
