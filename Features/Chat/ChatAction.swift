@@ -2,6 +2,7 @@ import Foundation
 
 enum ChatAction {
     case onAppear
+    case onDisappear
     case refreshRequested
     case primaryButtonTapped
     case roomTapped(String)

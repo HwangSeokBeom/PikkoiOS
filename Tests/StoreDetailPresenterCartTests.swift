@@ -218,6 +218,7 @@ private struct StubStoreDetailInteractor: StoreDetailInteracting {
 private final class SpyStoreDetailRouter: StoreDetailRouting {
     private(set) var routedDirectionsStoreName: String?
     private(set) var routedChatStoreID: String?
+    private(set) var routedChatTarget: ChatTarget?
     private(set) var routedCartStoreID: String?
     private(set) var routedReviewContext: ReviewComposerContext?
     private(set) var authRouteRequested = false
@@ -235,8 +236,11 @@ private final class SpyStoreDetailRouter: StoreDetailRouting {
         routedDirectionsStoreName = storeName
     }
 
-    func routeToChat(storeID: String) {
-        routedChatStoreID = storeID
+    func routeToChat(target: ChatTarget) {
+        routedChatTarget = target
+        if case .store(let storeID, _, _, _, _) = target {
+            routedChatStoreID = storeID
+        }
     }
 
     func routeToCart(storeID: String) {

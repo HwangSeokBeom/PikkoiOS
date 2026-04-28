@@ -10,6 +10,7 @@ struct CommunityDetailBuilder {
     private let makeAuthView: (AuthPresentationContext, @escaping () -> Void) -> AnyView
     private let makeCommunityComposerView: (CommunityComposerMode, CommunityComposerInitialDraft?, @escaping (String) -> Void) -> AnyView
     private let makeStoreDetailView: (String) -> AnyView
+    private let makeChatView: (ChatTarget) -> AnyView
 
     init(
         postID: String,
@@ -19,7 +20,8 @@ struct CommunityDetailBuilder {
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping (AuthPresentationContext, @escaping () -> Void) -> AnyView,
         makeCommunityComposerView: @escaping (CommunityComposerMode, CommunityComposerInitialDraft?, @escaping (String) -> Void) -> AnyView,
-        makeStoreDetailView: @escaping (String) -> AnyView
+        makeStoreDetailView: @escaping (String) -> AnyView,
+        makeChatView: @escaping (ChatTarget) -> AnyView
     ) {
         self.postID = postID
         self.communityRepository = communityRepository
@@ -29,6 +31,7 @@ struct CommunityDetailBuilder {
         self.makeAuthView = makeAuthView
         self.makeCommunityComposerView = makeCommunityComposerView
         self.makeStoreDetailView = makeStoreDetailView
+        self.makeChatView = makeChatView
     }
 
     func build() -> CommunityDetailRootView {
@@ -52,7 +55,8 @@ struct CommunityDetailBuilder {
             imageLoader: imageLoader,
             makeAuthView: makeAuthView,
             makeCommunityComposerView: makeCommunityComposerView,
-            makeStoreDetailView: makeStoreDetailView
+            makeStoreDetailView: makeStoreDetailView,
+            makeChatView: makeChatView
         )
     }
 }

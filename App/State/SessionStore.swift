@@ -230,6 +230,26 @@ final class SessionStore: ObservableObject {
                 }
             }
         )
+
+        notificationObservers.append(
+            center.addObserver(
+                forName: .pikkoFCMTokenDidRefresh,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                let fcmToken = notification.userInfo?[FCMTokenNotificationUserInfoKey.token] as? String
+
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          let fcmToken = fcmToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !fcmToken.isEmpty else {
+                        return
+                    }
+
+                    self.updateDeviceToken(fcmToken)
+                }
+            }
+        )
     }
 
     private var currentDeviceTokenSignature: String? {
@@ -252,4 +272,12 @@ extension SessionStore: DeviceTokenProviding {
     var currentDeviceToken: String? {
         deviceToken
     }
+}
+
+enum FCMTokenNotificationUserInfoKey {
+    static let token = "token"
+}
+
+extension Notification.Name {
+    static let pikkoFCMTokenDidRefresh = Notification.Name("pikkoFCMTokenDidRefresh")
 }

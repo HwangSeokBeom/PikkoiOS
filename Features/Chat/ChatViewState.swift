@@ -15,11 +15,24 @@ struct ChatRoomRowViewState: Equatable, Identifiable {
 
 struct ChatMessageRowViewState: Equatable, Identifiable {
     let id: String
+    let dateText: String?
     let content: String
     let filePaths: [String]
     let timeText: String
     let senderName: String
     let isMine: Bool
+    let sendStatus: ChatSendStatus
+
+    var statusText: String? {
+        switch sendStatus {
+        case .sending:
+            return "전송 중"
+        case .failed:
+            return "전송 실패"
+        case .sent:
+            return nil
+        }
+    }
 }
 
 struct ChatViewState: Equatable {

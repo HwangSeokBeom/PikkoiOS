@@ -68,8 +68,10 @@ struct CommunityFeedSectionView: View {
         posts: [
             .init(
                 id: "community-post-preview",
+                authorID: "author-preview",
                 authorName: "새싹 초로록 찹찹",
                 authorAvatarPath: "community-avatar-preview",
+                canChatWithAuthor: false,
                 timeText: "51분 전",
                 title: "입안에서 피어나는 봄, 도넛 한 입",
                 bodyText: "가게 문을 열자마자 퍼지는 달콤한 향기와 포근한 맛이 하루를 천천히 풀어줬어요.",

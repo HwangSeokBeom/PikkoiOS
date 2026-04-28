@@ -20,9 +20,10 @@ struct RequestBuilder: Sendable {
         guard configuration.hasValidSeSACKey else {
             throw NetworkError.configuration(configuration.seSACKeyError ?? .missingSeSACKey)
         }
-        request.setValue(configuration.seSACKey, forHTTPHeaderField: "SeSACKey")
+        request.setValue(configuration.seSACKey, forHTTPHeaderField: "SesacKey")
 
         try await applyAuthorizationHeaders(to: &request, policy: endpoint.authorizationPolicy)
+        logRequestHeadersIfNeeded(request: request, endpoint: endpoint)
 
         for (field, value) in endpoint.headers {
             request.setValue(value, forHTTPHeaderField: field)
@@ -75,5 +76,20 @@ struct RequestBuilder: Sendable {
             )
             request.setValue(tokens.refreshToken, forHTTPHeaderField: "RefreshToken")
         }
+    }
+
+    private func logRequestHeadersIfNeeded<ResponseDTO: Decodable & Sendable>(
+        request: URLRequest,
+        endpoint: Endpoint<ResponseDTO>
+    ) {
+#if DEBUG
+        guard endpoint.authorizationPolicy.requiresAuthenticatedSession else { return }
+
+        let authorization = request.value(forHTTPHeaderField: "Authorization")
+        let sesacKey = request.value(forHTTPHeaderField: "SesacKey")
+        Logger.shared.debug(
+            "[Network] request method=\(endpoint.method.rawValue) url=\(request.url?.absoluteString ?? endpoint.path) hasAuthorization=\(authorization?.isEmpty == false) hasSesacKey=\(sesacKey?.isEmpty == false) accessTokenMasked=\(SensitiveLogRedactor.summary(for: authorization))"
+        )
+#endif
     }
 }

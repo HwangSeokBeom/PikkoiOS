@@ -98,23 +98,29 @@ struct StoreDetailMenuSection: Identifiable, Equatable {
 
 struct StoreDetailReviewPreview: Equatable {
     let id: String?
+    let authorID: String?
     let title: String
     let body: String
     let keywordBadges: [String]
     let authorName: String
+    let authorAvatarPath: String?
     let metricSummary: String
     let ratingText: String
     let showsActions: Bool
+    let canChatWithAuthor: Bool
 
     static let placeholder = StoreDetailReviewPreview(
         id: nil,
+        authorID: nil,
         title: "",
         body: "",
         keywordBadges: [],
         authorName: "",
+        authorAvatarPath: nil,
         metricSummary: "",
         ratingText: "-",
-        showsActions: false
+        showsActions: false,
+        canChatWithAuthor: false
     )
 }
 

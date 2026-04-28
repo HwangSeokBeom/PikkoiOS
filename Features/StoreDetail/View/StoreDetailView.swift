@@ -127,6 +127,9 @@ struct StoreDetailView: View {
                                     },
                                     onDeleteTapped: {
                                         Task { await presenter.send(.reviewDeleteTapped) }
+                                    },
+                                    onAuthorChatTapped: { authorID in
+                                        Task { await presenter.send(.reviewAuthorChatTapped(authorID)) }
                                     }
                                 )
                             }

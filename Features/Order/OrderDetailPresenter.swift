@@ -230,6 +230,10 @@ final class OrderDetailPresenter: ObservableObject {
 
         viewState.orderStatus = event.status
         viewState.statusTitle = event.status.displayTitle
+        viewState.reviewActionTitle = event.status == .completed
+            ? (viewState.reviewID == nil ? "리뷰 작성하기" : "리뷰 수정하기")
+            : nil
+        viewState.isReviewActionEnabled = event.status == .completed
 
         let timeline = viewState.timelineStages.map {
             OrderStatusTimelineEntry(

@@ -49,8 +49,10 @@ struct CommunityDetailCommentEmptyState: Equatable {
 
 struct CommunityDetailCommentRowViewState: Equatable, Identifiable {
     let id: String
+    let authorID: String
     let authorName: String
     let authorAvatarPath: String?
+    let canChatWithAuthor: Bool
     let timeText: String
     let content: String
     let isMine: Bool

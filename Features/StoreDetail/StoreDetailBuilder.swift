@@ -13,7 +13,7 @@ struct StoreDetailBuilder {
     private let imageLoader: any AuthorizedImageLoading
     private let makeAuthView: () -> AnyView
     private let makeCartView: (String) -> CartRootView
-    private let makeChatView: (String) -> ChatRootView
+    private let makeChatView: (ChatTarget) -> ChatRootView
     private let makeReviewComposerView: (ReviewComposerContext, @escaping (UserStoreReview) -> Void) -> AnyView
 
     init(
@@ -27,7 +27,7 @@ struct StoreDetailBuilder {
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping () -> AnyView,
         makeCartView: @escaping (String) -> CartRootView,
-        makeChatView: @escaping (String) -> ChatRootView,
+        makeChatView: @escaping (ChatTarget) -> ChatRootView,
         makeReviewComposerView: @escaping (ReviewComposerContext, @escaping (UserStoreReview) -> Void) -> AnyView
     ) {
         self.storeID = storeID

@@ -1,9 +1,16 @@
+import CoreData
 import Foundation
 
 struct ChatParticipant: Equatable, Sendable, Identifiable {
     let id: String
     let nick: String
     let profileImagePath: String?
+}
+
+enum ChatSendStatus: String, Codable, Equatable, Sendable {
+    case sending
+    case sent
+    case failed
 }
 
 struct ChatMessage: Equatable, Sendable, Identifiable {
@@ -14,6 +21,27 @@ struct ChatMessage: Equatable, Sendable, Identifiable {
     let updatedAt: Date?
     let sender: ChatParticipant
     let filePaths: [String]
+    let sendStatus: ChatSendStatus
+
+    init(
+        id: String,
+        roomID: String,
+        content: String,
+        createdAt: Date?,
+        updatedAt: Date?,
+        sender: ChatParticipant,
+        filePaths: [String],
+        sendStatus: ChatSendStatus = .sent
+    ) {
+        self.id = id
+        self.roomID = roomID
+        self.content = content
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.sender = sender
+        self.filePaths = filePaths
+        self.sendStatus = sendStatus
+    }
 }
 
 struct ChatUploadFile: Equatable, Sendable {
@@ -28,6 +56,49 @@ struct ChatRoom: Equatable, Sendable, Identifiable {
     let updatedAt: Date?
     let participants: [ChatParticipant]
     let lastMessage: ChatMessage?
+}
+
+struct ChatTargetSummary: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        case store
+        case user
+    }
+
+    let id: String
+    let title: String
+    let profileImagePath: String?
+    let kind: Kind
+}
+
+enum ChatTarget: Equatable, Sendable {
+    case store(
+        storeID: String,
+        storeName: String,
+        ownerID: String?,
+        ownerName: String?,
+        ownerProfileImagePath: String?
+    )
+    case user(
+        userID: String,
+        nickname: String,
+        profileImagePath: String?
+    )
+    case room(
+        roomID: String,
+        title: String,
+        target: ChatTargetSummary?
+    )
+
+    var preferredTitle: String {
+        switch self {
+        case .store(_, let storeName, _, _, _):
+            return storeName
+        case .user(_, let nickname, _):
+            return nickname
+        case .room(_, let title, _):
+            return title
+        }
+    }
 }
 
 struct CreateChatRoomRequestDTO: Encodable, Sendable {
@@ -269,6 +340,233 @@ struct ChatMapper: Sendable {
     }
 }
 
+protocol ChatLocalDataSourceProtocol: Sendable {
+    func fetchMessages(roomID: String) async throws -> [ChatMessage]
+    func latestServerMessageDate(roomID: String) async throws -> Date?
+    func upsert(messages: [ChatMessage]) async throws -> [ChatMessage]
+    func savePending(message: ChatMessage) async throws -> [ChatMessage]
+    func replacePendingMessage(localID: String, with message: ChatMessage) async throws -> [ChatMessage]
+    func updateSendStatus(messageID: String, status: ChatSendStatus) async throws -> [ChatMessage]
+}
+
+actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
+    private enum Field {
+        static let entity = "ChatMessageRecord"
+        static let chatID = "chatID"
+        static let roomID = "roomID"
+        static let content = "content"
+        static let createdAt = "createdAt"
+        static let updatedAt = "updatedAt"
+        static let senderUserID = "senderUserID"
+        static let senderNick = "senderNick"
+        static let senderProfileImage = "senderProfileImage"
+        static let filesData = "filesData"
+        static let sendStatus = "sendStatus"
+        static let localCreatedAt = "localCreatedAt"
+    }
+
+    private let persistentContainer: NSPersistentContainer
+    private let jsonEncoder = JSONEncoder()
+    private let jsonDecoder = JSONDecoder()
+
+    init(inMemory: Bool = false) {
+        let model = NSManagedObjectModel()
+        let entity = NSEntityDescription()
+        entity.name = Field.entity
+        entity.managedObjectClassName = NSStringFromClass(NSManagedObject.self)
+        entity.properties = [
+            Self.attribute(Field.chatID, .stringAttributeType, optional: false),
+            Self.attribute(Field.roomID, .stringAttributeType, optional: false),
+            Self.attribute(Field.content, .stringAttributeType, optional: false),
+            Self.attribute(Field.createdAt, .dateAttributeType, optional: true),
+            Self.attribute(Field.updatedAt, .dateAttributeType, optional: true),
+            Self.attribute(Field.senderUserID, .stringAttributeType, optional: false),
+            Self.attribute(Field.senderNick, .stringAttributeType, optional: false),
+            Self.attribute(Field.senderProfileImage, .stringAttributeType, optional: true),
+            Self.attribute(Field.filesData, .binaryDataAttributeType, optional: false),
+            Self.attribute(Field.sendStatus, .stringAttributeType, optional: false),
+            Self.attribute(Field.localCreatedAt, .dateAttributeType, optional: false)
+        ]
+        entity.uniquenessConstraints = [[Field.chatID]]
+        model.entities = [entity]
+
+        persistentContainer = NSPersistentContainer(name: "PikkoChat", managedObjectModel: model)
+        let description = NSPersistentStoreDescription()
+        if inMemory {
+            description.type = NSInMemoryStoreType
+        } else {
+            let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            description.url = directory.appendingPathComponent("PikkoChat.sqlite")
+        }
+        description.shouldMigrateStoreAutomatically = true
+        description.shouldInferMappingModelAutomatically = true
+        persistentContainer.persistentStoreDescriptions = [description]
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var loadError: Error?
+        persistentContainer.loadPersistentStores { _, error in
+            loadError = error
+            semaphore.signal()
+        }
+        semaphore.wait()
+        if let loadError {
+            Logger.shared.error("[Chat] CoreData local store failed to load: \(loadError.localizedDescription)")
+        }
+        persistentContainer.viewContext.mergePolicy = NSMergePolicy(
+            merge: .mergeByPropertyObjectTrumpMergePolicyType
+        )
+    }
+
+    func fetchMessages(roomID: String) async throws -> [ChatMessage] {
+        let context = persistentContainer.viewContext
+        let request = fetchRequest(roomID: roomID)
+        return try context.fetch(request).compactMap(mapRecord)
+    }
+
+    func latestServerMessageDate(roomID: String) async throws -> Date? {
+        try await fetchMessages(roomID: roomID)
+            .filter { !$0.id.hasPrefix("local-") && $0.sendStatus == .sent }
+            .compactMap(\.createdAt)
+            .max()
+    }
+
+    @discardableResult
+    func upsert(messages: [ChatMessage]) async throws -> [ChatMessage] {
+        let context = persistentContainer.viewContext
+        for message in messages {
+            let record = try fetchRecord(messageID: message.id, context: context) ?? NSManagedObject(
+                entity: entityDescription(in: context),
+                insertInto: context
+            )
+            try apply(message: message, to: record)
+        }
+        if context.hasChanges {
+            try context.save()
+        }
+        return try await fetchMessages(roomID: messages.first?.roomID ?? "")
+    }
+
+    @discardableResult
+    func savePending(message: ChatMessage) async throws -> [ChatMessage] {
+        try await upsert(messages: [message])
+    }
+
+    @discardableResult
+    func replacePendingMessage(localID: String, with message: ChatMessage) async throws -> [ChatMessage] {
+        let context = persistentContainer.viewContext
+        if let pending = try fetchRecord(messageID: localID, context: context) {
+            context.delete(pending)
+        }
+        let record = try fetchRecord(messageID: message.id, context: context) ?? NSManagedObject(
+            entity: entityDescription(in: context),
+            insertInto: context
+        )
+        try apply(message: message, to: record)
+        if context.hasChanges {
+            try context.save()
+        }
+        return try await fetchMessages(roomID: message.roomID)
+    }
+
+    @discardableResult
+    func updateSendStatus(messageID: String, status: ChatSendStatus) async throws -> [ChatMessage] {
+        let context = persistentContainer.viewContext
+        guard let record = try fetchRecord(messageID: messageID, context: context),
+              let roomID = record.value(forKey: Field.roomID) as? String else {
+            return []
+        }
+        record.setValue(status.rawValue, forKey: Field.sendStatus)
+        if context.hasChanges {
+            try context.save()
+        }
+        return try await fetchMessages(roomID: roomID)
+    }
+
+    private static func attribute(
+        _ name: String,
+        _ type: NSAttributeType,
+        optional: Bool
+    ) -> NSAttributeDescription {
+        let attribute = NSAttributeDescription()
+        attribute.name = name
+        attribute.attributeType = type
+        attribute.isOptional = optional
+        return attribute
+    }
+
+    private func fetchRequest(roomID: String) -> NSFetchRequest<NSManagedObject> {
+        let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
+        request.predicate = NSPredicate(format: "%K == %@", Field.roomID, roomID)
+        request.sortDescriptors = [
+            NSSortDescriptor(key: Field.createdAt, ascending: true),
+            NSSortDescriptor(key: Field.localCreatedAt, ascending: true)
+        ]
+        return request
+    }
+
+    private func fetchRecord(messageID: String, context: NSManagedObjectContext) throws -> NSManagedObject? {
+        let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
+        request.predicate = NSPredicate(format: "%K == %@", Field.chatID, messageID)
+        request.fetchLimit = 1
+        return try context.fetch(request).first
+    }
+
+    private func entityDescription(in context: NSManagedObjectContext) -> NSEntityDescription {
+        NSEntityDescription.entity(forEntityName: Field.entity, in: context)!
+    }
+
+    private func apply(message: ChatMessage, to record: NSManagedObject) throws {
+        record.setValue(message.id, forKey: Field.chatID)
+        record.setValue(message.roomID, forKey: Field.roomID)
+        record.setValue(message.content, forKey: Field.content)
+        record.setValue(message.createdAt, forKey: Field.createdAt)
+        record.setValue(message.updatedAt, forKey: Field.updatedAt)
+        record.setValue(message.sender.id, forKey: Field.senderUserID)
+        record.setValue(message.sender.nick, forKey: Field.senderNick)
+        record.setValue(message.sender.profileImagePath, forKey: Field.senderProfileImage)
+        record.setValue(try jsonEncoder.encode(message.filePaths), forKey: Field.filesData)
+        record.setValue(message.sendStatus.rawValue, forKey: Field.sendStatus)
+        if record.value(forKey: Field.localCreatedAt) == nil {
+            record.setValue(Date(), forKey: Field.localCreatedAt)
+        }
+    }
+
+    private func mapRecord(_ record: NSManagedObject) -> ChatMessage? {
+        guard let id = record.value(forKey: Field.chatID) as? String,
+              let roomID = record.value(forKey: Field.roomID) as? String,
+              let content = record.value(forKey: Field.content) as? String,
+              let senderUserID = record.value(forKey: Field.senderUserID) as? String,
+              let senderNick = record.value(forKey: Field.senderNick) as? String,
+              let filesData = record.value(forKey: Field.filesData) as? Data,
+              let statusRawValue = record.value(forKey: Field.sendStatus) as? String else {
+            return nil
+        }
+        let files = (try? jsonDecoder.decode([String].self, from: filesData)) ?? []
+        return ChatMessage(
+            id: id,
+            roomID: roomID,
+            content: content,
+            createdAt: record.value(forKey: Field.createdAt) as? Date,
+            updatedAt: record.value(forKey: Field.updatedAt) as? Date,
+            sender: ChatParticipant(
+                id: senderUserID,
+                nick: senderNick,
+                profileImagePath: record.value(forKey: Field.senderProfileImage) as? String
+            ),
+            filePaths: files,
+            sendStatus: ChatSendStatus(rawValue: statusRawValue) ?? .sent
+        )
+    }
+}
+
+@MainActor
+protocol ChatRealtimeServiceProtocol: AnyObject {
+    func connect(roomID: String, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws
+    func disconnect()
+}
+
 enum ChatFeatureError: Error, Equatable {
     case authenticationRequired
     case networkUnavailable(message: String)
@@ -291,12 +589,19 @@ extension ChatFeatureError: LocalizedError {
 @MainActor
 protocol ChatInteracting {
     var currentUserID: String? { get }
-    var startsFromStore: Bool { get }
-    var startsFromOpponent: Bool { get }
+    var target: ChatTarget? { get }
 
     func loadInitialRoomList() async throws -> [ChatRoom]
     func createOrFetchStoreChatRoom() async throws -> ChatRoom
     func createOrFetchUserChatRoom() async throws -> ChatRoom
+    func loadCachedMessages(roomID: String) async throws -> [ChatMessage]
+    func synchronizeMessages(roomID: String) async throws -> [ChatMessage]
+    func startRealtime(roomID: String, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws
+    func stopRealtime()
+    func makePendingMessage(roomID: String, content: String, files: [String]) throws -> ChatMessage
+    func savePendingMessage(_ message: ChatMessage) async throws -> [ChatMessage]
+    func replacePendingMessage(localID: String, with message: ChatMessage) async throws -> [ChatMessage]
+    func markMessageFailed(messageID: String) async throws -> [ChatMessage]
     func loadMessages(roomID: String, after next: String?) async throws -> [ChatMessage]
     func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessage
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String]
@@ -305,30 +610,29 @@ protocol ChatInteracting {
 @MainActor
 struct ChatInteractor: ChatInteracting {
     let currentUserID: String?
-    let startsFromStore: Bool
-    let startsFromOpponent: Bool
+    let target: ChatTarget?
 
-    private let storeID: String?
-    private let opponentID: String?
     private let chatRepository: ChatRepository
+    private let localDataSource: any ChatLocalDataSourceProtocol
+    private let realtimeService: any ChatRealtimeServiceProtocol
     private let storeRepository: StoreRepository
     private let sessionStore: SessionStore
 
     init(
-        storeID: String? = nil,
-        opponentID: String? = nil,
+        target: ChatTarget? = nil,
         chatRepository: ChatRepository,
+        localDataSource: any ChatLocalDataSourceProtocol,
+        realtimeService: any ChatRealtimeServiceProtocol,
         storeRepository: StoreRepository,
         sessionStore: SessionStore
     ) {
-        self.storeID = storeID
-        self.opponentID = opponentID
+        self.target = target
         self.chatRepository = chatRepository
+        self.localDataSource = localDataSource
+        self.realtimeService = realtimeService
         self.storeRepository = storeRepository
         self.sessionStore = sessionStore
         self.currentUserID = sessionStore.currentUserID
-        self.startsFromStore = storeID != nil
-        self.startsFromOpponent = opponentID != nil
     }
 
     func loadInitialRoomList() async throws -> [ChatRoom] {
@@ -349,19 +653,31 @@ struct ChatInteractor: ChatInteracting {
         guard sessionStore.isAuthenticated else {
             throw ChatFeatureError.authenticationRequired
         }
-        guard let storeID else {
+        guard case let .store(storeID, _, ownerID, _, _) = target else {
             throw ChatFeatureError.unavailable(message: "문의할 가게 정보를 찾지 못했어요.")
         }
 
         do {
-            let store = try await storeRepository.fetchStoreDetail(storeID: storeID)
-            guard let ownerID = store.owner?.id, !ownerID.isEmpty else {
+            let resolvedOwnerID: String?
+            if let ownerID = ownerID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !ownerID.isEmpty {
+                resolvedOwnerID = ownerID
+            } else {
+                let store = try await storeRepository.fetchStoreDetail(storeID: storeID)
+                resolvedOwnerID = store.owner?.id
+            }
+
+            guard let ownerID = resolvedOwnerID, !ownerID.isEmpty else {
                 throw ChatFeatureError.unavailable(message: "가게 문의 대상을 찾지 못했어요.")
             }
             if ownerID == sessionStore.currentUserID {
                 throw ChatFeatureError.unavailable(message: "내 가게에는 채팅 문의를 보낼 수 없어요.")
             }
-            return try await chatRepository.createOrFetchChatRoom(opponentID: ownerID)
+            let room = try await chatRepository.createOrFetchChatRoom(opponentID: ownerID)
+            Logger.shared.debug(
+                "[ChatRepository] createOrFetchRoom opponentId=\(ownerID) storeId=\(storeID) resultRoomId=\(room.id)"
+            )
+            return room
         } catch let error as ChatFeatureError {
             throw error
         } catch is CancellationError {
@@ -375,7 +691,7 @@ struct ChatInteractor: ChatInteracting {
         guard sessionStore.isAuthenticated else {
             throw ChatFeatureError.authenticationRequired
         }
-        guard let opponentID,
+        guard case let .user(opponentID, _, _) = target,
               !opponentID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ChatFeatureError.unavailable(message: "채팅 상대를 찾지 못했어요.")
         }
@@ -384,12 +700,98 @@ struct ChatInteractor: ChatInteracting {
         }
 
         do {
-            return try await chatRepository.createOrFetchChatRoom(opponentID: opponentID)
+            let room = try await chatRepository.createOrFetchChatRoom(opponentID: opponentID)
+            Logger.shared.debug(
+                "[ChatRepository] createOrFetchRoom opponentId=\(opponentID) storeId=- resultRoomId=\(room.id)"
+            )
+            return room
         } catch is CancellationError {
             throw CancellationError()
         } catch {
             throw map(error)
         }
+    }
+
+    func loadCachedMessages(roomID: String) async throws -> [ChatMessage] {
+        try await localDataSource.fetchMessages(roomID: roomID)
+    }
+
+    func synchronizeMessages(roomID: String) async throws -> [ChatMessage] {
+        guard sessionStore.isAuthenticated else {
+            throw ChatFeatureError.authenticationRequired
+        }
+
+        do {
+            let next = try await localDataSource.latestServerMessageDate(roomID: roomID)
+                .map(Self.utcQueryString)
+            Logger.shared.debug("[ChatViewModel] syncLatestMessages since=\(next ?? "nil")")
+            let messages = try await chatRepository.fetchMessages(roomID: roomID, next: next)
+            guard !messages.isEmpty else {
+                return try await localDataSource.fetchMessages(roomID: roomID)
+            }
+            return try await localDataSource.upsert(messages: messages)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw map(error)
+        }
+    }
+
+    func startRealtime(roomID: String, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
+        guard sessionStore.isAuthenticated else {
+            throw ChatFeatureError.authenticationRequired
+        }
+
+        try await realtimeService.connect(roomID: roomID) { [localDataSource] message in
+            do {
+                let messages = try await localDataSource.upsert(messages: [message])
+                if let stored = messages.first(where: { $0.id == message.id }) {
+                    await onMessage(stored)
+                } else {
+                    await onMessage(message)
+                }
+            } catch {
+                Logger.shared.warning("[Chat] socket message local upsert failed: \(error.localizedDescription)")
+                await onMessage(message)
+            }
+        }
+    }
+
+    func stopRealtime() {
+        realtimeService.disconnect()
+    }
+
+    func makePendingMessage(roomID: String, content: String, files: [String]) throws -> ChatMessage {
+        guard let currentUserID = sessionStore.currentUserID else {
+            throw ChatFeatureError.authenticationRequired
+        }
+
+        return ChatMessage(
+            id: "local-\(UUID().uuidString)",
+            roomID: roomID,
+            content: content,
+            createdAt: Date(),
+            updatedAt: nil,
+            sender: ChatParticipant(
+                id: currentUserID,
+                nick: sessionStore.nick ?? "나",
+                profileImagePath: sessionStore.profileImagePath
+            ),
+            filePaths: files,
+            sendStatus: .sending
+        )
+    }
+
+    func savePendingMessage(_ message: ChatMessage) async throws -> [ChatMessage] {
+        try await localDataSource.savePending(message: message)
+    }
+
+    func replacePendingMessage(localID: String, with message: ChatMessage) async throws -> [ChatMessage] {
+        try await localDataSource.replacePendingMessage(localID: localID, with: message)
+    }
+
+    func markMessageFailed(messageID: String) async throws -> [ChatMessage] {
+        try await localDataSource.updateSendStatus(messageID: messageID, status: .failed)
     }
 
     func loadMessages(roomID: String, after next: String? = nil) async throws -> [ChatMessage] {
@@ -416,7 +818,9 @@ struct ChatInteractor: ChatInteracting {
         }
 
         do {
-            return try await chatRepository.sendMessage(roomID: roomID, content: trimmed, files: files)
+            let sentMessage = try await chatRepository.sendMessage(roomID: roomID, content: trimmed, files: files)
+            _ = try await localDataSource.upsert(messages: [sentMessage])
+            return sentMessage
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -475,5 +879,12 @@ struct ChatInteractor: ChatInteracting {
         case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .configuration:
             return .unavailable(message: networkError.localizedDescription)
         }
+    }
+
+    private static func utcQueryString(from date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter.string(from: date)
     }
 }

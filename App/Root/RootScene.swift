@@ -48,14 +48,7 @@ struct RootScene: View {
 
 private struct SplashScreenView: View {
     var body: some View {
-        GeometryReader { proxy in
-            Image("SplashScreen")
-                .resizable()
-                .scaledToFill()
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .clipped()
-        }
-        .background(PikkoColor.sage50)
-        .ignoresSafeArea()
+        PikkoColor.sage50
+            .ignoresSafeArea()
     }
 }

@@ -477,8 +477,10 @@ final class CommunityPresenter: ObservableObject {
     private func makeCommunityCardModel(from post: CommunityPostSummary) -> CommunityCard.Model {
         CommunityCard.Model(
             id: post.id,
+            authorID: post.creator.id,
             authorName: post.creator.nick,
             authorAvatarPath: post.creator.profileImagePath,
+            canChatWithAuthor: false,
             timeText: makeRelativeTimeText(from: post.createdAt),
             title: post.title,
             bodyText: post.content,

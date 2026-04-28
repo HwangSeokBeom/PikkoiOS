@@ -26,6 +26,7 @@ final class AppDIContainer {
     let bannerRepository: BannerRepository
     let communityRepository: CommunityRepository
     let chatRepository: ChatRepository
+    let chatLocalDataSource: any ChatLocalDataSourceProtocol
     let orderRepository: OrderRepository
     let orderMapper: OrderMapper
 
@@ -97,6 +98,7 @@ final class AppDIContainer {
             remoteDataSource: ChatRemoteDataSource(apiClient: resolvedAPIClient),
             mapper: chatMapper
         )
+        let resolvedChatLocalDataSource = CoreDataChatLocalDataSource()
         let resolvedOrderRepository = OrderRepositoryImpl(
             remoteDataSource: OrderRemoteDataSource(apiClient: resolvedAPIClient),
             checkoutMapper: checkoutMapper,
@@ -143,6 +145,7 @@ final class AppDIContainer {
         self.bannerRepository = resolvedBannerRepository
         self.communityRepository = resolvedCommunityRepository
         self.chatRepository = resolvedChatRepository
+        self.chatLocalDataSource = resolvedChatLocalDataSource
         self.orderRepository = resolvedOrderRepository
         self.orderMapper = orderMapper
     }

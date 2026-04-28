@@ -176,7 +176,9 @@ struct ProfileRootView: View {
                 }
             }
             .padding(PikkoSpacing.xl)
+            .padding(.bottom, RootTabBarMetrics.scrollContentBottomInset)
         }
+        .contentMargins(.bottom, RootTabBarMetrics.scrollContentBottomInset, for: .scrollIndicators)
         .background(PikkoColor.background.ignoresSafeArea())
         .navigationDestination(isPresented: likedStoresPresentedBinding) {
             makeLikedStoresView()
@@ -992,22 +994,25 @@ private struct ProfileListSkeletonView: View {
 
 struct UserSearchRootView: View {
     private let authRepository: AuthRepository
+    private let sessionStore: SessionStore
     private let imageLoader: any AuthorizedImageLoading
-    private let makeChatView: (String) -> AnyView
+    private let makeChatView: (ChatTarget) -> AnyView
 
     @State private var query = ""
     @State private var users: [SearchUser] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var emptyMessage: String?
-    @State private var presentedOpponentID: String?
+    @State private var presentedChatTarget: ChatTarget?
 
     init(
         authRepository: AuthRepository,
+        sessionStore: SessionStore,
         imageLoader: any AuthorizedImageLoading,
-        makeChatView: @escaping (String) -> AnyView
+        makeChatView: @escaping (ChatTarget) -> AnyView
     ) {
         self.authRepository = authRepository
+        self.sessionStore = sessionStore
         self.imageLoader = imageLoader
         self.makeChatView = makeChatView
     }
@@ -1042,7 +1047,15 @@ struct UserSearchRootView: View {
                     LazyVStack(spacing: PikkoSpacing.sm) {
                         ForEach(users) { user in
                             Button {
-                                presentedOpponentID = user.id
+                                guard user.id != sessionStore.currentUserID else {
+                                    errorMessage = "내 계정에는 채팅을 시작할 수 없어요."
+                                    return
+                                }
+                                presentedChatTarget = .user(
+                                    userID: user.id,
+                                    nickname: user.nick,
+                                    profileImagePath: user.profileImagePath
+                                )
                             } label: {
                                 HStack(spacing: PikkoSpacing.md) {
                                     AuthorizedAsyncImage(
@@ -1059,7 +1072,7 @@ struct UserSearchRootView: View {
                                             .font(PikkoTypography.bodyStrong)
                                             .foregroundStyle(PikkoColor.primaryText)
                                             .lineLimit(1)
-                                        Text("채팅 시작")
+                                        Text(user.id == sessionStore.currentUserID ? "본인 계정" : "채팅 시작")
                                             .font(PikkoTypography.caption)
                                             .foregroundStyle(PikkoColor.secondaryText)
                                     }
@@ -1075,6 +1088,7 @@ struct UserSearchRootView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
                             }
                             .buttonStyle(.plain)
+                            .disabled(user.id == sessionStore.currentUserID)
                         }
                     }
                     .padding(.bottom, RootTabBarMetrics.scrollContentBottomInset)
@@ -1086,8 +1100,8 @@ struct UserSearchRootView: View {
         .navigationTitle("유저 검색")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: chatPresentedBinding) {
-            if let presentedOpponentID {
-                makeChatView(presentedOpponentID)
+            if let presentedChatTarget {
+                makeChatView(presentedChatTarget)
             } else {
                 EmptyView()
             }
@@ -1096,10 +1110,10 @@ struct UserSearchRootView: View {
 
     private var chatPresentedBinding: Binding<Bool> {
         Binding(
-            get: { presentedOpponentID != nil },
+            get: { presentedChatTarget != nil },
             set: { isPresented in
                 if !isPresented {
-                    presentedOpponentID = nil
+                    presentedChatTarget = nil
                 }
             }
         )
@@ -1295,6 +1309,115 @@ private struct MenuDebugResponseDTO: Decodable, Sendable {
     }
 }
 
+private struct OrderDebugCreateRequestDTO: Encodable, Sendable {
+    let storeID: String
+    let orderMenuList: [OrderDebugCreateMenuItemDTO]
+    let totalPrice: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case storeID = "store_id"
+        case orderMenuList = "order_menu_list"
+        case totalPrice = "total_price"
+    }
+}
+
+private struct OrderDebugCreateMenuItemDTO: Encodable, Sendable {
+    let menuID: String
+    let quantity: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case menuID = "menu_id"
+        case quantity
+    }
+}
+
+private struct DeveloperDiagnosticEntry: Identifiable, Equatable {
+    let id = UUID()
+    let date = Date()
+    let method: String
+    let path: String
+    let payloadSummary: String
+    let status: String
+    let responseSummary: String
+
+    var title: String {
+        "\(method) \(path)"
+    }
+}
+
+private enum DeveloperOrderStatusAction: String, CaseIterable, Identifiable {
+    case pendingApproval = "PENDING_APPROVAL"
+    case approved = "APPROVED"
+    case inProgress = "IN_PROGRESS"
+    case readyForPickup = "READY_FOR_PICKUP"
+    case pickedUp = "PICKED_UP"
+    case cancelled = "CANCELLED"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .pendingApproval:
+            return "승인대기"
+        case .approved:
+            return "승인완료"
+        case .inProgress:
+            return "준비중"
+        case .readyForPickup:
+            return "픽업대기"
+        case .pickedUp:
+            return "픽업완료"
+        case .cancelled:
+            return "주문취소"
+        }
+    }
+
+    var orderStatus: OrderStatus {
+        OrderStatus(serverValue: rawValue)
+    }
+}
+
+private enum DeveloperDangerousAction: Identifiable, Equatable {
+    case updateStore
+    case updateMenu
+    case updateOrderStatus(DeveloperOrderStatusAction)
+
+    var id: String {
+        switch self {
+        case .updateStore:
+            return "updateStore"
+        case .updateMenu:
+            return "updateMenu"
+        case .updateOrderStatus(let status):
+            return "updateOrderStatus-\(status.rawValue)"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .updateStore:
+            return "가게 수정 실행"
+        case .updateMenu:
+            return "메뉴 수정 실행"
+        case .updateOrderStatus(let status):
+            return "\(status.label) 상태 변경 실행"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .updateStore:
+            return "실제 서버의 가게 데이터를 수정합니다."
+        case .updateMenu:
+            return "실제 서버의 메뉴 데이터를 수정합니다."
+        case .updateOrderStatus(let status):
+            return status == .cancelled
+                ? "주문을 취소 상태로 변경합니다. 이 작업은 destructive 테스트 액션입니다."
+                : "주문 상태를 실제 서버에 반영합니다."
+        }
+    }
+}
+
 private struct DeveloperDiagnosticsClient: Sendable {
     let apiClient: any APIClientProtocol
     let appConfiguration: AppConfiguration
@@ -1400,8 +1523,8 @@ private struct DeveloperDiagnosticsClient: Sendable {
         return response.menuImageURL
     }
 
-    func createStore(_ request: StoreDebugMutationRequestDTO) async throws {
-        _ = try await apiClient.execute(
+    func createStore(_ request: StoreDebugMutationRequestDTO) async throws -> StoreDetailResponseDTO {
+        try await apiClient.execute(
             Endpoint<StoreDetailResponseDTO>(
                 path: "/v1/stores",
                 method: .post,
@@ -1411,8 +1534,8 @@ private struct DeveloperDiagnosticsClient: Sendable {
         )
     }
 
-    func updateStore(storeID: String, request: StoreDebugMutationRequestDTO) async throws {
-        _ = try await apiClient.execute(
+    func updateStore(storeID: String, request: StoreDebugMutationRequestDTO) async throws -> StoreDetailResponseDTO {
+        try await apiClient.execute(
             Endpoint<StoreDetailResponseDTO>(
                 path: "/v1/stores/\(storeID)",
                 method: .put,
@@ -1422,8 +1545,8 @@ private struct DeveloperDiagnosticsClient: Sendable {
         )
     }
 
-    func createMenu(storeID: String, request: MenuDebugMutationRequestDTO) async throws {
-        _ = try await apiClient.execute(
+    func createMenu(storeID: String, request: MenuDebugMutationRequestDTO) async throws -> MenuDebugResponseDTO {
+        try await apiClient.execute(
             Endpoint<MenuDebugResponseDTO>(
                 path: "/v1/menus/stores/\(storeID)",
                 method: .post,
@@ -1433,10 +1556,52 @@ private struct DeveloperDiagnosticsClient: Sendable {
         )
     }
 
-    func updateMenu(menuID: String, request: MenuDebugMutationRequestDTO) async throws {
-        _ = try await apiClient.execute(
+    func updateMenu(menuID: String, request: MenuDebugMutationRequestDTO) async throws -> MenuDebugResponseDTO {
+        try await apiClient.execute(
             Endpoint<MenuDebugResponseDTO>(
                 path: "/v1/menus/\(menuID)",
+                method: .put,
+                body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(request)),
+                authorizationPolicy: .accessToken
+            )
+        )
+    }
+
+    func createOrder(storeID: String, menuID: String, quantity: Int, totalPrice: Int) async throws -> OrderCreateResponseDTO {
+        let request = OrderDebugCreateRequestDTO(
+            storeID: storeID,
+            orderMenuList: [
+                OrderDebugCreateMenuItemDTO(menuID: menuID, quantity: quantity)
+            ],
+            totalPrice: totalPrice
+        )
+        return try await apiClient.execute(
+            Endpoint<OrderCreateResponseDTO>(
+                path: "/v1/orders",
+                method: .post,
+                body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(request)),
+                timeout: .paymentValidation,
+                authorizationPolicy: .accessToken
+            )
+        )
+    }
+
+    func fetchOrders() async throws -> OrderListResponseDTO {
+        try await apiClient.execute(
+            Endpoint<OrderListResponseDTO>(
+                path: "/v1/orders",
+                method: .get,
+                authorizationPolicy: .accessToken
+            )
+        )
+    }
+
+    func updateOrderStatus(orderCode: String, nextStatus: DeveloperOrderStatusAction) async throws {
+        let encodedOrderCode = orderCode.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? orderCode
+        let request = OrderStatusUpdateRequestDTO(nextStatus: nextStatus.rawValue)
+        _ = try await apiClient.execute(
+            Endpoint<EmptyResponse>(
+                path: "/v1/orders/\(encodedOrderCode)",
                 method: .put,
                 body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(request)),
                 authorizationPolicy: .accessToken
@@ -1454,45 +1619,98 @@ private struct DeveloperDiagnosticsClient: Sendable {
 }
 
 struct DeveloperDiagnosticsRootView: View {
+    private enum StorageKey {
+        static let pushUserID = "developerDiagnostics.pushUserID"
+        static let storeID = "developerDiagnostics.storeID"
+        static let menuID = "developerDiagnostics.menuID"
+        static let orderCode = "developerDiagnostics.orderCode"
+        static let orderID = "developerDiagnostics.orderID"
+    }
+
     private let client: DeveloperDiagnosticsClient
+    @ObservedObject private var sessionStore: SessionStore
+    private let authRepository: AuthRepository
+    private let userDefaultsStore: any UserDefaultsStoring
     private let imageLoader: any AuthorizedImageLoading
 
     @State private var status = "대기 중"
-    @State private var logs: [DeveloperLogDTO] = []
+    @State private var serverLogs: [DeveloperLogDTO] = []
+    @State private var diagnosticLogs: [DeveloperDiagnosticEntry] = []
     @State private var videos: [VideoDebugDTO] = []
     @State private var videoNextCursor: String?
     @State private var player: AVPlayer?
-    @State private var pushUserID = ""
+    @State private var pushUserID: String
     @State private var pushTitle = "Pikko 테스트"
     @State private var pushSubtitle = "Developer Diagnostics"
     @State private var pushBody = "푸시 테스트입니다."
-    @State private var storeID = ""
+    @State private var storeID: String
     @State private var storeImages: [String] = []
-    @State private var menuID = ""
+    @State private var menuID: String
     @State private var menuImage: String?
+    @State private var orderID: String
+    @State private var orderCode: String
+    @State private var orderQuantity = "1"
+    @State private var orderTotalPrice = "100"
     @State private var selectedStoreImages: [PhotosPickerItem] = []
     @State private var selectedMenuImage: PhotosPickerItem?
+    @State private var isRunning = false
+    @State private var pendingDangerousAction: DeveloperDangerousAction?
 
     fileprivate init(
         client: DeveloperDiagnosticsClient,
+        sessionStore: SessionStore,
+        authRepository: AuthRepository,
+        userDefaultsStore: any UserDefaultsStoring,
         imageLoader: any AuthorizedImageLoading
     ) {
         self.client = client
+        _sessionStore = ObservedObject(wrappedValue: sessionStore)
+        self.authRepository = authRepository
+        self.userDefaultsStore = userDefaultsStore
         self.imageLoader = imageLoader
+        _pushUserID = State(initialValue: userDefaultsStore.string(forKey: StorageKey.pushUserID) ?? "")
+        _storeID = State(initialValue: userDefaultsStore.string(forKey: StorageKey.storeID) ?? "")
+        _menuID = State(initialValue: userDefaultsStore.string(forKey: StorageKey.menuID) ?? "")
+        _orderCode = State(initialValue: userDefaultsStore.string(forKey: StorageKey.orderCode) ?? "")
+        _orderID = State(initialValue: userDefaultsStore.string(forKey: StorageKey.orderID) ?? "")
     }
 
     var body: some View {
         List {
-            Section("상태") {
+            Section("Auth / Session") {
+                labelledValue("accessToken", sessionStore.accessToken == nil ? "없음" : "있음")
+                labelledValue("userId", sessionStore.currentUserID ?? "-")
+                labelledValue("nickname", sessionStore.nick ?? "-")
+                labelledValue("email", sessionStore.email ?? "-")
+                Button("세션 복원 테스트") { Task { await restoreSession() } }
+                Button("로그아웃 테스트", role: .destructive) { Task { await logout() } }
+            }
+
+            Section("Status") {
                 Text(status)
                     .font(PikkoTypography.caption)
                     .foregroundStyle(PikkoColor.secondaryText)
+                if isRunning {
+                    ProgressView()
+                }
             }
 
-            Section("Common / Log") {
-                Button("GET /common") { Task { await run("공통 정책 조회") { try await client.fetchCommon() } } }
+            Section("Common / Server Log") {
+                Button("GET /common") {
+                    Task {
+                        await run(
+                            label: "공통 정책 조회",
+                            method: "GET",
+                            path: "/common",
+                            payload: "-"
+                        ) {
+                            try await client.fetchCommon()
+                            return "공통 정책 조회 성공"
+                        }
+                    }
+                }
                 Button("GET /v1/log") { Task { await fetchLogs() } }
-                ForEach(logs.prefix(5)) { log in
+                ForEach(serverLogs.prefix(5)) { log in
                     Text("\(log.method ?? "-") \(log.routePath ?? "-") \(log.statusCode ?? "-")")
                         .font(PikkoTypography.caption)
                 }
@@ -1500,27 +1718,21 @@ struct DeveloperDiagnosticsRootView: View {
 
             Section("Push") {
                 TextField("user_id", text: $pushUserID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                 TextField("title", text: $pushTitle)
                 TextField("subtitle", text: $pushSubtitle)
                 TextField("body", text: $pushBody)
-                Button("POST /v1/notifications/push") {
-                    Task {
-                        await run("푸시 전송") {
-                            try await client.sendPush(
-                                userID: pushUserID,
-                                title: pushTitle,
-                                subtitle: pushSubtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : pushSubtitle,
-                                body: pushBody
-                            )
-                        }
-                    }
-                }
+                Button("POST /v1/notifications/push") { Task { await sendPush() } }
+                    .disabled(isRunning)
             }
 
             Section("Video") {
                 Button("GET /v1/videos") { Task { await fetchVideos(next: nil) } }
+                    .disabled(isRunning)
                 if videoNextCursor != nil {
                     Button("다음 비디오 페이지") { Task { await fetchVideos(next: videoNextCursor) } }
+                        .disabled(isRunning)
                 }
                 ForEach(videos) { video in
                     VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
@@ -1544,81 +1756,261 @@ struct DeveloperDiagnosticsRootView: View {
             }
 
             Section("Admin Store") {
-                TextField("store_id 수정 시 입력", text: $storeID)
+                TextField("store_id", text: $storeID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                 PhotosPicker(selection: $selectedStoreImages, maxSelectionCount: 5, matching: .images) {
                     Text("가게 이미지 선택")
                 }
                 Button("POST /v1/stores/files") { Task { await uploadStoreImages() } }
-                Text(storeImages.joined(separator: "\n"))
+                    .disabled(isRunning)
+                Text(storeImages.isEmpty ? "업로드된 가게 이미지 없음" : storeImages.joined(separator: "\n"))
                     .font(PikkoTypography.caption)
                 Button("POST /v1/stores") { Task { await mutateStore(isUpdate: false) } }
-                Button("PUT /v1/stores/{store_id}") { Task { await mutateStore(isUpdate: true) } }
+                    .disabled(isRunning)
+                Button("PUT /v1/stores/{store_id}", role: .destructive) {
+                    pendingDangerousAction = .updateStore
+                }
+                .disabled(isRunning || storeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             Section("Admin Menu") {
                 TextField("store_id", text: $storeID)
-                TextField("menu_id 수정 시 입력", text: $menuID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("menu_id", text: $menuID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                 PhotosPicker(selection: $selectedMenuImage, matching: .images) {
                     Text("메뉴 이미지 선택")
                 }
                 Button("POST /v1/menus/image") { Task { await uploadMenuImage() } }
+                    .disabled(isRunning)
                 Text(menuImage ?? "업로드된 메뉴 이미지 없음")
                     .font(PikkoTypography.caption)
                 Button("POST /v1/menus/stores/{store_id}") { Task { await mutateMenu(isUpdate: false) } }
-                Button("PUT /v1/menus/{menu_id}") { Task { await mutateMenu(isUpdate: true) } }
+                    .disabled(isRunning || storeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("PUT /v1/menus/{menu_id}", role: .destructive) {
+                    pendingDangerousAction = .updateMenu
+                }
+                .disabled(isRunning || menuID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Section("Order Flow") {
+                TextField("store_id", text: $storeID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("menu_id", text: $menuID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("order_id", text: $orderID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("order_code", text: $orderCode)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("quantity", text: $orderQuantity)
+                    .keyboardType(.numberPad)
+                TextField("total_price", text: $orderTotalPrice)
+                    .keyboardType(.numberPad)
+                Button("POST /v1/orders 테스트 주문 생성") { Task { await createOrder() } }
+                    .disabled(isRunning || storeID.isEmpty || menuID.isEmpty)
+                Button("GET /v1/orders 현재 상태 조회") { Task { await fetchOrders() } }
+                    .disabled(isRunning)
+                ForEach(DeveloperOrderStatusAction.allCases) { orderStatus in
+                    Button(orderStatus.label, role: orderStatus == .cancelled ? .destructive : nil) {
+                        pendingDangerousAction = .updateOrderStatus(orderStatus)
+                    }
+                    .disabled(isRunning || orderCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+
+            Section("Review Flow") {
+                Button("리뷰 작성 가능 조건 확인") {
+                    appendLog(
+                        method: "INFO",
+                        path: "Review Flow",
+                        payload: "order_code=\(orderCode.nilIfBlank ?? "-")",
+                        status: "확인",
+                        response: "픽업완료(PICKED_UP) 상태 변경 후 주문 상세의 리뷰 작성 CTA로 검증합니다. 별도 테스트 리뷰 생성 API는 Swagger에 없습니다."
+                    )
+                }
+            }
+
+            Section("Community Flow") {
+                Button("커뮤니티 API 연결 상태 기록") {
+                    appendLog(
+                        method: "INFO",
+                        path: "Community Flow",
+                        payload: "-",
+                        status: "확인",
+                        response: "게시글/댓글/좋아요 API는 커뮤니티 화면 Repository에 연결되어 있습니다. 진단 전용 생성 API는 별도 제공되지 않았습니다."
+                    )
+                }
+            }
+
+            Section("Result Logs") {
+                Button("Clear Logs") {
+                    diagnosticLogs.removeAll()
+                    serverLogs.removeAll()
+                }
+                ForEach(diagnosticLogs) { log in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(log.title)
+                            .font(PikkoTypography.captionStrong)
+                        Text("payload: \(log.payloadSummary)")
+                            .font(PikkoTypography.micro)
+                        Text("status: \(log.status)")
+                            .font(PikkoTypography.micro)
+                        Text(log.responseSummary)
+                            .font(PikkoTypography.caption)
+                            .foregroundStyle(PikkoColor.secondaryText)
+                    }
+                }
             }
         }
+        .disabled(isRunning && pendingDangerousAction == nil)
         .navigationTitle("개발자 진단")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: pushUserID) { _, value in userDefaultsStore.set(value, forKey: StorageKey.pushUserID) }
+        .onChange(of: storeID) { _, value in userDefaultsStore.set(value, forKey: StorageKey.storeID) }
+        .onChange(of: menuID) { _, value in userDefaultsStore.set(value, forKey: StorageKey.menuID) }
+        .onChange(of: orderCode) { _, value in userDefaultsStore.set(value, forKey: StorageKey.orderCode) }
+        .onChange(of: orderID) { _, value in userDefaultsStore.set(value, forKey: StorageKey.orderID) }
+        .confirmationDialog(
+            pendingDangerousAction?.title ?? "실행 확인",
+            isPresented: dangerousActionPresentedBinding,
+            titleVisibility: .visible
+        ) {
+            Button("실행", role: .destructive) {
+                guard let action = pendingDangerousAction else { return }
+                pendingDangerousAction = nil
+                Task { await perform(action) }
+            }
+            Button("취소", role: .cancel) {
+                pendingDangerousAction = nil
+            }
+        } message: {
+            Text(pendingDangerousAction?.message ?? "")
+        }
     }
 
-    private func run(_ label: String, action: () async throws -> Void) async {
+    private var dangerousActionPresentedBinding: Binding<Bool> {
+        Binding(
+            get: { pendingDangerousAction != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDangerousAction = nil
+                }
+            }
+        )
+    }
+
+    private func labelledValue(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .foregroundStyle(PikkoColor.secondaryText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private func run(
+        label: String,
+        method: String,
+        path: String,
+        payload: String,
+        action: () async throws -> String
+    ) async {
+        guard !isRunning else { return }
+        isRunning = true
         status = "\(label) 실행 중"
         do {
-            try await action()
+            let response = try await action()
             status = "\(label) 성공"
+            appendLog(method: method, path: path, payload: payload, status: "2xx", response: response)
         } catch {
-            status = "\(label) 실패: \(error.localizedDescription)"
+            let message = error.localizedDescription
+            status = "\(label) 실패: \(message)"
+            appendLog(method: method, path: path, payload: payload, status: "실패", response: message)
+        }
+        isRunning = false
+    }
+
+    private func appendLog(method: String, path: String, payload: String, status: String, response: String) {
+        diagnosticLogs.insert(
+            DeveloperDiagnosticEntry(
+                method: method,
+                path: path,
+                payloadSummary: payload,
+                status: status,
+                responseSummary: response
+            ),
+            at: 0
+        )
+        diagnosticLogs = Array(diagnosticLogs.prefix(40))
+    }
+
+    private func restoreSession() async {
+        await run(label: "세션 복원", method: "AUTH", path: "restoreSession", payload: "-") {
+            let session = try await authRepository.restoreSession()
+            sessionStore.apply(session: session)
+            return session == nil ? "복원할 세션 없음" : "user_id=\(session?.userID ?? "-")"
+        }
+    }
+
+    private func logout() async {
+        await run(label: "로그아웃", method: "AUTH", path: "logout", payload: "-") {
+            try await authRepository.logout()
+            await sessionStore.clearSession()
+            return "로그아웃 완료"
         }
     }
 
     private func fetchLogs() async {
-        status = "로그 조회 중"
-        do {
+        await run(label: "로그 조회", method: "GET", path: "/v1/log", payload: "-") {
             let response = try await client.fetchLogs()
-            logs = response.logs ?? []
-            status = "로그 \(response.count ?? logs.count)개 조회"
-        } catch {
-            status = "로그 조회 실패: \(error.localizedDescription)"
+            serverLogs = response.logs ?? []
+            return "로그 \(response.count ?? serverLogs.count)개 조회"
+        }
+    }
+
+    private func sendPush() async {
+        let subtitle = pushSubtitle.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+        await run(
+            label: "푸시 전송",
+            method: "POST",
+            path: "/v1/notifications/push",
+            payload: "user_id=\(pushUserID), title=\(pushTitle)"
+        ) {
+            try await client.sendPush(userID: pushUserID, title: pushTitle, subtitle: subtitle, body: pushBody)
+            return "푸시 전송 요청 완료"
         }
     }
 
     private func fetchVideos(next: String?) async {
-        status = "비디오 조회 중"
-        do {
+        await run(label: "비디오 조회", method: "GET", path: "/v1/videos", payload: "next=\(next ?? "-"), limit=5") {
             let response = try await client.fetchVideos(next: next)
             videos = next == nil ? response.data : videos + response.data
             videoNextCursor = response.nextCursor
-            status = "비디오 \(videos.count)개 조회"
-        } catch {
-            status = "비디오 조회 실패: \(error.localizedDescription)"
+            let first = videos.first.map { "\($0.title) (\($0.videoID))" } ?? "없음"
+            return "count=\(videos.count), first=\(first)"
         }
     }
 
     private func play(videoID: String) async {
-        status = "스트림 URL 조회 중"
-        do {
+        await run(label: "스트림 URL 조회", method: "GET", path: "/v1/videos/{video_id}/stream", payload: "video_id=\(videoID)") {
             let url = try await client.fetchVideoStream(videoID: videoID)
             player = AVPlayer(url: url)
             player?.play()
-            status = "비디오 재생 요청 완료"
-        } catch {
-            status = "스트림 조회 실패: \(error.localizedDescription)"
+            return url.absoluteString
         }
     }
 
     private func like(video: VideoDebugDTO) async {
-        await run("비디오 좋아요") {
+        await run(label: "비디오 좋아요", method: "POST", path: "/v1/videos/{video_id}/like", payload: "video_id=\(video.videoID), like_status=\(!video.isLiked)") {
             let confirmed = try await client.updateVideoLike(videoID: video.videoID, isLiked: !video.isLiked)
             videos = videos.map { item in
                 guard item.videoID == video.videoID else { return item }
@@ -1631,17 +2023,20 @@ struct DeveloperDiagnosticsRootView: View {
                     isLiked: confirmed
                 )
             }
+            return "like_status=\(confirmed)"
         }
     }
 
     private func uploadStoreImages() async {
         guard let files = await makeUploadFiles(from: selectedStoreImages), !files.isEmpty else {
             status = "가게 이미지를 선택해 주세요."
+            appendLog(method: "POST", path: "/v1/stores/files", payload: "files=0", status: "입력 오류", response: "가게 이미지를 선택해 주세요.")
             return
         }
-        await run("가게 이미지 업로드") {
+        await run(label: "가게 이미지 업로드", method: "POST", path: "/v1/stores/files", payload: "files=\(files.count)") {
             storeImages = try await client.uploadStoreImages(files)
             selectedStoreImages = []
+            return storeImages.joined(separator: ", ")
         }
     }
 
@@ -1649,16 +2044,103 @@ struct DeveloperDiagnosticsRootView: View {
         guard let selectedMenuImage,
               let file = await makeUploadFiles(from: [selectedMenuImage])?.first else {
             status = "메뉴 이미지를 선택해 주세요."
+            appendLog(method: "POST", path: "/v1/menus/image", payload: "menu_image=0", status: "입력 오류", response: "메뉴 이미지를 선택해 주세요.")
             return
         }
-        await run("메뉴 이미지 업로드") {
+        await run(label: "메뉴 이미지 업로드", method: "POST", path: "/v1/menus/image", payload: "menu_image=\(file.fileName)") {
             menuImage = try await client.uploadMenuImage(file)
             self.selectedMenuImage = nil
+            return menuImage ?? "-"
         }
     }
 
     private func mutateStore(isUpdate: Bool) async {
-        let request = StoreDebugMutationRequestDTO(
+        let request = makeStoreRequest()
+        let path = isUpdate ? "/v1/stores/{store_id}" : "/v1/stores"
+        await run(label: isUpdate ? "가게 수정" : "가게 등록", method: isUpdate ? "PUT" : "POST", path: path, payload: "store_id=\(storeID.nilIfBlank ?? "-"), images=\(storeImages.count)") {
+            if isUpdate {
+                let response = try await client.updateStore(storeID: storeID, request: request)
+                storeID = response.storeID
+                return "store_id=\(response.storeID)"
+            } else {
+                let response = try await client.createStore(request)
+                storeID = response.storeID
+                return "store_id=\(response.storeID)"
+            }
+        }
+    }
+
+    private func mutateMenu(isUpdate: Bool) async {
+        let request = makeMenuRequest()
+        let path = isUpdate ? "/v1/menus/{menu_id}" : "/v1/menus/stores/{store_id}"
+        await run(label: isUpdate ? "메뉴 수정" : "메뉴 등록", method: isUpdate ? "PUT" : "POST", path: path, payload: "store_id=\(storeID.nilIfBlank ?? "-"), menu_id=\(menuID.nilIfBlank ?? "-")") {
+            if isUpdate {
+                let response = try await client.updateMenu(menuID: menuID, request: request)
+                if let responseMenuID = response.menuID { menuID = responseMenuID }
+                return "menu_id=\(response.menuID ?? menuID), store_id=\(response.storeID ?? storeID)"
+            } else {
+                let response = try await client.createMenu(storeID: storeID, request: request)
+                if let responseMenuID = response.menuID { menuID = responseMenuID }
+                if let responseStoreID = response.storeID { storeID = responseStoreID }
+                return "menu_id=\(response.menuID ?? "-"), store_id=\(response.storeID ?? storeID)"
+            }
+        }
+    }
+
+    private func createOrder() async {
+        let quantity = Int(orderQuantity) ?? 1
+        let totalPrice = Int(orderTotalPrice) ?? 100
+        await run(label: "테스트 주문 생성", method: "POST", path: "/v1/orders", payload: "store_id=\(storeID), menu_id=\(menuID), quantity=\(quantity), total_price=\(totalPrice)") {
+            let response = try await client.createOrder(storeID: storeID, menuID: menuID, quantity: quantity, totalPrice: totalPrice)
+            orderID = response.orderID
+            orderCode = response.orderCode
+            return "order_id=\(response.orderID), order_code=\(response.orderCode)"
+        }
+    }
+
+    private func fetchOrders() async {
+        await run(label: "주문 상태 조회", method: "GET", path: "/v1/orders", payload: "-") {
+            let response = try await client.fetchOrders()
+            if let matched = response.data.first(where: { $0.orderCode == orderCode || $0.orderID == orderID }) {
+                orderID = matched.orderID
+                orderCode = matched.orderCode
+                return "현재 상태=\(matched.currentOrderStatus), order_code=\(matched.orderCode)"
+            }
+            return "주문 \(response.data.count)개 조회. 입력한 order_id/order_code와 일치하는 주문 없음"
+        }
+    }
+
+    private func updateOrderStatus(_ nextStatus: DeveloperOrderStatusAction) async {
+        await run(label: "주문 상태 변경", method: "PUT", path: "/v1/orders/{order_code}", payload: "order_code=\(orderCode), nextStatus=\(nextStatus.rawValue)") {
+            try await client.updateOrderStatus(orderCode: orderCode, nextStatus: nextStatus)
+            NotificationCenter.default.post(
+                name: .pikkoOrderStatusDidChange,
+                object: nil,
+                userInfo: [
+                    OrderStatusChangeNotificationUserInfoKey.event: OrderStatusChangeNotification(
+                        orderID: orderID.nilIfBlank,
+                        orderCode: orderCode,
+                        status: nextStatus.orderStatus
+                    )
+                ]
+            )
+            return "상태 변경 완료: \(nextStatus.rawValue)"
+        }
+    }
+
+    private func perform(_ action: DeveloperDangerousAction) async {
+        switch action {
+        case .updateStore:
+            await mutateStore(isUpdate: true)
+        case .updateMenu:
+            await mutateMenu(isUpdate: true)
+        case .updateOrderStatus(let status):
+            await updateOrderStatus(status)
+        }
+    }
+
+    private func makeStoreRequest() -> StoreDebugMutationRequestDTO {
+        StoreDebugMutationRequestDTO(
             name: "새싹 테스트 가게",
             category: "커피",
             description: "DEBUG 진단 화면에서 생성한 테스트 가게",
@@ -1672,33 +2154,19 @@ struct DeveloperDiagnosticsRootView: View {
             hashTags: ["#테스트"],
             isPicchelin: false
         )
-        await run(isUpdate ? "가게 수정" : "가게 등록") {
-            if isUpdate {
-                try await client.updateStore(storeID: storeID, request: request)
-            } else {
-                try await client.createStore(request)
-            }
-        }
     }
 
-    private func mutateMenu(isUpdate: Bool) async {
-        let request = MenuDebugMutationRequestDTO(
+    private func makeMenuRequest() -> MenuDebugMutationRequestDTO {
+        MenuDebugMutationRequestDTO(
             name: "새싹 테스트 메뉴",
             description: "DEBUG 진단 화면에서 생성한 테스트 메뉴",
             originInformation: "원산지 테스트",
-            price: 100,
+            price: Int(orderTotalPrice) ?? 100,
             category: "대표 메뉴",
             tags: ["테스트"],
             menuImageURL: menuImage,
             isSoldOut: false
         )
-        await run(isUpdate ? "메뉴 수정" : "메뉴 등록") {
-            if isUpdate {
-                try await client.updateMenu(menuID: menuID, request: request)
-            } else {
-                try await client.createMenu(storeID: storeID, request: request)
-            }
-        }
     }
 
     private func makeUploadFiles(from items: [PhotosPickerItem]) async -> [StoreReviewUploadFile]? {
@@ -1722,15 +2190,28 @@ struct DeveloperDiagnosticsRootView: View {
     }
 }
 
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 @MainActor
 struct DeveloperDiagnosticsBuilder {
     let apiClient: any APIClientProtocol
     let appConfiguration: AppConfiguration
+    let sessionStore: SessionStore
+    let authRepository: AuthRepository
+    let userDefaultsStore: any UserDefaultsStoring
     let imageLoader: any AuthorizedImageLoading
 
     func build() -> DeveloperDiagnosticsRootView {
         DeveloperDiagnosticsRootView(
             client: DeveloperDiagnosticsClient(apiClient: apiClient, appConfiguration: appConfiguration),
+            sessionStore: sessionStore,
+            authRepository: authRepository,
+            userDefaultsStore: userDefaultsStore,
             imageLoader: imageLoader
         )
     }
@@ -1740,12 +2221,14 @@ struct DeveloperDiagnosticsBuilder {
 @MainActor
 struct UserSearchBuilder {
     let authRepository: AuthRepository
+    let sessionStore: SessionStore
     let imageLoader: any AuthorizedImageLoading
-    let makeChatView: (String) -> AnyView
+    let makeChatView: (ChatTarget) -> AnyView
 
     func build() -> UserSearchRootView {
         UserSearchRootView(
             authRepository: authRepository,
+            sessionStore: sessionStore,
             imageLoader: imageLoader,
             makeChatView: makeChatView
         )
@@ -2224,8 +2707,10 @@ final class CommunityPostListPresenter: ObservableObject {
 
             return .init(
                 id: model.id,
+                authorID: model.authorID,
                 authorName: model.authorName,
                 authorAvatarPath: model.authorAvatarPath,
+                canChatWithAuthor: model.canChatWithAuthor,
                 timeText: model.timeText,
                 title: model.title,
                 bodyText: model.bodyText,
@@ -2241,8 +2726,10 @@ final class CommunityPostListPresenter: ObservableObject {
     private func makeCommunityCardModel(_ post: CommunityPostSummary) -> CommunityCard.Model {
         CommunityCard.Model(
             id: post.id,
+            authorID: post.creator.id,
             authorName: post.creator.nick,
             authorAvatarPath: post.creator.profileImagePath,
+            canChatWithAuthor: false,
             timeText: makeRelativeTimeText(from: post.createdAt),
             title: post.title,
             bodyText: post.content,

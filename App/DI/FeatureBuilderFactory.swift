@@ -63,8 +63,8 @@ struct FeatureBuilderFactory {
             makeCartView: { _ in
                 makeCartView()
             },
-            makeChatView: { storeID in
-                makeChatView(storeID: storeID)
+            makeChatView: { target in
+                makeChatView(target: target)
             },
             makeReviewComposerView: { context, onSubmitted in
                 AnyView(makeReviewComposerView(context: context, onSubmitted: onSubmitted))
@@ -246,6 +246,9 @@ struct FeatureBuilderFactory {
             },
             makeStoreDetailView: { storeID in
                 AnyView(makeStoreDetailView(storeID: storeID))
+            },
+            makeChatView: { target in
+                AnyView(makeChatView(target: target))
             }
         ).build()
     }
@@ -307,11 +310,18 @@ struct FeatureBuilderFactory {
         )
     }
 
-    func makeChatView(storeID: String? = nil, opponentID: String? = nil) -> ChatRootView {
+    func makeChatView(target: ChatTarget? = nil) -> ChatRootView {
         ChatBuilder(
-            storeID: storeID,
-            opponentID: opponentID,
+            target: target,
             chatRepository: container.chatRepository,
+            localDataSource: container.chatLocalDataSource,
+            makeRealtimeService: {
+                ChatSocketIOClient(
+                    configuration: container.appConfiguration,
+                    tokenStore: container.tokenStore,
+                    mapper: ChatMapper(fileURLResolver: container.authorizedFileURLResolver)
+                )
+            },
             storeRepository: container.storeRepository,
             sessionStore: appState.sessionStore,
             imageLoader: container.authorizedImageLoader
@@ -321,9 +331,10 @@ struct FeatureBuilderFactory {
     private func makeUserSearchView() -> UserSearchRootView {
         UserSearchBuilder(
             authRepository: container.authRepository,
+            sessionStore: appState.sessionStore,
             imageLoader: container.authorizedImageLoader,
-            makeChatView: { opponentID in
-                AnyView(makeChatView(opponentID: opponentID))
+            makeChatView: { target in
+                AnyView(makeChatView(target: target))
             }
         ).build()
     }
@@ -333,6 +344,9 @@ struct FeatureBuilderFactory {
         DeveloperDiagnosticsBuilder(
             apiClient: container.apiClient,
             appConfiguration: container.appConfiguration,
+            sessionStore: appState.sessionStore,
+            authRepository: container.authRepository,
+            userDefaultsStore: container.userDefaultsStore,
             imageLoader: container.authorizedImageLoader
         ).build()
     }

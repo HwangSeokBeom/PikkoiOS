@@ -6,6 +6,10 @@ GoogleService-Info.plist
 *.p8
 AuthKey_*.p8
 fastlane/AppStoreConnect_API_Key*.json
+*firebase-adminsdk*.json
+*serviceAccount*.json
+firebase-service-account.json
+pikko-*-firebase-adminsdk-*.json
 .env
 .env.*
 !.env.example

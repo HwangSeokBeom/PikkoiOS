@@ -43,18 +43,18 @@
 	<string>1</string>
 	<key>GIDClientID</key>
 	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
-	<key>GoogleIOSClientID</key>
-	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
-	<key>GoogleReversedClientID</key>
-	<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
-	<key>KakaoNativeAppKey</key>
-	<string>$(KAKAO_NATIVE_APP_KEY)</string>
-	<key>KAKAO_NATIVE_APP_KEY</key>
-	<string>$(KAKAO_NATIVE_APP_KEY)</string>
 	<key>GOOGLE_IOS_CLIENT_ID</key>
 	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
 	<key>GOOGLE_REVERSED_CLIENT_ID</key>
 	<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
+	<key>GoogleIOSClientID</key>
+	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
+	<key>GoogleReversedClientID</key>
+	<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
+	<key>KAKAO_NATIVE_APP_KEY</key>
+	<string>$(KAKAO_NATIVE_APP_KEY)</string>
+	<key>KakaoNativeAppKey</key>
+	<string>$(KAKAO_NATIVE_APP_KEY)</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>kakao</string>
@@ -62,8 +62,6 @@
 		<string>kakaolink</string>
 		<string>kakaotalk</string>
 	</array>
-	<!-- The current training server only exposes HTTP on pickup.sesac.kr.
-	     Keep the ATS exception scoped to this domain and migrate production traffic to HTTPS. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>
@@ -81,19 +79,27 @@
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>현재 위치 주변의 픽업 가능한 매장을 보여주기 위해 위치 정보를 사용합니다.</string>
-	<key>PIKKO_APP_ENV</key>
-	<string>$(PIKKO_APP_ENV)</string>
 	<key>PIKKOBaseURL</key>
 	<string>$(PIKKO_BASE_URL)</string>
+	<key>PIKKOSeSACKey</key>
+	<string>$(PIKKO_SESAC_KEY)</string>
+	<key>PIKKO_APP_ENV</key>
+	<string>$(PIKKO_APP_ENV)</string>
 	<key>PIKKO_BASE_URL</key>
 	<string>$(PIKKO_BASE_URL)</string>
 	<key>PIKKO_INTERNAL_STUB_AUTH_ENABLED</key>
 	<string>$(PIKKO_INTERNAL_STUB_AUTH_ENABLED)</string>
-	<key>PIKKOSeSACKey</key>
-	<string>$(PIKKO_SESAC_KEY)</string>
 	<key>PIKKO_SESAC_KEY</key>
 	<string>$(PIKKO_SESAC_KEY)</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
 </dict>
 </plist>

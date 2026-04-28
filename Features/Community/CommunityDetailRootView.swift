@@ -7,11 +7,13 @@ struct CommunityDetailRootView: View {
     private let makeAuthView: (AuthPresentationContext, @escaping () -> Void) -> AnyView
     private let makeCommunityComposerView: (CommunityComposerMode, CommunityComposerInitialDraft?, @escaping (String) -> Void) -> AnyView
     private let makeStoreDetailView: (String) -> AnyView
+    private let makeChatView: (ChatTarget) -> AnyView
     @Environment(\.dismiss) private var dismiss
 
     @State private var presentedStoreID: String?
     @State private var presentedComposerMode: CommunityComposerMode = .create
     @State private var presentedComposerInitialDraft: CommunityComposerInitialDraft?
+    @State private var presentedChatTarget: ChatTarget?
     @State private var isComposerPresented = false
 
     init(
@@ -20,7 +22,8 @@ struct CommunityDetailRootView: View {
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping (AuthPresentationContext, @escaping () -> Void) -> AnyView,
         makeCommunityComposerView: @escaping (CommunityComposerMode, CommunityComposerInitialDraft?, @escaping (String) -> Void) -> AnyView,
-        makeStoreDetailView: @escaping (String) -> AnyView
+        makeStoreDetailView: @escaping (String) -> AnyView,
+        makeChatView: @escaping (ChatTarget) -> AnyView
     ) {
         _presenter = StateObject(wrappedValue: presenter)
         _router = StateObject(wrappedValue: router)
@@ -28,6 +31,7 @@ struct CommunityDetailRootView: View {
         self.makeAuthView = makeAuthView
         self.makeCommunityComposerView = makeCommunityComposerView
         self.makeStoreDetailView = makeStoreDetailView
+        self.makeChatView = makeChatView
     }
 
     var body: some View {
@@ -46,6 +50,8 @@ struct CommunityDetailRootView: View {
                 presentedComposerMode = mode
                 presentedComposerInitialDraft = initialDraft
                 isComposerPresented = true
+            case let .chat(target):
+                presentedChatTarget = target
             default:
                 break
             }
@@ -74,6 +80,13 @@ struct CommunityDetailRootView: View {
                 if postID == presenter.viewState.postID {
                     Task { await presenter.send(.retryTapped) }
                 }
+            }
+        }
+        .navigationDestination(isPresented: chatPresentedBinding) {
+            if let presentedChatTarget {
+                makeChatView(presentedChatTarget)
+            } else {
+                EmptyView()
             }
         }
         .fullScreenCover(isPresented: authPresentedBinding) {
@@ -122,6 +135,18 @@ private extension CommunityDetailRootView {
                     isComposerPresented = false
                     presentedComposerMode = .create
                     presentedComposerInitialDraft = nil
+                    router.clearPendingRoute()
+                }
+            }
+        )
+    }
+
+    var chatPresentedBinding: Binding<Bool> {
+        Binding(
+            get: { presentedChatTarget != nil },
+            set: { isPresented in
+                if !isPresented {
+                    presentedChatTarget = nil
                     router.clearPendingRoute()
                 }
             }

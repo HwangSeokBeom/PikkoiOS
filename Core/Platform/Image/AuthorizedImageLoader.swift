@@ -96,6 +96,11 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw NetworkError.transport
             }
+#if DEBUG
+            logger.debug(
+                "Image request completed. url=\(url.absoluteString) status=\(httpResponse.statusCode) hasAuthorization=\(request.value(forHTTPHeaderField: "Authorization")?.isEmpty == false) hasSesacKey=\(request.value(forHTTPHeaderField: "SesacKey")?.isEmpty == false)"
+            )
+#endif
 
             switch httpResponse.statusCode {
             case 200..<300:

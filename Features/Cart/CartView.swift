@@ -53,6 +53,8 @@ struct CartView: View {
             }
         }
         .pikkoScreen(title: presenter.viewState.title)
+        .toolbarColorScheme(.light, for: .navigationBar)
+        .toolbarBackground(PikkoColor.background, for: .navigationBar)
     }
 
     private var storeSummaryCard: some View {

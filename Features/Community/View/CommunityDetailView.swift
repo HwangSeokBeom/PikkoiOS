@@ -46,6 +46,9 @@ struct CommunityDetailView: View {
                             CommunityCard(
                                 model: postCard,
                                 loader: imageLoader,
+                                onAuthorChatTapped: { authorID in
+                                    Task { await presenter.send(.authorChatTapped(authorID)) }
+                                },
                                 onLikeTapped: {
                                     Task { await presenter.send(.likeTapped) }
                                 },
@@ -83,6 +86,9 @@ struct CommunityDetailView: View {
                             },
                             onDeleteConfirmed: { commentID in
                                 Task { await presenter.send(.commentDeleteConfirmed(commentID)) }
+                            },
+                            onAuthorChatTapped: { authorID in
+                                Task { await presenter.send(.commentAuthorChatTapped(authorID)) }
                             }
                         )
                     }
@@ -262,7 +268,8 @@ private struct PreviewCommunityDetailContainer: View {
             imageLoader: PreviewAuthorizedImageLoader(),
             makeAuthView: { _, _ in AnyView(EmptyView()) },
             makeCommunityComposerView: { _, _, _ in AnyView(EmptyView()) },
-            makeStoreDetailView: { _ in AnyView(EmptyView()) }
+            makeStoreDetailView: { _ in AnyView(EmptyView()) },
+            makeChatView: { _ in AnyView(EmptyView()) }
         )
     }
 }

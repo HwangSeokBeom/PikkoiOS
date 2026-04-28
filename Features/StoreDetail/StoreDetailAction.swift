@@ -13,5 +13,6 @@ enum StoreDetailAction {
     case reviewWriteTapped
     case reviewEditTapped
     case reviewDeleteTapped
+    case reviewAuthorChatTapped(String)
     case stickyCTATapped
 }

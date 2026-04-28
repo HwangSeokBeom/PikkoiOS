@@ -48,5 +48,5 @@ enum AppRoute: Equatable {
     case communitySearch(query: String)
     case communityComposer(mode: CommunityComposerMode, initialDraft: CommunityComposerInitialDraft?)
     case reviewComposer(ReviewComposerContext)
-    case chat(storeID: String)
+    case chat(ChatTarget)
 }

@@ -7,6 +7,7 @@ struct StoreDetailReviewSummarySectionView: View {
     var onWriteTapped: (() -> Void)?
     var onEditTapped: (() -> Void)?
     var onDeleteTapped: (() -> Void)?
+    var onAuthorChatTapped: ((String) -> Void)?
 
     @State private var isDeleteConfirmationPresented = false
 
@@ -109,9 +110,25 @@ struct StoreDetailReviewSummarySectionView: View {
                         }
                     }
 
-                    Text(reviewPreview.authorName)
-                        .font(PikkoTypography.captionStrong)
-                        .foregroundStyle(PikkoColor.accentStrong)
+                    HStack(spacing: PikkoSpacing.xs) {
+                        Text(reviewPreview.authorName)
+                            .font(PikkoTypography.captionStrong)
+                            .foregroundStyle(PikkoColor.accentStrong)
+
+                        if reviewPreview.canChatWithAuthor, let authorID = reviewPreview.authorID {
+                            Button {
+                                onAuthorChatTapped?(authorID)
+                            } label: {
+                                Image(systemName: "bubble.left")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(PikkoColor.accentStrong)
+                                    .frame(width: 28, height: 28)
+                                    .background(PikkoColor.surfaceMuted)
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
 
                     Text("별점 \(reviewPreview.ratingText)")
                         .font(PikkoTypography.caption)

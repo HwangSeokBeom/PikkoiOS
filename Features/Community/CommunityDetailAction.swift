@@ -8,6 +8,8 @@ enum CommunityDetailAction {
     case commentsRetryTapped
     case loginRequiredTapped
     case likeTapped
+    case authorChatTapped(String)
+    case commentAuthorChatTapped(String)
     case storeSnippetTapped(String)
     case commentComposerChanged(String)
     case commentSubmitTapped

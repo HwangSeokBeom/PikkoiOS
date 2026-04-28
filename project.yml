@@ -8,6 +8,12 @@ packages:
   GoogleSignIn:
     url: https://github.com/google/GoogleSignIn-iOS
     from: 9.0.0
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk
+    from: 11.0.0
+  SocketIO:
+    url: https://github.com/socketio/socket.io-client-swift
+    from: 16.1.1
 configs:
   Debug: debug
   Release: release
@@ -20,24 +26,66 @@ targets:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
+    attributes:
+      SystemCapabilities:
+        com.apple.Push:
+          enabled: 1
+        com.apple.BackgroundModes:
+          enabled: 1
     configFiles:
       Debug: Config/Debug.xcconfig
       Release: Config/Release.xcconfig
     sources:
       - path: App
+        excludes:
+          - "**/* 2.swift"
+          - "**/* 3.swift"
+          - "**/* 4.swift"
       - path: Config
         excludes:
           - "*.xcconfig"
           - "*.plist"
           - "*.entitlements"
       - path: Core
+        excludes:
+          - "**/* 2.swift"
+          - "**/* 3.swift"
+          - "**/* 4.swift"
       - path: Domain
+        excludes:
+          - "**/* 2.swift"
+          - "**/* 3.swift"
+          - "**/* 4.swift"
       - path: Data
+        excludes:
+          - "**/* 2.swift"
+          - "**/* 3.swift"
+          - "**/* 4.swift"
       - path: DesignSystem
       - path: Shared
+        excludes:
+          - "**/* 2.swift"
+          - "**/* 3.swift"
+          - "**/* 4.swift"
       - path: Features
+        excludes:
+          - "**/* 2.swift"
+          - "**/* 3.swift"
+          - "**/* 4.swift"
+      - path: Features/Home/HomeBuilder 2.swift
+      - path: Features/Home/HomeInteractor 2.swift
+      - path: Features/Home/HomePresenter 2.swift
     resources:
       - path: Resources
+    postBuildScripts:
+      - name: Copy GoogleService-Info.plist
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info.plist"
+        script: |
+          if [ -f "${PROJECT_DIR}/Config/GoogleService-Info.plist" ]; then
+            mkdir -p "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+            cp "${PROJECT_DIR}/Config/GoogleService-Info.plist" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist"
+          fi
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pikko.ios
@@ -45,6 +93,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Config/Pikko-Info.plist
         CODE_SIGN_ENTITLEMENTS: Config/Pikko.entitlements
+        DEVELOPMENT_TEAM: 63SB2B8YJ5
         CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
@@ -56,6 +105,12 @@ targets:
         product: KakaoSDKUser
       - package: GoogleSignIn
         product: GoogleSignIn
+      - package: Firebase
+        product: FirebaseCore
+      - package: Firebase
+        product: FirebaseMessaging
+      - package: SocketIO
+        product: SocketIO
     scheme:
       gatherCoverageData: false
       testTargets:
@@ -70,6 +125,10 @@ targets:
       Release: Config/Test.xcconfig
     sources:
       - path: Tests
+        excludes:
+          - "**/* 2.swift"
+          - "**/* 3.swift"
+          - "**/* 4.swift"
     dependencies:
       - target: Pikko
     settings:

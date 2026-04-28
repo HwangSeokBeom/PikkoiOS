@@ -7,7 +7,7 @@ final class NetworkInfrastructureTests: XCTestCase {
         super.tearDown()
     }
 
-    func testRequestBuilderInjectsSeSACKeyAndRawAuthorizationHeader() async throws {
+    func testRequestBuilderInjectsSesacKeyAndRawAuthorizationHeader() async throws {
         let tokenStore = StubTokenStore(
             tokens: StoredTokens(accessToken: "access-token", refreshToken: "refresh-token")
         )
@@ -26,7 +26,7 @@ final class NetworkInfrastructureTests: XCTestCase {
 
         let request = try await requestBuilder.build(for: endpoint)
 
-        XCTAssertEqual(request.value(forHTTPHeaderField: "SeSACKey"), "test-sesac-key")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "SesacKey"), "test-sesac-key")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "access-token")
         XCTAssertNil(request.value(forHTTPHeaderField: "RefreshToken"))
     }
@@ -48,7 +48,7 @@ final class NetworkInfrastructureTests: XCTestCase {
 
         let request = try await requestBuilder.build(for: endpoint)
 
-        XCTAssertEqual(request.value(forHTTPHeaderField: "SeSACKey"), "test-sesac-key")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "SesacKey"), "test-sesac-key")
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
         XCTAssertNil(request.value(forHTTPHeaderField: "RefreshToken"))
     }

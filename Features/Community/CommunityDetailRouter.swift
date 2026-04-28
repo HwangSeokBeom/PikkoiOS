@@ -8,6 +8,7 @@ protocol CommunityDetailRouting: AnyObject {
         initialDraft: CommunityComposerInitialDraft?
     )
     func routeToStoreDetail(storeID: String)
+    func routeToChat(target: ChatTarget)
     func requestDismiss()
     func clearPendingRoute()
 }
@@ -33,6 +34,10 @@ final class CommunityDetailRouter: ObservableObject, CommunityDetailRouting {
 
     func routeToStoreDetail(storeID: String) {
         pendingRoute = .storeDetail(storeID: storeID)
+    }
+
+    func routeToChat(target: ChatTarget) {
+        pendingRoute = .chat(target)
     }
 
     func requestDismiss() {

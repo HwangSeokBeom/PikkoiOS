@@ -15,8 +15,10 @@ struct CommunityCard: View {
 
     struct Model: Identifiable, Equatable {
         let id: String
+        let authorID: String
         let authorName: String
         let authorAvatarPath: String?
+        let canChatWithAuthor: Bool
         let timeText: String
         let title: String
         let bodyText: String
@@ -30,6 +32,7 @@ struct CommunityCard: View {
     let model: Model
     let loader: any AuthorizedImageLoading
     var onCardTapped: (() -> Void)?
+    var onAuthorChatTapped: ((String) -> Void)?
     var onLikeTapped: (() -> Void)?
     var onStoreSnippetTapped: ((String) -> Void)?
 
@@ -73,6 +76,22 @@ struct CommunityCard: View {
                 Text(model.timeText)
                     .font(PikkoTypography.caption)
                     .foregroundStyle(PikkoColor.secondaryText)
+            }
+
+            Spacer(minLength: PikkoSpacing.sm)
+
+            if model.canChatWithAuthor {
+                Button {
+                    onAuthorChatTapped?(model.authorID)
+                } label: {
+                    Image(systemName: "bubble.left")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(PikkoColor.accentStrong)
+                        .frame(width: 32, height: 32)
+                        .background(PikkoColor.surfaceMuted)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -254,8 +273,10 @@ struct CommunityCard: View {
         CommunityCard(
             model: .init(
                 id: "community-1",
+                authorID: "author-1",
                 authorName: "새싹 초록록 찹찹",
                 authorAvatarPath: "avatar-green",
+                canChatWithAuthor: true,
                 timeText: "51분 전",
                 title: "입안에서 피어나는 봄, 도넛 한 입",
                 bodyText: "가게 문을 열자마자 퍼지는 달콤한 향기, 작은 도넛 위에 얹힌 새싹처럼 싱그러운 상상력. 한 입 베어물면 부드럽게 퍼지는 포근한 맛에 잠시 멈춰 서서 봄날을 음미하게 돼요.",

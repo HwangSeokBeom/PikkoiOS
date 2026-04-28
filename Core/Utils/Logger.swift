@@ -76,7 +76,9 @@ enum SensitiveLogRedactor {
             return "exists=false"
         }
 
-        return "exists=true prefix=\(String(token.prefix(4)))... length=\(token.count)"
+        let prefix = String(token.prefix(4))
+        let suffix = token.count > 8 ? String(token.suffix(4)) : ""
+        return "exists=true prefix=\(prefix)...suffix=\(suffix) length=\(token.count)"
     }
 
     private static func redactValues(for key: String, in message: String) -> String {

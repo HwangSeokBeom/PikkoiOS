@@ -53,7 +53,19 @@ final class StoreDetailPresenter: ObservableObject {
                 longitude: storeDetail?.longitude
             )
         case .chatTapped:
-            router.routeToChat(storeID: viewState.storeID)
+            guard let storeDetail else {
+                viewState.errorMessage = "가게 정보를 불러온 뒤 채팅을 시작할 수 있어요."
+                return
+            }
+            router.routeToChat(
+                target: .store(
+                    storeID: storeDetail.id,
+                    storeName: storeDetail.name,
+                    ownerID: storeDetail.owner?.id,
+                    ownerName: storeDetail.owner?.nick,
+                    ownerProfileImagePath: storeDetail.owner?.profileImagePath
+                )
+            )
         case .menuFilterTapped(let filterID):
             guard let filter = viewState.menuFilters.first(where: { $0.id == filterID }) else {
                 return
@@ -77,6 +89,8 @@ final class StoreDetailPresenter: ObservableObject {
             )
         case .reviewDeleteTapped:
             await deleteFeaturedReview()
+        case .reviewAuthorChatTapped(let authorID):
+            routeToReviewAuthorChat(authorID: authorID)
         case .stickyCTATapped:
             guard viewState.stickyCartSummary.isEnabled else { return }
             router.routeToCart(storeID: viewState.storeID)
@@ -238,6 +252,21 @@ final class StoreDetailPresenter: ObservableObject {
         } catch {
             viewState.errorMessage = resolveErrorMessage(from: error)
         }
+    }
+
+    private func routeToReviewAuthorChat(authorID: String) {
+        guard let review = reviewPage.items.first(where: { $0.author.id == authorID }) else {
+            viewState.errorMessage = "채팅 상대를 찾지 못했어요."
+            return
+        }
+
+        router.routeToChat(
+            target: .user(
+                userID: review.author.id,
+                nickname: review.author.nick,
+                profileImagePath: review.author.profileImagePath
+            )
+        )
     }
 
     private func updateMenuQuantity(menuID: String, delta: Int) {
@@ -422,13 +451,16 @@ final class StoreDetailPresenter: ObservableObject {
         guard let review else {
             return StoreDetailReviewPreview(
                 id: nil,
+                authorID: nil,
                 title: "아직 등록된 리뷰가 없어요",
                 body: "첫 번째 리뷰를 남기면 이 영역에 대표 후기가 표시됩니다.",
                 keywordBadges: [],
                 authorName: "리뷰 준비 중",
+                authorAvatarPath: nil,
                 metricSummary: "리뷰 \(totalReviewCount)개",
                 ratingText: "-",
-                showsActions: false
+                showsActions: false,
+                canChatWithAuthor: false
             )
         }
 
@@ -437,13 +469,16 @@ final class StoreDetailPresenter: ObservableObject {
 
         return StoreDetailReviewPreview(
             id: review.id,
+            authorID: review.author.id,
             title: review.orderedMenuNames.first ?? "대표 리뷰",
             body: review.content,
             keywordBadges: badges,
             authorName: review.author.nick,
+            authorAvatarPath: review.author.profileImagePath,
             metricSummary: metricSummary,
             ratingText: "\(review.rating)",
-            showsActions: true
+            showsActions: true,
+            canChatWithAuthor: true
         )
     }
 

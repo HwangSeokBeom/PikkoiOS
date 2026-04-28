@@ -52,6 +52,7 @@
 		2B6EDB34C0C5A9D92BE9D35B /* MapLauncherProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B48D81F252B37E52AD911F19 /* MapLauncherProtocol.swift */; };
 		2BF5527B8CC357518720E22C /* CommunityHeaderSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E09D662E8091116F9A8699D /* CommunityHeaderSectionView.swift */; };
 		2C49B2D912A8535CDBEDDB86 /* PikkoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E22386EFEFFBF792C7B5F3C4 /* PikkoApp.swift */; };
+		2D7B158A643B57FC793FFDE9 /* Secrets.xcconfig.sample in Resources */ = {isa = PBXBuildFile; fileRef = B37D20BB321ED4B8715B91D0 /* Secrets.xcconfig.sample */; };
 		2D8D19DEF9D33E657DA5CC55 /* StoreSummaryDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D8F086AC8C5E9B109904C7 /* StoreSummaryDTO.swift */; };
 		2E028EA8691C05A835D43A32 /* NetworkError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09E94D87CF5E2C247D4AF634 /* NetworkError.swift */; };
 		2E5CFAEB57AFAA575B475AC1 /* CheckoutPriceValidationRequestDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95E43036CF1F8F888A895859 /* CheckoutPriceValidationRequestDTO.swift */; };
@@ -76,6 +77,7 @@
 		3ED028919315D7CB345AAB9A /* CreatedOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBF7000067C958775D3DB445 /* CreatedOrder.swift */; };
 		3EEEDEB979E80D87B61E5939 /* AuthRemoteDataSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766D27CB86D6B196A031EB44 /* AuthRemoteDataSource.swift */; };
 		3F641EED514A9908FD09B93E /* InMemoryAuthRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BDFEF13BD2429C85A0D8F6 /* InMemoryAuthRepository.swift */; };
+		3FABD41FCD22CF1F4089FD11 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = D2C10EED87D98D0533C61E31 /* FirebaseCore */; };
 		4033EBC8DD59ECEB03699824 /* OrderContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5533EA7B2620D2F2C5DD55 /* OrderContent.swift */; };
 		4084F5E75378C65409C7C527 /* AuthPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF7A81E3CC0BEB1978D93E56 /* AuthPresenter.swift */; };
 		40B2FD586ADF65019946245A /* SocialLoginRequestDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0977981C7ED1D7D6EF98E42 /* SocialLoginRequestDTO.swift */; };
@@ -111,6 +113,7 @@
 		5BC3F0830A57815FD6803602 /* OrderDetailPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6D830CF6532B1DDF5573C0A /* OrderDetailPresenter.swift */; };
 		5CE825808A81DC1DC3D3F68B /* CommunityCommentDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A9B2B4F54A7627D81CB451C /* CommunityCommentDTO.swift */; };
 		5CF3679B76C417A25A3A4481 /* CartRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D98A492C76DEFAAD58BF848 /* CartRouter.swift */; };
+		5D8E188D1077595543DAA9E3 /* SocketIO in Frameworks */ = {isa = PBXBuildFile; productRef = 388AE022EC709F1CBEACD1D2 /* SocketIO */; };
 		5DB615CA60BDA3EEA7C17F47 /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96D63FC8324E76077240B952 /* Logger.swift */; };
 		5DD9940CED39BAFB3253E327 /* ChatRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E258F59B1E5199534B9CF180 /* ChatRootView.swift */; };
 		5E8C701678975B49D255F945 /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A601A67E6D65538EBAB6897 /* KeychainTokenStore.swift */; };
@@ -122,6 +125,7 @@
 		6233A478B86A903C705BA460 /* CheckoutInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3009260FACE4EA323359DCD7 /* CheckoutInteractor.swift */; };
 		6251D002D9C3DED676A2014A /* ReviewRepositoryImpl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD6BD93C980479682947630 /* ReviewRepositoryImpl.swift */; };
 		6268D72AADF7E6CF5CA61F28 /* CheckoutViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04A8C520F474241F6FBA1C0C /* CheckoutViewState.swift */; };
+		62C54CC37CC0C25ABF4FF5A6 /* ChatSocketIOClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22C339D3A85F20C9435EB216 /* ChatSocketIOClient.swift */; };
 		67BF36BE762EDFEBD916650E /* RootTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A121D6EE101250B33E140F6 /* RootTab.swift */; };
 		6939A6B81725933A83694765 /* SocialAuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0F3520F20D50468DCB1A2A /* SocialAuthService.swift */; };
 		69EAAF45F332868096A2C1B3 /* CartInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2F747E279A40279272BB189 /* CartInteractor.swift */; };
@@ -192,9 +196,6 @@
 		B0E385F6EBCCF1222926010A /* OrderBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136F11D17D057991658E38C2 /* OrderBuilder.swift */; };
 		B0FE14E9B6DE92A4B2D06FFA /* OrderMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED14D1DEC9F1CDF3A725201 /* OrderMapper.swift */; };
 		B146F1B1A87647C49C0F3AC2 /* DateParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4ACD2097D28776B04906EC9 /* DateParser.swift */; };
-		B4C5D6E7F80123456789ABCE /* SplashScreen.png in Resources */ = {isa = PBXBuildFile; fileRef = B4C5D6E7F80123456789ABCD /* SplashScreen.png */; };
-		B4C5D6E7F80123456789ABD0 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = B4C5D6E7F80123456789ABCF /* LaunchScreen.storyboard */; };
-		A7B8C9D0E1F23456789ABCD0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A7B8C9D0E1F23456789ABCD1 /* Assets.xcassets */; };
 		B4E7634BE471588C4753BFDA /* CheckoutSuccessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295F62CD28BD3984914C78C8 /* CheckoutSuccessView.swift */; };
 		B50231870242381D588E435B /* CommunityRepositoryImpl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96DA4E6AABC4A90FF53F9600 /* CommunityRepositoryImpl.swift */; };
 		B5E10105519438DADD3B96F8 /* AppleSignInService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 935724C7C6A83BC72FDFDBA7 /* AppleSignInService.swift */; };
@@ -238,6 +239,7 @@
 		D5C66924227489054F773167 /* OrderAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4749F5B7D10C280816FDD1D /* OrderAction.swift */; };
 		D5EEF058CE038B58AF999F07 /* CommunityCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB1A9C5CF9FB6013F0801C4C /* CommunityCard.swift */; };
 		D652A943F2B6F17234D4C330 /* FallbackAuthorizedImageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E446FD4CF6186B94301E6C5C /* FallbackAuthorizedImageLoader.swift */; };
+		D677499C6EB0FA86F381906B /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 4514A90697240D2F396126AD /* FirebaseMessaging */; };
 		D7723104440A8AA48A899A8C /* StoreRemoteDataSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B481E58F045512A1F0B48B7 /* StoreRemoteDataSource.swift */; };
 		D7B0BB72AE400F297D435057 /* DistanceFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A2C8AEA7F09081F756C067B /* DistanceFormatter.swift */; };
 		D83C6AB8B6642C63ADD1B3A0 /* StoreDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA29EC64EE441512B16E746F /* StoreDetailView.swift */; };
@@ -352,9 +354,10 @@
 		1FD6BD93C980479682947630 /* ReviewRepositoryImpl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewRepositoryImpl.swift; sourceTree = "<group>"; };
 		1FFB5424889E20459C1B422A /* AuthFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFeatureTests.swift; sourceTree = "<group>"; };
 		227231C77E65175CC1418B45 /* CommunityDetailInteractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityDetailInteractor.swift; sourceTree = "<group>"; };
+		22C339D3A85F20C9435EB216 /* ChatSocketIOClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSocketIOClient.swift; sourceTree = "<group>"; };
 		2473A25B6B9004BC3B18AFF5 /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationService.swift; sourceTree = "<group>"; };
 		25FE799C1454BB872AEC0EA1 /* CartFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartFeatureTests.swift; sourceTree = "<group>"; };
-		261C1D87B310B1D5C94C1F8A /* PikkoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PikkoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		261C1D87B310B1D5C94C1F8A /* PikkoTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PikkoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		295F62CD28BD3984914C78C8 /* CheckoutSuccessView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutSuccessView.swift; sourceTree = "<group>"; };
 		2BAF75ADD3376DB5CD6BF5EE /* OrderDetailRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderDetailRouter.swift; sourceTree = "<group>"; };
 		2C401BD2131B3920C4F08206 /* CartAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartAction.swift; sourceTree = "<group>"; };
@@ -503,12 +506,10 @@
 		B009FF526EFF9C7B948743A8 /* GoogleSignInService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleSignInService.swift; sourceTree = "<group>"; };
 		B038463024AE8B813EA72CCF /* CartRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartRepository.swift; sourceTree = "<group>"; };
 		B2F3841DC79AFABFC85A6B1E /* OrderDetailFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderDetailFeatureTests.swift; sourceTree = "<group>"; };
+		B37D20BB321ED4B8715B91D0 /* Secrets.xcconfig.sample */ = {isa = PBXFileReference; path = Secrets.xcconfig.sample; sourceTree = "<group>"; };
 		B380CE2F4B4562FF77BB6552 /* HomeHeaderSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeHeaderSectionView.swift; sourceTree = "<group>"; };
 		B408C93B228A82BBAC236AC9 /* StoreDetailPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreDetailPresenter.swift; sourceTree = "<group>"; };
 		B48D81F252B37E52AD911F19 /* MapLauncherProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapLauncherProtocol.swift; sourceTree = "<group>"; };
-		B4C5D6E7F80123456789ABCD /* SplashScreen.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = SplashScreen.png; sourceTree = "<group>"; };
-		B4C5D6E7F80123456789ABCF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		A7B8C9D0E1F23456789ABCD1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B6345B2DD253A086BE41CBE1 /* OrderViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderViewState.swift; sourceTree = "<group>"; };
 		B743FCF1E51E9197B6B45367 /* Endpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Endpoint.swift; sourceTree = "<group>"; };
 		B7A79F115355C2C3EC95E502 /* HomePresenter 2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HomePresenter 2.swift"; sourceTree = "<group>"; };
@@ -550,7 +551,7 @@
 		D0BC8256825A1E51DE0FB1BC /* CurrencyFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrencyFormatter.swift; sourceTree = "<group>"; };
 		D0CE23D7254D56F1DDA6097B /* ProfileRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRootView.swift; sourceTree = "<group>"; };
 		D1E24970D21EFCB89993BF9B /* StoreDetailHeroSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreDetailHeroSectionView.swift; sourceTree = "<group>"; };
-		D387DD5610689CAC46E9E9FA /* Pikko.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pikko.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D387DD5610689CAC46E9E9FA /* Pikko.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Pikko.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D3E83FB729E7FF33FF3497AB /* InMemoryCartRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InMemoryCartRepository.swift; sourceTree = "<group>"; };
 		D4157D6009B8FB4A690FB5F0 /* CartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartView.swift; sourceTree = "<group>"; };
 		D415A546FEFD52FC5156CADC /* CommunityPostListResponseDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityPostListResponseDTO.swift; sourceTree = "<group>"; };
@@ -612,6 +613,9 @@
 				1C1B8AB0D75FEB804CFBBB74 /* KakaoSDKCommon in Frameworks */,
 				3AC14879F864EBD980E2D4D5 /* KakaoSDKUser in Frameworks */,
 				82F947C7595E8B13823C2DF6 /* GoogleSignIn in Frameworks */,
+				3FABD41FCD22CF1F4089FD11 /* FirebaseCore in Frameworks */,
+				D677499C6EB0FA86F381906B /* FirebaseMessaging in Frameworks */,
+				5D8E188D1077595543DAA9E3 /* SocketIO in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -637,7 +641,6 @@
 				B6A374D500EE172F218CAA91 /* DesignSystem */,
 				6EE2490C578957AEB2E4A978 /* Domain */,
 				5D0FC668B2AF27261964667F /* Features */,
-				B4C5D6E7F80123456789ABD1 /* Resources */,
 				FD0ADFB857B0C21175C617F1 /* Shared */,
 				4BF4748D7AF0BA70E16EA45B /* Tests */,
 				051CC8A4FB17C1F51C07C42E /* Products */,
@@ -658,6 +661,13 @@
 				502C9B86042F7D3E8EDE3E31 /* ReviewListResponseDTO.swift */,
 			);
 			path = Review;
+			sourceTree = "<group>";
+		};
+		0B5C5E49AF7F2EF38854BBFD /* StoreList */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = StoreList;
 			sourceTree = "<group>";
 		};
 		15F44A93F272E8EDD9EAD961 /* DTOs */ = {
@@ -946,6 +956,7 @@
 				F93D43954D92640B4ECD2DE0 /* Order */,
 				F64D1DA660877DEBD1292CB9 /* Profile */,
 				CCF8A33713D932B457EF4164 /* StoreDetail */,
+				0B5C5E49AF7F2EF38854BBFD /* StoreList */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -1158,16 +1169,6 @@
 			path = Utils;
 			sourceTree = "<group>";
 		};
-		B4C5D6E7F80123456789ABD1 /* Resources */ = {
-			isa = PBXGroup;
-			children = (
-				A7B8C9D0E1F23456789ABCD1 /* Assets.xcassets */,
-				B4C5D6E7F80123456789ABCF /* LaunchScreen.storyboard */,
-				B4C5D6E7F80123456789ABCD /* SplashScreen.png */,
-			);
-			path = Resources;
-			sourceTree = "<group>";
-		};
 		B6A374D500EE172F218CAA91 /* DesignSystem */ = {
 			isa = PBXGroup;
 			children = (
@@ -1215,6 +1216,7 @@
 				F87D783BF49A6AF1957B3B12 /* ChatPresenter.swift */,
 				E258F59B1E5199534B9CF180 /* ChatRootView.swift */,
 				F9A39EE641F6ECDA0F3CEFD3 /* ChatRouter.swift */,
+				22C339D3A85F20C9435EB216 /* ChatSocketIOClient.swift */,
 				02D21E3B90BFCB83EE109DEF /* ChatViewState.swift */,
 			);
 			path = Chat;
@@ -1239,6 +1241,7 @@
 				CB291405D6088201838633C9 /* Debug.xcconfig */,
 				4A5C1625221B303DA2995444 /* README.md */,
 				88C582E185520812DB708EEC /* Release.xcconfig */,
+				B37D20BB321ED4B8715B91D0 /* Secrets.xcconfig.sample */,
 				8BCE2C0B4B20946CBF511926 /* Test.xcconfig */,
 			);
 			path = Config;
@@ -1421,6 +1424,7 @@
 				F58755E1E53CE4AF6B2915CA /* Sources */,
 				8D122C89F325304235D25D86 /* Resources */,
 				3DCAA71F3CBFC1934AD7D89B /* Frameworks */,
+				4F3D9B0CF4C906E3951D3636 /* Copy GoogleService-Info.plist */,
 			);
 			buildRules = (
 			);
@@ -1432,6 +1436,9 @@
 				D658924EE5979BDED7876FE4 /* KakaoSDKCommon */,
 				C545864E148A8C7797275807 /* KakaoSDKUser */,
 				C3AD4283008184D440EAFB81 /* GoogleSignIn */,
+				D2C10EED87D98D0533C61E31 /* FirebaseCore */,
+				4514A90697240D2F396126AD /* FirebaseMessaging */,
+				388AE022EC709F1CBEACD1D2 /* SocketIO */,
 			);
 			productName = Pikko;
 			productReference = D387DD5610689CAC46E9E9FA /* Pikko.app */;
@@ -1465,7 +1472,9 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					59CD4DF11480D2E2AC5DAE07 = {
+						DevelopmentTeam = 63SB2B8YJ5;
 						ProvisioningStyle = Automatic;
+						SystemCapabilities = "[\"com.apple.Push\": [\"enabled\": 1], \"com.apple.BackgroundModes\": [\"enabled\": 1]]";
 					};
 				};
 			};
@@ -1479,8 +1488,10 @@
 			mainGroup = 0631D6C68DCC86C8B359A0F5;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				BC211450ABF8FAF85611B366 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				1A02C8BF8473C6E03463E68C /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				3100CC5B00733312146D47DE /* XCRemoteSwiftPackageReference "kakao-ios-sdk" */,
+				00F6549073D50C9CDBC13C0B /* XCRemoteSwiftPackageReference "socket.io-client-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 051CC8A4FB17C1F51C07C42E /* Products */;
@@ -1499,13 +1510,33 @@
 			buildActionMask = 2147483647;
 			files = (
 				1666C21344FAA9EE03F2BD8A /* README.md in Resources */,
-				A7B8C9D0E1F23456789ABCD0 /* Assets.xcassets in Resources */,
-				B4C5D6E7F80123456789ABD0 /* LaunchScreen.storyboard in Resources */,
-				B4C5D6E7F80123456789ABCE /* SplashScreen.png in Resources */,
+				2D7B158A643B57FC793FFDE9 /* Secrets.xcconfig.sample in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		4F3D9B0CF4C906E3951D3636 /* Copy GoogleService-Info.plist */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy GoogleService-Info.plist";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ -f \"${PROJECT_DIR}/Config/GoogleService-Info.plist\" ]; then\n  mkdir -p \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n  cp \"${PROJECT_DIR}/Config/GoogleService-Info.plist\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		058DC96850B1C3017000FCE8 /* Sources */ = {
@@ -1587,6 +1618,7 @@
 				3DDEB6D645C26419B677F45F /* ChatPresenter.swift in Sources */,
 				5DD9940CED39BAFB3253E327 /* ChatRootView.swift in Sources */,
 				A2707044567843D5330B879C /* ChatRouter.swift in Sources */,
+				62C54CC37CC0C25ABF4FF5A6 /* ChatSocketIOClient.swift in Sources */,
 				17BCE6B5372A9561FEC60463 /* ChatViewState.swift in Sources */,
 				168804C542F39E138FAAA481 /* CheckoutAction.swift in Sources */,
 				C4AE411A85F32643B25EFDAE /* CheckoutBuilder.swift in Sources */,
@@ -1916,11 +1948,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.pikko.ios;
 				PRODUCT_NAME = Pikko;
 				SDKROOT = iphoneos;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -2032,11 +2060,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.pikko.ios;
 				PRODUCT_NAME = Pikko;
 				SDKROOT = iphoneos;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -2073,6 +2097,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		00F6549073D50C9CDBC13C0B /* XCRemoteSwiftPackageReference "socket.io-client-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/socketio/socket.io-client-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 16.1.1;
+			};
+		};
 		1A02C8BF8473C6E03463E68C /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
@@ -2089,9 +2121,27 @@
 				kind = branch;
 			};
 		};
+		BC211450ABF8FAF85611B366 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 11.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		388AE022EC709F1CBEACD1D2 /* SocketIO */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 00F6549073D50C9CDBC13C0B /* XCRemoteSwiftPackageReference "socket.io-client-swift" */;
+			productName = SocketIO;
+		};
+		4514A90697240D2F396126AD /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC211450ABF8FAF85611B366 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
+		};
 		BCBA6EE0F81C0EAD96C8E290 /* KakaoSDKAuth */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 3100CC5B00733312146D47DE /* XCRemoteSwiftPackageReference "kakao-ios-sdk" */;
@@ -2106,6 +2156,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 3100CC5B00733312146D47DE /* XCRemoteSwiftPackageReference "kakao-ios-sdk" */;
 			productName = KakaoSDKUser;
+		};
+		D2C10EED87D98D0533C61E31 /* FirebaseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC211450ABF8FAF85611B366 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCore;
 		};
 		D658924EE5979BDED7876FE4 /* KakaoSDKCommon */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -1,12 +1,14 @@
 import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct ChatRootView: View {
     @StateObject private var presenter: ChatPresenter
     private let imageLoader: any AuthorizedImageLoading
     @FocusState private var isComposerFocused: Bool
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var isFileImporterPresented = false
 
     init(
         presenter: ChatPresenter,
@@ -30,6 +32,7 @@ struct ChatRootView: View {
         }
         .background(PikkoColor.background.ignoresSafeArea())
         .pikkoScreen(title: presenter.viewState.title)
+        .navigationBarBackButtonHidden(presenter.viewState.showsInternalBackButton)
         .toolbar {
             if presenter.viewState.showsInternalBackButton {
                 ToolbarItem(placement: .topBarLeading) {
@@ -44,6 +47,16 @@ struct ChatRootView: View {
         }
         .task {
             await presenter.send(.onAppear)
+        }
+        .onDisappear {
+            Task { await presenter.send(.onDisappear) }
+        }
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: [.pdf],
+            allowsMultipleSelection: true
+        ) { result in
+            Task { await handleFileImport(result) }
         }
     }
 
@@ -145,21 +158,35 @@ struct ChatRootView: View {
     }
 
     private var messageComposer: some View {
-        HStack(alignment: .bottom, spacing: PikkoSpacing.sm) {
+        let isUploadingFiles = presenter.viewState.isUploadingFiles
+        return HStack(alignment: .bottom, spacing: PikkoSpacing.sm) {
             PhotosPicker(
                 selection: $selectedPhotoItems,
                 maxSelectionCount: 5,
                 matching: .images,
                 preferredItemEncoding: .automatic
             ) {
-                Image(systemName: presenter.viewState.isUploadingFiles ? "hourglass" : "paperclip")
+                Image(systemName: isUploadingFiles ? "hourglass" : "paperclip")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(PikkoColor.accentStrong)
                     .frame(width: 44, height: 44)
                     .background(PikkoColor.surface)
                     .clipShape(Circle())
             }
-            .disabled(presenter.viewState.selectedRoomID == nil || presenter.viewState.isUploadingFiles || presenter.viewState.isSending)
+            .disabled(presenter.viewState.selectedRoomID == nil || isUploadingFiles || presenter.viewState.isSending)
+
+            Button {
+                isFileImporterPresented = true
+            } label: {
+                Image(systemName: isUploadingFiles ? "hourglass" : "doc.badge.plus")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(PikkoColor.accentStrong)
+                    .frame(width: 44, height: 44)
+                    .background(PikkoColor.surface)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(presenter.viewState.selectedRoomID == nil || isUploadingFiles || presenter.viewState.isSending)
 
             TextField(
                 "메시지 입력",
@@ -168,7 +195,7 @@ struct ChatRootView: View {
                     .foregroundStyle(PikkoColor.gray500),
                 axis: .vertical
             )
-            .lineLimit(1...4)
+            .lineLimit(1...3)
             .font(PikkoTypography.body)
             .foregroundStyle(PikkoColor.primaryText)
             .tint(PikkoColor.accentStrong)
@@ -254,6 +281,28 @@ struct ChatRootView: View {
         selectedPhotoItems = []
         await presenter.send(.filesSelected(files))
     }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) async {
+        guard case .success(let urls) = result, !urls.isEmpty else { return }
+        let files = urls.prefix(5).compactMap { url -> ChatUploadFile? in
+            let hasAccess = url.startAccessingSecurityScopedResource()
+            defer {
+                if hasAccess {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+                return nil
+            }
+            return ChatUploadFile(
+                data: data,
+                fileName: url.lastPathComponent,
+                mimeType: "application/pdf"
+            )
+        }
+        await presenter.send(.filesSelected(files))
+    }
 }
 
 private struct ChatRoomRow: View {
@@ -305,23 +354,36 @@ private struct ChatMessageBubble: View {
     let imageLoader: any AuthorizedImageLoading
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: PikkoSpacing.xs) {
-            if message.isMine {
-                Spacer(minLength: 48)
-                timestamp
-                bubble
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(message.senderName)
-                        .font(PikkoTypography.caption)
-                        .foregroundStyle(PikkoColor.secondaryText)
-                    bubble
-                }
-                timestamp
-                Spacer(minLength: 48)
+        VStack(spacing: PikkoSpacing.xs) {
+            if let dateText = message.dateText {
+                Text(dateText)
+                    .font(PikkoTypography.caption)
+                    .foregroundStyle(PikkoColor.secondaryText)
+                    .padding(.horizontal, PikkoSpacing.md)
+                    .padding(.vertical, 6)
+                    .background(PikkoColor.surface)
+                    .clipShape(Capsule())
+                    .padding(.vertical, PikkoSpacing.sm)
             }
+
+            HStack(alignment: .bottom, spacing: PikkoSpacing.xs) {
+                if message.isMine {
+                    Spacer(minLength: 48)
+                    timestampAndStatus
+                    bubble
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(message.senderName)
+                            .font(PikkoTypography.caption)
+                            .foregroundStyle(PikkoColor.secondaryText)
+                        bubble
+                    }
+                    timestampAndStatus
+                    Spacer(minLength: 48)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: message.isMine ? .trailing : .leading)
         }
-        .frame(maxWidth: .infinity, alignment: message.isMine ? .trailing : .leading)
     }
 
     private var bubble: some View {
@@ -333,30 +395,71 @@ private struct ChatMessageBubble: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            ForEach(message.filePaths, id: \.self) { path in
-                AuthorizedAsyncImage(
-                    path: path,
-                    loader: imageLoader,
-                    contentMode: .fill,
-                    cornerRadius: PikkoRadius.card,
-                    showsProgress: true
-                )
-                .frame(width: 180, height: 140)
-                .clipped()
+            if !message.filePaths.isEmpty {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.fixed(82), spacing: 6), count: min(message.filePaths.count, 2)),
+                    spacing: 6
+                ) {
+                    ForEach(message.filePaths, id: \.self) { path in
+                        if isImagePath(path) {
+                            AuthorizedAsyncImage(
+                                path: path,
+                                loader: imageLoader,
+                                contentMode: .fill,
+                                cornerRadius: PikkoRadius.card,
+                                showsProgress: true
+                            )
+                            .frame(width: 82, height: 82)
+                            .clipped()
+                        } else {
+                            Link(destination: URL(string: path) ?? URL(fileURLWithPath: path)) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "doc.fill")
+                                    Text((path as NSString).lastPathComponent)
+                                        .lineLimit(1)
+                                }
+                                .font(PikkoTypography.caption)
+                                .foregroundStyle(message.isMine ? .white : PikkoColor.accentStrong)
+                                .frame(width: 164, height: 40, alignment: .leading)
+                            }
+                        }
+                    }
+                }
             }
         }
         .padding(.horizontal, PikkoSpacing.md)
         .padding(.vertical, PikkoSpacing.sm)
-        .background(message.isMine ? PikkoColor.accent : PikkoColor.surface)
+        .background(message.isMine ? bubbleColor : PikkoColor.surface)
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         .frame(maxWidth: 260, alignment: message.isMine ? .trailing : .leading)
     }
 
-    private var timestamp: some View {
-        Text(message.timeText)
-            .font(PikkoTypography.caption)
-            .foregroundStyle(PikkoColor.tertiaryText)
-            .lineLimit(1)
+    private var timestampAndStatus: some View {
+        VStack(alignment: message.isMine ? .trailing : .leading, spacing: 2) {
+            Text(message.timeText)
+                .font(PikkoTypography.caption)
+                .foregroundStyle(PikkoColor.tertiaryText)
+                .lineLimit(1)
+
+            if let statusText = message.statusText {
+                Text(statusText)
+                    .font(PikkoTypography.caption)
+                    .foregroundStyle(message.sendStatus == .failed ? Color.red : PikkoColor.tertiaryText)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private var bubbleColor: Color {
+        message.sendStatus == .failed ? Color.red.opacity(0.72) : PikkoColor.accent
+    }
+
+    private func isImagePath(_ path: String) -> Bool {
+        let value = path.lowercased()
+        return value.hasSuffix(".jpg")
+            || value.hasSuffix(".jpeg")
+            || value.hasSuffix(".png")
+            || value.hasSuffix(".gif")
     }
 }
 

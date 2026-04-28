@@ -6,11 +6,11 @@ struct StoreDetailRootView: View {
     private let imageLoader: any AuthorizedImageLoading
     private let makeAuthView: () -> AnyView
     private let makeCartView: (String) -> CartRootView
-    private let makeChatView: (String) -> ChatRootView
+    private let makeChatView: (ChatTarget) -> ChatRootView
     private let makeReviewComposerView: (ReviewComposerContext, @escaping (UserStoreReview) -> Void) -> AnyView
 
     @State private var presentedCartStoreID: String?
-    @State private var presentedChatStoreID: String?
+    @State private var presentedChatTarget: ChatTarget?
     @State private var presentedReviewContext: ReviewComposerContext?
 
     init(
@@ -19,7 +19,7 @@ struct StoreDetailRootView: View {
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping () -> AnyView,
         makeCartView: @escaping (String) -> CartRootView,
-        makeChatView: @escaping (String) -> ChatRootView,
+        makeChatView: @escaping (ChatTarget) -> ChatRootView,
         makeReviewComposerView: @escaping (ReviewComposerContext, @escaping (UserStoreReview) -> Void) -> AnyView
     ) {
         _presenter = StateObject(wrappedValue: presenter)
@@ -43,8 +43,8 @@ struct StoreDetailRootView: View {
             switch route {
             case .cart(let storeID):
                 presentedCartStoreID = storeID
-            case .chat(let storeID):
-                presentedChatStoreID = storeID
+            case .chat(let target):
+                presentedChatTarget = target
             case .reviewComposer(let context):
                 presentedReviewContext = context
             default:
@@ -59,8 +59,8 @@ struct StoreDetailRootView: View {
             }
         }
         .navigationDestination(isPresented: chatPresentedBinding) {
-            if let presentedChatStoreID {
-                makeChatView(presentedChatStoreID)
+            if let presentedChatTarget {
+                makeChatView(presentedChatTarget)
             } else {
                 EmptyView()
             }
@@ -98,10 +98,10 @@ private extension StoreDetailRootView {
 
     var chatPresentedBinding: Binding<Bool> {
         Binding(
-            get: { presentedChatStoreID != nil },
+            get: { presentedChatTarget != nil },
             set: { isPresented in
                 if !isPresented {
-                    presentedChatStoreID = nil
+                    presentedChatTarget = nil
                     router.clearPendingRoute()
                 }
             }

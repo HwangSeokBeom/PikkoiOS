@@ -9,7 +9,7 @@ protocol StoreDetailRouting: AnyObject {
         latitude: Double?,
         longitude: Double?
     )
-    func routeToChat(storeID: String)
+    func routeToChat(target: ChatTarget)
     func routeToCart(storeID: String)
     func routeToReviewComposer(context: ReviewComposerContext)
     func clearPendingRoute()
@@ -52,8 +52,8 @@ final class StoreDetailRouter: ObservableObject, StoreDetailRouting {
         Logger.shared.info("Opened external directions for store=\(storeName)")
     }
 
-    func routeToChat(storeID: String) {
-        pendingRoute = .chat(storeID: storeID)
+    func routeToChat(target: ChatTarget) {
+        pendingRoute = .chat(target)
     }
 
     func routeToCart(storeID: String) {

@@ -49,6 +49,10 @@ final class CommunityDetailPresenter: ObservableObject {
             routeToCommentAuth(message: "댓글을 작성하려면 로그인이 필요합니다.")
         case .likeTapped:
             await toggleLikeStatus()
+        case .authorChatTapped(let authorID):
+            routeToAuthorChat(authorID: authorID)
+        case .commentAuthorChatTapped(let authorID):
+            routeToCommentAuthorChat(authorID: authorID)
         case .storeSnippetTapped(let storeID):
             router.routeToStoreDetail(storeID: storeID)
         case .commentComposerChanged(let text):
@@ -463,6 +467,57 @@ final class CommunityDetailPresenter: ObservableObject {
         )
     }
 
+    private func routeToAuthorChat(authorID: String) {
+        guard sessionStore.isAuthenticated else {
+            routeToCommentAuth(message: "채팅을 시작하려면 로그인이 필요합니다.")
+            return
+        }
+        guard let summary = detail?.summary,
+              summary.creator.id == authorID,
+              authorID != sessionStore.currentUserID else {
+            viewState.errorMessage = "채팅 상대를 찾지 못했어요."
+            return
+        }
+        router.routeToChat(
+            target: .user(
+                userID: summary.creator.id,
+                nickname: summary.creator.nick,
+                profileImagePath: summary.creator.profileImagePath
+            )
+        )
+    }
+
+    private func routeToCommentAuthorChat(authorID: String) {
+        guard sessionStore.isAuthenticated else {
+            routeToCommentAuth(message: "채팅을 시작하려면 로그인이 필요합니다.")
+            return
+        }
+        guard let author = findCommentAuthor(id: authorID, in: comments),
+              author.id != sessionStore.currentUserID else {
+            viewState.commentSection.errorMessage = "채팅 상대를 찾지 못했어요."
+            return
+        }
+        router.routeToChat(
+            target: .user(
+                userID: author.id,
+                nickname: author.nick,
+                profileImagePath: author.profileImagePath
+            )
+        )
+    }
+
+    private func findCommentAuthor(id: String, in comments: [CommunityComment]) -> CommunityPostAuthor? {
+        for comment in comments {
+            if comment.author.id == id {
+                return comment.author
+            }
+            if let author = findCommentAuthor(id: id, in: comment.replies) {
+                return author
+            }
+        }
+        return nil
+    }
+
     private func deletePost() async {
         guard !viewState.isDeletingPost else { return }
         guard let detail else { return }
@@ -584,8 +639,10 @@ final class CommunityDetailPresenter: ObservableObject {
     ) -> CommunityCard.Model {
         CommunityCard.Model(
             id: summary.id,
+            authorID: summary.creator.id,
             authorName: summary.creator.nick,
             authorAvatarPath: summary.creator.profileImagePath,
+            canChatWithAuthor: summary.creator.id != sessionStore.currentUserID,
             timeText: makeRelativeTimeText(from: summary.createdAt),
             title: summary.title,
             bodyText: summary.content,
@@ -639,8 +696,10 @@ final class CommunityDetailPresenter: ObservableObject {
     ) -> CommunityDetailCommentRowViewState {
         CommunityDetailCommentRowViewState(
             id: comment.id,
+            authorID: comment.author.id,
             authorName: comment.author.nick,
             authorAvatarPath: comment.author.profileImagePath,
+            canChatWithAuthor: !comment.isMine && !comment.isHidden,
             timeText: makeRelativeTimeText(from: comment.updatedAt ?? comment.createdAt),
             content: comment.isHidden ? "삭제된 댓글입니다." : comment.content,
             isMine: comment.isMine,

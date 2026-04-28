@@ -62,6 +62,7 @@ final class APIClient: APIClientProtocol {
                 Logger.shared.warning(
                     "HTTP request failed. endpoint=\(endpoint.method.rawValue) \(endpoint.path) statusCode=\(httpResponse.statusCode) serverMessage=\(serverMessage) mappedMessage=\(mappedError.localizedDescription)"
                 )
+                logFailurePayloadIfNeeded(endpoint: endpoint, statusCode: httpResponse.statusCode, data: data)
                 if endpoint.path == "/v1/users/login/kakao" {
                     Logger.shared.warning(
                         "[Auth] social login failed provider=kakao endpoint=\(endpoint.path) statusCode=\(httpResponse.statusCode) serverMessage=\(serverMessage)"
@@ -152,6 +153,20 @@ final class APIClient: APIClientProtocol {
         case .none, .refreshToken:
             return false
         }
+    }
+
+    private func logFailurePayloadIfNeeded<ResponseDTO: Decodable & Sendable>(
+        endpoint: Endpoint<ResponseDTO>,
+        statusCode: Int,
+        data: Data
+    ) {
+#if DEBUG
+        guard endpoint.authorizationPolicy.requiresAuthenticatedSession else { return }
+        let payloadSnippet = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8>"
+        Logger.shared.warning(
+            "[Network] response failed statusCode=\(statusCode) endpoint=\(endpoint.method.rawValue) \(endpoint.path) body=\(payloadSnippet)"
+        )
+#endif
     }
 
     private func decode<ResponseDTO: Decodable & Sendable>(

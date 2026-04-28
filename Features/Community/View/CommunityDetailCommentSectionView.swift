@@ -11,6 +11,7 @@ struct CommunityDetailCommentSectionView: View {
     let onEditSaveTapped: () -> Void
     let onEditCancelTapped: () -> Void
     let onDeleteConfirmed: (String) -> Void
+    let onAuthorChatTapped: (String) -> Void
 
     @State private var pendingDeletionComment: CommunityDetailCommentRowViewState?
 
@@ -137,19 +138,29 @@ struct CommunityDetailCommentSectionView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
-                        if comment.isMine && !comment.isHidden && state.editingCommentID != comment.id {
+                        if !comment.isHidden && state.editingCommentID != comment.id {
                             HStack(spacing: PikkoSpacing.sm) {
-                                Button("수정") {
-                                    onEditTapped(comment.id)
-                                }
-                                .font(PikkoTypography.captionStrong)
-                                .foregroundStyle(PikkoColor.accentStrong)
+                                if comment.isMine {
+                                    Button("수정") {
+                                        onEditTapped(comment.id)
+                                    }
+                                    .font(PikkoTypography.captionStrong)
+                                    .foregroundStyle(PikkoColor.accentStrong)
 
-                                Button("삭제") {
-                                    pendingDeletionComment = comment
+                                    Button("삭제") {
+                                        pendingDeletionComment = comment
+                                    }
+                                    .font(PikkoTypography.captionStrong)
+                                    .foregroundStyle(PikkoColor.danger)
                                 }
-                                .font(PikkoTypography.captionStrong)
-                                .foregroundStyle(PikkoColor.danger)
+
+                                if comment.canChatWithAuthor {
+                                    Button("채팅") {
+                                        onAuthorChatTapped(comment.authorID)
+                                    }
+                                    .font(PikkoTypography.captionStrong)
+                                    .foregroundStyle(PikkoColor.accentStrong)
+                                }
                             }
                         }
                     }
