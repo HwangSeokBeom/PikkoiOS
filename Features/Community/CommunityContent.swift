@@ -11,6 +11,7 @@ struct CommunityFeedContent {
 enum CommunityFeedError: Error, Equatable {
     case authenticationRequired
     case locationRequired(message: String)
+    case networkUnavailable(message: String)
     case unavailable(message: String)
 }
 
@@ -20,6 +21,8 @@ extension CommunityFeedError: LocalizedError {
         case .authenticationRequired:
             return "로그인 후 커뮤니티 피드를 확인할 수 있어요."
         case .locationRequired(let message):
+            return message
+        case .networkUnavailable(let message):
             return message
         case .unavailable(let message):
             return message
@@ -92,10 +95,10 @@ struct CommunityDistanceCalculator: Sendable {
     }
 }
 
-enum CommunitySort: String, CaseIterable, Identifiable, Equatable {
+enum CommunitySortCategory: String, CaseIterable, Identifiable, Equatable {
     case latest
-    case popular
-    case nearest
+    case popularity
+    case distance
 
     var id: String { rawValue }
 
@@ -103,10 +106,10 @@ enum CommunitySort: String, CaseIterable, Identifiable, Equatable {
         switch self {
         case .latest:
             return "최신순"
-        case .popular:
+        case .popularity:
             return "인기순"
-        case .nearest:
-            return "가까운순"
+        case .distance:
+            return "거리순"
         }
     }
 
@@ -114,17 +117,97 @@ enum CommunitySort: String, CaseIterable, Identifiable, Equatable {
         switch self {
         case .latest:
             return "clock"
-        case .popular:
+        case .popularity:
             return "heart"
-        case .nearest:
+        case .distance:
             return "location"
         }
     }
 
-    static let all: [CommunitySort] = allCases
+    var defaultSelection: CommunitySortSelection {
+        switch self {
+        case .latest:
+            return .init(category: self, direction: .descending)
+        case .popularity:
+            return .init(category: self, direction: .descending)
+        case .distance:
+            return .init(category: self, direction: .ascending)
+        }
+    }
 }
 
-typealias CommunitySortOption = CommunitySort
+enum CommunitySortDirection: String, Equatable {
+    case descending
+    case ascending
+
+    var toggled: CommunitySortDirection {
+        switch self {
+        case .descending:
+            return .ascending
+        case .ascending:
+            return .descending
+        }
+    }
+}
+
+struct CommunitySortSelection: Identifiable, Equatable {
+    let category: CommunitySortCategory
+    let direction: CommunitySortDirection
+
+    var id: String { "\(category.id)-\(direction.rawValue)" }
+
+    var title: String {
+        switch (category, direction) {
+        case (.latest, .descending):
+            return "최신순"
+        case (.latest, .ascending):
+            return "오래된순"
+        case (.popularity, .descending):
+            return "인기순"
+        case (.popularity, .ascending):
+            return "없는순"
+        case (.distance, .ascending):
+            return "가까운순"
+        case (.distance, .descending):
+            return "먼거리순"
+        }
+    }
+
+    var systemImage: String {
+        switch category {
+        case .latest:
+            return direction == .descending ? "clock" : "clock.arrow.circlepath"
+        case .popularity:
+            return "heart"
+        case .distance:
+            return "location"
+        }
+    }
+
+    var requestOrderBy: CommunityPostSortOrder {
+        switch category {
+        case .latest:
+            return .createdAt
+        case .popularity:
+            return .likes
+        case .distance:
+            // Swagger currently supports createdAt/likes only for posts.
+            // Distance ordering is applied locally after distance calculation.
+            return .createdAt
+        }
+    }
+
+    var toggledDirection: CommunitySortSelection {
+        .init(category: category, direction: direction.toggled)
+    }
+
+    static let latest = CommunitySortCategory.latest.defaultSelection
+    static let popular = CommunitySortCategory.popularity.defaultSelection
+    static let distance = CommunitySortCategory.distance.defaultSelection
+}
+
+typealias CommunitySort = CommunitySortSelection
+typealias CommunitySortOption = CommunitySortSelection
 
 struct CommunityDistanceOption: Identifiable, Equatable {
     let id: String

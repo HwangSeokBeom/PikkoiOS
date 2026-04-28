@@ -12,6 +12,8 @@ struct SearchBar: View {
     var accessorySystemImage: String?
     var onAccessoryTap: (() -> Void)?
     var onSubmit: (() -> Void)?
+    var showsSearchAction = false
+    var onClearTap: (() -> Void)?
     var style: Style = .regular
 
     var body: some View {
@@ -33,6 +35,33 @@ struct SearchBar: View {
                     .onSubmit {
                         onSubmit?()
                     }
+
+                if !text.isEmpty {
+                    Button {
+                        text = ""
+                        onClearTap?()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(PikkoColor.gray400)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if showsSearchAction {
+                    Button {
+                        onSubmit?()
+                    } label: {
+                        Text("검색")
+                            .font(PikkoTypography.captionStrong)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 11)
+                            .frame(height: 30)
+                            .background(PikkoColor.accent)
+                            .clipShape(Capsule(style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .padding(.horizontal, horizontalPadding)
             .frame(height: fieldHeight)

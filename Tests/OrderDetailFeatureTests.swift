@@ -26,7 +26,7 @@ final class OrderDetailFeatureTests: XCTestCase {
         XCTAssertNil(presenter.viewState.emptyState)
     }
 
-    func testPendingOrderShowsCancelAvailability() async {
+    func testPendingOrderHidesCancelAvailability() async {
         let presenter = OrderDetailPresenter(
             initialOrderID: "order-1",
             interactor: SpyOrderDetailInteractor(
@@ -40,7 +40,7 @@ final class OrderDetailFeatureTests: XCTestCase {
         await presenter.send(.onAppear)
 
         XCTAssertEqual(presenter.viewState.orderStatus, .pending)
-        XCTAssertTrue(presenter.viewState.canCancelOrder)
+        XCTAssertFalse(presenter.viewState.canCancelOrder)
     }
 
     func testCompletedOrderHidesCancelAvailability() async {
@@ -60,7 +60,7 @@ final class OrderDetailFeatureTests: XCTestCase {
         XCTAssertFalse(presenter.viewState.canCancelOrder)
     }
 
-    func testCancelFailureRestoresButtonStateAndKeepsOrderStatus() async {
+    func testCancelConfirmedIsIgnoredWhenCancelAPIIsNotAvailable() async {
         let presenter = OrderDetailPresenter(
             initialOrderID: "order-1",
             interactor: SpyOrderDetailInteractor(
@@ -77,11 +77,8 @@ final class OrderDetailFeatureTests: XCTestCase {
 
         XCTAssertEqual(presenter.viewState.orderStatus, .pending)
         XCTAssertFalse(presenter.viewState.isCancelling)
-        XCTAssertTrue(presenter.viewState.canCancelOrder)
-        XCTAssertEqual(
-            presenter.viewState.cancelErrorMessage,
-            "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요."
-        )
+        XCTAssertFalse(presenter.viewState.canCancelOrder)
+        XCTAssertNil(presenter.viewState.cancelErrorMessage)
     }
 
     func testFetchOrderDetailFailureReflectsRetryState() async {

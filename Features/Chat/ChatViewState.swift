@@ -16,6 +16,7 @@ struct ChatRoomRowViewState: Equatable, Identifiable {
 struct ChatMessageRowViewState: Equatable, Identifiable {
     let id: String
     let content: String
+    let filePaths: [String]
     let timeText: String
     let senderName: String
     let isMine: Bool
@@ -27,10 +28,12 @@ struct ChatViewState: Equatable {
     var rooms: [ChatRoomRowViewState] = []
     var messages: [ChatMessageRowViewState] = []
     var messageText = ""
+    var attachedFilePaths: [String] = []
     var selectedRoomID: String?
     var isLoading = true
     var isRefreshing = false
     var isSending = false
+    var isUploadingFiles = false
     var errorMessage: String?
     var emptyTitle: String?
     var emptyMessage: String?
@@ -50,7 +53,11 @@ struct ChatViewState: Equatable {
         selectedRoomID != nil
             && !isLoading
             && !isSending
-            && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !isUploadingFiles
+            && (
+                !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !attachedFilePaths.isEmpty
+            )
     }
 
     var showsInternalBackButton: Bool {

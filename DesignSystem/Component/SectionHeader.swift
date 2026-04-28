@@ -35,6 +35,8 @@ struct SectionHeader: View {
                             actionLabel(actionTitle: actionTitle)
                         }
                         .buttonStyle(.plain)
+                        .frame(minHeight: 32)
+                        .contentShape(Rectangle())
                     } else {
                         actionLabel(actionTitle: actionTitle)
                     }
@@ -44,12 +46,14 @@ struct SectionHeader: View {
     }
 
     private func actionLabel(actionTitle: String) -> some View {
-        HStack(spacing: 4) {
+        HStack(alignment: .center, spacing: 5) {
             Text(actionTitle)
                 .font(actionFont)
+                .lineLimit(1)
             if let actionSystemImage {
                 Image(systemName: actionSystemImage)
                     .font(.system(size: actionIconSize, weight: .semibold))
+                    .frame(width: actionIconSize + 4, height: actionIconSize + 4)
             }
         }
         .foregroundStyle(PikkoColor.secondaryText)
@@ -85,9 +89,9 @@ struct SectionHeader: View {
     private var actionIconSize: CGFloat {
         switch size {
         case .regular:
-            return 11
+            return 13
         case .compact:
-            return 10
+            return 12
         }
     }
 

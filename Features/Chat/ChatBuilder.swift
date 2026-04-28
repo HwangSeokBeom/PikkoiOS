@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 struct ChatBuilder {
     private let storeID: String?
+    private let opponentID: String?
     private let chatRepository: ChatRepository
     private let storeRepository: StoreRepository
     private let sessionStore: SessionStore
@@ -10,12 +11,14 @@ struct ChatBuilder {
 
     init(
         storeID: String? = nil,
+        opponentID: String? = nil,
         chatRepository: ChatRepository,
         storeRepository: StoreRepository,
         sessionStore: SessionStore,
         imageLoader: any AuthorizedImageLoading
     ) {
         self.storeID = storeID
+        self.opponentID = opponentID
         self.chatRepository = chatRepository
         self.storeRepository = storeRepository
         self.sessionStore = sessionStore
@@ -26,6 +29,7 @@ struct ChatBuilder {
         let router = ChatRouter()
         let interactor = ChatInteractor(
             storeID: storeID,
+            opponentID: opponentID,
             chatRepository: chatRepository,
             storeRepository: storeRepository,
             sessionStore: sessionStore

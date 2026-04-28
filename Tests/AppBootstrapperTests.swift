@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class AppBootstrapperTests: XCTestCase {
     func testBootstrapMovesAppToReadyPhase() async {
-        let container = AppDIContainer()
+        let container = AppDIContainer(tokenStore: EmptyBootstrapTokenStore())
         let appState = container.makeAppState()
         let bootstrapper = container.makeAppBootstrapper(appState: appState)
 
@@ -14,4 +14,16 @@ final class AppBootstrapperTests: XCTestCase {
         XCTAssertFalse(appState.sessionStore.isAuthenticated)
         XCTAssertEqual(appState.cartStore.summary, .empty)
     }
+}
+
+private actor EmptyBootstrapTokenStore: TokenStore {
+    func loadTokens() async throws -> StoredTokens? {
+        nil
+    }
+
+    func saveTokens(_ tokens: StoredTokens) async throws {
+        _ = tokens
+    }
+
+    func clearTokens() async throws {}
 }

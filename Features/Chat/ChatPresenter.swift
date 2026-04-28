@@ -12,6 +12,8 @@ final class ChatPresenter: ObservableObject {
     private var rooms: [ChatRoom] = []
     private var messages: [ChatMessage] = []
     private var selectedRoom: ChatRoom?
+    private var roomListRequestID = 0
+    private var messageRequestID = 0
 
     init(interactor: ChatInteracting, router: ChatRouting) {
         self.interactor = interactor
@@ -33,6 +35,9 @@ final class ChatPresenter: ObservableObject {
             viewState.isExternalDetailPresentation = interactor.startsFromStore
             if interactor.startsFromStore {
                 await openStoreRoom()
+            } else if interactor.startsFromOpponent {
+                viewState.isExternalDetailPresentation = true
+                await openUserRoom()
             } else {
                 await loadRooms(isRefresh: false)
             }
@@ -62,20 +67,37 @@ final class ChatPresenter: ObservableObject {
             applyRooms()
         case .messageTextChanged(let text):
             viewState.messageText = text
+        case .filesSelected(let files):
+            await upload(files)
+        case .attachedFileRemoved(let path):
+            viewState.attachedFilePaths.removeAll { $0 == path }
         case .sendMessageTapped:
             await sendMessage()
         }
     }
 
     private func loadRooms(isRefresh: Bool) async {
+        roomListRequestID += 1
+        let requestID = roomListRequestID
         setLoading(isRefresh: isRefresh)
-        do {
-            rooms = try await interactor.loadInitialRoomList()
-            applyRooms()
-        } catch {
-            apply(error: error, emptyTitle: "채팅방을 불러오지 못했어요")
+        defer {
+            if requestID == roomListRequestID {
+                clearLoading()
+            }
         }
-        clearLoading()
+
+        do {
+            let loadedRooms = try await interactor.loadInitialRoomList()
+            guard requestID == roomListRequestID else { return }
+            rooms = loadedRooms
+            applyRooms()
+            viewState.errorMessage = nil
+        } catch is CancellationError {
+            guard requestID == roomListRequestID else { return }
+        } catch {
+            guard requestID == roomListRequestID else { return }
+            apply(error: error, emptyTitle: "채팅방을 불러오지 못했어요", isRefresh: isRefresh)
+        }
     }
 
     private func openStoreRoom() async {
@@ -91,7 +113,26 @@ final class ChatPresenter: ObservableObject {
             messages = try await interactor.loadMessages(roomID: room.id, after: nil)
             applyMessages()
         } catch {
-            apply(error: error, emptyTitle: "채팅을 시작하지 못했어요")
+            apply(error: error, emptyTitle: "채팅을 시작하지 못했어요", isRefresh: false)
+        }
+
+        clearLoading()
+    }
+
+    private func openUserRoom() async {
+        viewState.mode = .roomDetail
+        viewState.title = "채팅"
+        setLoading(isRefresh: false)
+
+        do {
+            let room = try await interactor.createOrFetchUserChatRoom()
+            selectedRoom = room
+            viewState.selectedRoomID = room.id
+            viewState.title = roomTitle(room)
+            messages = try await interactor.loadMessages(roomID: room.id, after: nil)
+            applyMessages()
+        } catch {
+            apply(error: error, emptyTitle: "채팅을 시작하지 못했어요", isRefresh: false)
         }
 
         clearLoading()
@@ -105,35 +146,67 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func loadMessages(roomID: String, isRefresh: Bool) async {
+        messageRequestID += 1
+        let requestID = messageRequestID
         setLoading(isRefresh: isRefresh)
-        do {
-            messages = try await interactor.loadMessages(roomID: roomID, after: nil)
-            applyMessages()
-        } catch {
-            apply(error: error, emptyTitle: "메시지를 불러오지 못했어요")
+        defer {
+            if requestID == messageRequestID {
+                clearLoading()
+            }
         }
-        clearLoading()
+
+        do {
+            let loadedMessages = try await interactor.loadMessages(roomID: roomID, after: nil)
+            guard requestID == messageRequestID else { return }
+            messages = loadedMessages
+            applyMessages()
+            viewState.errorMessage = nil
+        } catch is CancellationError {
+            guard requestID == messageRequestID else { return }
+        } catch {
+            guard requestID == messageRequestID else { return }
+            apply(error: error, emptyTitle: "메시지를 불러오지 못했어요", isRefresh: isRefresh)
+        }
     }
 
     private func sendMessage() async {
         guard !viewState.isSending else { return }
         guard let roomID = viewState.selectedRoomID else { return }
         let content = viewState.messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !content.isEmpty else { return }
+        let files = viewState.attachedFilePaths
+        guard !content.isEmpty || !files.isEmpty else { return }
 
         viewState.isSending = true
         viewState.errorMessage = nil
 
         do {
-            let message = try await interactor.sendMessage(roomID: roomID, content: content)
+            let message = try await interactor.sendMessage(roomID: roomID, content: content, files: files)
             merge(message)
             viewState.messageText = ""
+            viewState.attachedFilePaths = []
             applyMessages()
         } catch {
-            viewState.errorMessage = resolveErrorMessage(from: error)
+            viewState.errorMessage = transientErrorMessage(from: error)
         }
 
         viewState.isSending = false
+    }
+
+    private func upload(_ files: [ChatUploadFile]) async {
+        guard !viewState.isUploadingFiles,
+              let roomID = viewState.selectedRoomID,
+              !files.isEmpty else { return }
+
+        viewState.isUploadingFiles = true
+        viewState.errorMessage = nil
+        defer { viewState.isUploadingFiles = false }
+
+        do {
+            let uploadedPaths = try await interactor.uploadFiles(roomID: roomID, files: files)
+            viewState.attachedFilePaths.append(contentsOf: uploadedPaths)
+        } catch {
+            viewState.errorMessage = transientErrorMessage(from: error)
+        }
     }
 
     private func merge(_ message: ChatMessage) {
@@ -165,8 +238,14 @@ final class ChatPresenter: ObservableObject {
         viewState.requiresAuthentication = false
     }
 
-    private func apply(error: Error, emptyTitle: String) {
-        viewState.errorMessage = resolveErrorMessage(from: error)
+    private func apply(error: Error, emptyTitle: String, isRefresh: Bool) {
+        let hasExistingContent = !viewState.rooms.isEmpty || !viewState.messages.isEmpty
+        if isRefresh && hasExistingContent {
+            viewState.errorMessage = transientErrorMessage(from: error)
+            return
+        }
+
+        viewState.errorMessage = transientErrorMessage(from: error)
         viewState.emptyTitle = emptyTitle
         viewState.emptyMessage = resolveErrorMessage(from: error)
         viewState.primaryActionTitle = (error as? ChatFeatureError) == .authenticationRequired ? "확인" : "다시 시도"
@@ -202,6 +281,7 @@ final class ChatPresenter: ObservableObject {
         ChatMessageRowViewState(
             id: message.id,
             content: message.content,
+            filePaths: message.filePaths,
             timeText: message.createdAt.map { timeFormatter.string(from: $0) } ?? "",
             senderName: message.sender.nick,
             isMine: message.sender.id == interactor.currentUserID
@@ -229,6 +309,19 @@ final class ChatPresenter: ObservableObject {
         }
 
         return error.localizedDescription
+    }
+
+    private func transientErrorMessage(from error: Error) -> String? {
+        guard let chatError = error as? ChatFeatureError else {
+            return nil
+        }
+
+        switch chatError {
+        case .networkUnavailable:
+            return resolveErrorMessage(from: error)
+        case .authenticationRequired, .unavailable:
+            return nil
+        }
     }
 }
 

@@ -67,7 +67,7 @@ enum OrderStatus: Equatable, Sendable {
     }
 
     var isCancellable: Bool {
-        self == .pending
+        false
     }
 
     var progressStepIndex: Int? {

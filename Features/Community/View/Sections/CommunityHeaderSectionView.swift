@@ -3,6 +3,7 @@ import SwiftUI
 struct CommunityHeaderSectionView: View {
     @Binding var searchText: String
     let onSearchSubmit: () -> Void
+    let onSearchClear: () -> Void
     let onComposeTap: () -> Void
 
     var body: some View {
@@ -11,7 +12,9 @@ struct CommunityHeaderSectionView: View {
             placeholder: "검색어를 입력해주세요.",
             accessorySystemImage: "square.and.pencil",
             onAccessoryTap: onComposeTap,
-            onSubmit: onSearchSubmit
+            onSubmit: onSearchSubmit,
+            showsSearchAction: true,
+            onClearTap: onSearchClear
         )
     }
 }
@@ -21,6 +24,7 @@ struct CommunityHeaderSectionView: View {
         CommunityHeaderSectionView(
             searchText: text,
             onSearchSubmit: {},
+            onSearchClear: {},
             onComposeTap: {}
         )
         .padding()

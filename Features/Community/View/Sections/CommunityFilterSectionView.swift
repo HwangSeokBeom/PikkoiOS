@@ -3,12 +3,12 @@ import SwiftUI
 struct CommunityFilterSectionView: View {
     let distanceOptions: [CommunityDistanceOption]
     let selectedDistanceID: String
-    let sortOptions: [CommunitySortOption]
-    let selectedSortID: String
+    let sortCategories: [CommunitySortCategory]
+    let selectedSortCategoryID: String
     let filterChips: [CommunityFilterChip]
     let selectedFilterChipIDs: Set<String>
     let onDistanceSelect: (String) -> Void
-    let onSortSelect: (String) -> Void
+    let onSortCategoryTap: (String) -> Void
     let onFilterChipTap: (String) -> Void
 
     var body: some View {
@@ -25,14 +25,14 @@ struct CommunityFilterSectionView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: PikkoSpacing.xs) {
-                    ForEach(sortOptions) { option in
+                    ForEach(sortCategories) { category in
                         TagChip(
-                            title: option.title,
-                            systemImage: option.id == CommunitySortOption.latest.id ? "clock" : "line.3.horizontal.decrease.circle",
-                            isSelected: selectedSortID == option.id,
-                            appearance: selectedSortID == option.id ? .filled : .outlined,
+                            title: category.title,
+                            systemImage: category.systemImage,
+                            isSelected: selectedSortCategoryID == category.id,
+                            appearance: selectedSortCategoryID == category.id ? .filled : .outlined,
                             action: {
-                                onSortSelect(option.id)
+                                onSortCategoryTap(category.id)
                             }
                         )
                     }
@@ -50,6 +50,7 @@ struct CommunityFilterSectionView: View {
                     }
                 }
                 .padding(.vertical, 1)
+                .padding(.trailing, PikkoSpacing.xl)
             }
         }
     }
@@ -63,12 +64,12 @@ struct CommunityFilterSectionView: View {
     CommunityFilterSectionView(
         distanceOptions: CommunityDistanceOption.all,
         selectedDistanceID: CommunityDistanceOption.defaultOption.id,
-        sortOptions: CommunitySortOption.all,
-        selectedSortID: CommunitySortOption.latest.id,
+        sortCategories: CommunitySortCategory.allCases,
+        selectedSortCategoryID: CommunitySort.latest.category.id,
         filterChips: CommunityFilterChip.defaults,
         selectedFilterChipIDs: ["store", "video"],
         onDistanceSelect: { _ in },
-        onSortSelect: { _ in },
+        onSortCategoryTap: { _ in },
         onFilterChipTap: { _ in }
     )
     .padding()

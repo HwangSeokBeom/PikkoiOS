@@ -211,32 +211,64 @@ struct CommunityDetailCommentComposerBar: View {
             .font(PikkoTypography.body)
             .foregroundStyle(PikkoColor.primaryText)
             .tint(PikkoColor.accentStrong)
+            .lineLimit(1...3)
             .padding(.horizontal, PikkoSpacing.md)
-            .padding(.vertical, PikkoSpacing.sm)
-            .background(PikkoColor.surfaceElevated)
-            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.floatingCTA, style: .continuous))
+            .padding(.vertical, 11)
+            .frame(minHeight: 44)
+            .background(requiresAuthentication ? PikkoColor.gray100 : PikkoColor.surfaceMuted)
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(PikkoColor.line, lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .disabled(requiresAuthentication || isSubmitting)
 
             if requiresAuthentication {
-                SecondaryButton(
-                    title: "로그인",
-                    action: onAuthTapped
-                )
-                .frame(width: 92)
+                Button("로그인") {
+                    onAuthTapped()
+                }
+                .font(PikkoTypography.bodyStrong)
+                .foregroundStyle(PikkoColor.accentStrong)
+                .frame(width: 64, height: 44)
+                .background(PikkoColor.surface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(PikkoColor.accent.opacity(0.35), lineWidth: 1)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             } else {
-                PrimaryButton(
-                    title: "등록",
-                    isLoading: isSubmitting,
-                    isEnabled: canSubmit,
-                    size: .compact,
-                    action: onSubmitTapped
-                )
-                .frame(width: 92)
+                Button {
+                    onSubmitTapped()
+                } label: {
+                    Group {
+                        if isSubmitting {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Text("등록")
+                                .font(PikkoTypography.bodyStrong)
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .frame(width: 64, height: 44)
+                    .background(canSubmit ? PikkoColor.accent : PikkoColor.gray300)
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSubmit)
             }
         }
         .padding(.horizontal, PikkoSpacing.xl)
         .padding(.top, PikkoSpacing.sm)
-        .padding(.bottom, PikkoSpacing.md + RootTabBarMetrics.scrollContentBottomInset)
-        .background(.ultraThinMaterial)
+        .padding(.bottom, PikkoSpacing.sm + RootTabBarMetrics.scrollContentBottomInset)
+        .background {
+            PikkoColor.surface
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(PikkoColor.line)
+                        .frame(height: 1)
+                }
+                .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: -2)
+        }
     }
 }

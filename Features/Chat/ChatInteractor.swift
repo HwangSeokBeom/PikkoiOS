@@ -16,6 +16,12 @@ struct ChatMessage: Equatable, Sendable, Identifiable {
     let filePaths: [String]
 }
 
+struct ChatUploadFile: Equatable, Sendable {
+    let data: Data
+    let fileName: String
+    let mimeType: String
+}
+
 struct ChatRoom: Equatable, Sendable, Identifiable {
     let id: String
     let createdAt: Date?
@@ -81,11 +87,16 @@ struct ChatMessageListResponseDTO: Decodable, Sendable {
     let data: [ChatMessageDTO]
 }
 
+struct ChatFileResponseDTO: Decodable, Sendable {
+    let files: [String]
+}
+
 protocol ChatRemoteDataSourceProtocol: Sendable {
     func fetchChatRooms() async throws -> ChatRoomListResponseDTO
     func createOrFetchChatRoom(opponentID: String) async throws -> ChatRoomDTO
     func fetchMessages(roomID: String, next: String?) async throws -> ChatMessageListResponseDTO
     func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessageDTO
+    func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> ChatFileResponseDTO
 }
 
 struct ChatRemoteDataSource: ChatRemoteDataSourceProtocol {
@@ -144,13 +155,35 @@ struct ChatRemoteDataSource: ChatRemoteDataSourceProtocol {
         )
         return try await apiClient.execute(endpoint)
     }
+
+    func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> ChatFileResponseDTO {
+        var multipartBuilder = MultipartFormDataBuilder()
+        for file in files {
+            multipartBuilder.addFile(
+                fieldName: "files",
+                fileName: file.fileName,
+                mimeType: file.mimeType,
+                fileData: file.data
+            )
+        }
+
+        let endpoint = Endpoint<ChatFileResponseDTO>(
+            path: "/v1/chats/\(roomID)/files",
+            method: .post,
+            body: multipartBuilder.build(),
+            timeout: .upload,
+            authorizationPolicy: .accessToken
+        )
+        return try await apiClient.execute(endpoint)
+    }
 }
 
 protocol ChatRepository: Sendable {
     func fetchChatRooms() async throws -> [ChatRoom]
     func createOrFetchChatRoom(opponentID: String) async throws -> ChatRoom
     func fetchMessages(roomID: String, next: String?) async throws -> [ChatMessage]
-    func sendMessage(roomID: String, content: String) async throws -> ChatMessage
+    func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessage
+    func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String]
 }
 
 struct DefaultChatRepository: ChatRepository {
@@ -175,9 +208,14 @@ struct DefaultChatRepository: ChatRepository {
         try await remoteDataSource.fetchMessages(roomID: roomID, next: next).data.map(mapper.mapMessage)
     }
 
-    func sendMessage(roomID: String, content: String) async throws -> ChatMessage {
-        let response = try await remoteDataSource.sendMessage(roomID: roomID, content: content, files: [])
+    func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessage {
+        let response = try await remoteDataSource.sendMessage(roomID: roomID, content: content, files: files)
         return mapper.mapMessage(response)
+    }
+
+    func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String] {
+        let response = try await remoteDataSource.uploadFiles(roomID: roomID, files: files)
+        return response.files
     }
 }
 
@@ -233,6 +271,7 @@ struct ChatMapper: Sendable {
 
 enum ChatFeatureError: Error, Equatable {
     case authenticationRequired
+    case networkUnavailable(message: String)
     case unavailable(message: String)
 }
 
@@ -241,6 +280,8 @@ extension ChatFeatureError: LocalizedError {
         switch self {
         case .authenticationRequired:
             return "로그인 후 채팅을 이용할 수 있어요."
+        case .networkUnavailable(let message):
+            return message
         case .unavailable(let message):
             return message
         }
@@ -251,35 +292,43 @@ extension ChatFeatureError: LocalizedError {
 protocol ChatInteracting {
     var currentUserID: String? { get }
     var startsFromStore: Bool { get }
+    var startsFromOpponent: Bool { get }
 
     func loadInitialRoomList() async throws -> [ChatRoom]
     func createOrFetchStoreChatRoom() async throws -> ChatRoom
+    func createOrFetchUserChatRoom() async throws -> ChatRoom
     func loadMessages(roomID: String, after next: String?) async throws -> [ChatMessage]
-    func sendMessage(roomID: String, content: String) async throws -> ChatMessage
+    func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessage
+    func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String]
 }
 
 @MainActor
 struct ChatInteractor: ChatInteracting {
     let currentUserID: String?
     let startsFromStore: Bool
+    let startsFromOpponent: Bool
 
     private let storeID: String?
+    private let opponentID: String?
     private let chatRepository: ChatRepository
     private let storeRepository: StoreRepository
     private let sessionStore: SessionStore
 
     init(
         storeID: String? = nil,
+        opponentID: String? = nil,
         chatRepository: ChatRepository,
         storeRepository: StoreRepository,
         sessionStore: SessionStore
     ) {
         self.storeID = storeID
+        self.opponentID = opponentID
         self.chatRepository = chatRepository
         self.storeRepository = storeRepository
         self.sessionStore = sessionStore
         self.currentUserID = sessionStore.currentUserID
         self.startsFromStore = storeID != nil
+        self.startsFromOpponent = opponentID != nil
     }
 
     func loadInitialRoomList() async throws -> [ChatRoom] {
@@ -289,6 +338,8 @@ struct ChatInteractor: ChatInteracting {
 
         do {
             return try await chatRepository.fetchChatRooms()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw map(error)
         }
@@ -313,6 +364,29 @@ struct ChatInteractor: ChatInteracting {
             return try await chatRepository.createOrFetchChatRoom(opponentID: ownerID)
         } catch let error as ChatFeatureError {
             throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw map(error)
+        }
+    }
+
+    func createOrFetchUserChatRoom() async throws -> ChatRoom {
+        guard sessionStore.isAuthenticated else {
+            throw ChatFeatureError.authenticationRequired
+        }
+        guard let opponentID,
+              !opponentID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ChatFeatureError.unavailable(message: "채팅 상대를 찾지 못했어요.")
+        }
+        if opponentID == sessionStore.currentUserID {
+            throw ChatFeatureError.unavailable(message: "내 계정에는 채팅을 시작할 수 없어요.")
+        }
+
+        do {
+            return try await chatRepository.createOrFetchChatRoom(opponentID: opponentID)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw map(error)
         }
@@ -325,22 +399,41 @@ struct ChatInteractor: ChatInteracting {
 
         do {
             return try await chatRepository.fetchMessages(roomID: roomID, next: next)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw map(error)
         }
     }
 
-    func sendMessage(roomID: String, content: String) async throws -> ChatMessage {
+    func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessage {
         guard sessionStore.isAuthenticated else {
             throw ChatFeatureError.authenticationRequired
         }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw ChatFeatureError.unavailable(message: "메시지를 입력해 주세요.")
+        guard !trimmed.isEmpty || !files.isEmpty else {
+            throw ChatFeatureError.unavailable(message: "메시지나 파일을 추가해 주세요.")
         }
 
         do {
-            return try await chatRepository.sendMessage(roomID: roomID, content: trimmed)
+            return try await chatRepository.sendMessage(roomID: roomID, content: trimmed, files: files)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw map(error)
+        }
+    }
+
+    func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String] {
+        guard sessionStore.isAuthenticated else {
+            throw ChatFeatureError.authenticationRequired
+        }
+        guard !files.isEmpty else { return [] }
+
+        do {
+            return try await chatRepository.uploadFiles(roomID: roomID, files: files)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw map(error)
         }
@@ -375,9 +468,10 @@ struct ChatInteractor: ChatInteracting {
         case .rateLimited:
             return .unavailable(message: "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
         case .decoding:
-            return .unavailable(message: "채팅 응답을 해석하지 못했어요.")
+            return .unavailable(message: "데이터를 불러오지 못했어요.")
         case .transport:
-            return .unavailable(message: "네트워크 연결을 확인한 뒤 다시 시도해 주세요.")
+            Logger.shared.warning("[Chat] network failed error=transport")
+            return .networkUnavailable(message: "네트워크 연결을 확인한 뒤 다시 시도해 주세요.")
         case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .configuration:
             return .unavailable(message: networkError.localizedDescription)
         }

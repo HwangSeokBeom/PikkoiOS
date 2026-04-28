@@ -1,9 +1,12 @@
+import PhotosUI
 import SwiftUI
+import UIKit
 
 struct ChatRootView: View {
     @StateObject private var presenter: ChatPresenter
     private let imageLoader: any AuthorizedImageLoading
     @FocusState private var isComposerFocused: Bool
+    @State private var selectedPhotoItems: [PhotosPickerItem] = []
 
     init(
         presenter: ChatPresenter,
@@ -117,7 +120,7 @@ struct ChatRootView: View {
                         .padding(.top, PikkoSpacing.xxl)
                     } else {
                         ForEach(presenter.viewState.messages) { message in
-                            ChatMessageBubble(message: message)
+                            ChatMessageBubble(message: message, imageLoader: imageLoader)
                                 .id(message.id)
                         }
                     }
@@ -143,6 +146,21 @@ struct ChatRootView: View {
 
     private var messageComposer: some View {
         HStack(alignment: .bottom, spacing: PikkoSpacing.sm) {
+            PhotosPicker(
+                selection: $selectedPhotoItems,
+                maxSelectionCount: 5,
+                matching: .images,
+                preferredItemEncoding: .automatic
+            ) {
+                Image(systemName: presenter.viewState.isUploadingFiles ? "hourglass" : "paperclip")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(PikkoColor.accentStrong)
+                    .frame(width: 44, height: 44)
+                    .background(PikkoColor.surface)
+                    .clipShape(Circle())
+            }
+            .disabled(presenter.viewState.selectedRoomID == nil || presenter.viewState.isUploadingFiles || presenter.viewState.isSending)
+
             TextField(
                 "메시지 입력",
                 text: messageTextBinding,
@@ -178,10 +196,29 @@ struct ChatRootView: View {
             .buttonStyle(.plain)
             .disabled(!presenter.viewState.canSend)
         }
+        .overlay(alignment: .topLeading) {
+            if !presenter.viewState.attachedFilePaths.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: PikkoSpacing.xs) {
+                        ForEach(presenter.viewState.attachedFilePaths, id: \.self) { path in
+                            ChatAttachmentToken(path: path) {
+                                Task { await presenter.send(.attachedFileRemoved(path)) }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, PikkoSpacing.lg)
+                    .padding(.bottom, PikkoSpacing.xs)
+                    .offset(y: -40)
+                }
+            }
+        }
         .padding(.horizontal, PikkoSpacing.lg)
         .padding(.top, PikkoSpacing.sm)
         .padding(.bottom, PikkoSpacing.sm + RootTabBarMetrics.scrollContentBottomInset)
         .background(PikkoColor.background.opacity(0.96))
+        .onChange(of: selectedPhotoItems) { _, items in
+            Task { await handleImageSelection(items) }
+        }
     }
 
     private var messageTextBinding: Binding<String> {
@@ -191,6 +228,31 @@ struct ChatRootView: View {
                 Task { await presenter.send(.messageTextChanged(value)) }
             }
         )
+    }
+
+    private func handleImageSelection(_ items: [PhotosPickerItem]) async {
+        guard !items.isEmpty else { return }
+
+        var files: [ChatUploadFile] = []
+        for (index, item) in items.enumerated() {
+            guard let rawData = try? await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: rawData),
+                  let jpegData = image.jpegData(compressionQuality: 0.88),
+                  !jpegData.isEmpty else {
+                continue
+            }
+
+            files.append(
+                ChatUploadFile(
+                    data: jpegData,
+                    fileName: "chat-\(Int(Date().timeIntervalSince1970))-\(index).jpg",
+                    mimeType: "image/jpeg"
+                )
+            )
+        }
+
+        selectedPhotoItems = []
+        await presenter.send(.filesSelected(files))
     }
 }
 
@@ -240,6 +302,7 @@ private struct ChatRoomRow: View {
 
 private struct ChatMessageBubble: View {
     let message: ChatMessageRowViewState
+    let imageLoader: any AuthorizedImageLoading
 
     var body: some View {
         HStack(alignment: .bottom, spacing: PikkoSpacing.xs) {
@@ -262,15 +325,31 @@ private struct ChatMessageBubble: View {
     }
 
     private var bubble: some View {
-        Text(message.content)
-            .font(PikkoTypography.body)
-            .foregroundStyle(message.isMine ? .white : PikkoColor.primaryText)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, PikkoSpacing.md)
-            .padding(.vertical, PikkoSpacing.sm)
-            .background(message.isMine ? PikkoColor.accent : PikkoColor.surface)
-            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
-            .frame(maxWidth: 260, alignment: message.isMine ? .trailing : .leading)
+        VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+            if !message.content.isEmpty {
+                Text(message.content)
+                    .font(PikkoTypography.body)
+                    .foregroundStyle(message.isMine ? .white : PikkoColor.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            ForEach(message.filePaths, id: \.self) { path in
+                AuthorizedAsyncImage(
+                    path: path,
+                    loader: imageLoader,
+                    contentMode: .fill,
+                    cornerRadius: PikkoRadius.card,
+                    showsProgress: true
+                )
+                .frame(width: 180, height: 140)
+                .clipped()
+            }
+        }
+        .padding(.horizontal, PikkoSpacing.md)
+        .padding(.vertical, PikkoSpacing.sm)
+        .background(message.isMine ? PikkoColor.accent : PikkoColor.surface)
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+        .frame(maxWidth: 260, alignment: message.isMine ? .trailing : .leading)
     }
 
     private var timestamp: some View {
@@ -278,5 +357,29 @@ private struct ChatMessageBubble: View {
             .font(PikkoTypography.caption)
             .foregroundStyle(PikkoColor.tertiaryText)
             .lineLimit(1)
+    }
+}
+
+private struct ChatAttachmentToken: View {
+    let path: String
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: PikkoSpacing.xs) {
+            Text((path as NSString).lastPathComponent)
+                .font(PikkoTypography.caption)
+                .foregroundStyle(PikkoColor.secondaryText)
+                .lineLimit(1)
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(PikkoColor.secondaryText)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, PikkoSpacing.sm)
+        .frame(height: 32)
+        .background(PikkoColor.surfaceElevated)
+        .clipShape(Capsule())
     }
 }

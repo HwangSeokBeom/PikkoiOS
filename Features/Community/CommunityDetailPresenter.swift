@@ -230,6 +230,9 @@ final class CommunityDetailPresenter: ObservableObject {
 
         viewState.commentSection.isSubmittingComment = true
         syncCommentSectionState()
+        #if DEBUG
+        Logger.shared.debug("[CommunityComment] submit postID=\(viewState.postID)")
+        #endif
 
         do {
             let createdComment = try await interactor.createComment(content: draft)
@@ -243,6 +246,9 @@ final class CommunityDetailPresenter: ObservableObject {
             if let detail {
                 postCommunityChange(summary: detail.summary)
             }
+            #if DEBUG
+            Logger.shared.debug("[CommunityComment] success commentID=\(createdComment.id)")
+            #endif
         } catch {
             viewState.commentSection.isSubmittingComment = false
             applyCommentFailure(error)

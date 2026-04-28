@@ -1,3 +1,4 @@
+import AVKit
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -11,6 +12,12 @@ struct ProfileRootView: View {
     private let makeMyPostsView: (String) -> AnyView
     private let makeLikedPostsView: () -> AnyView
     private let makeMyReviewsView: (String) -> AnyView
+    private let makeChatListView: () -> AnyView
+    private let makeUserSearchView: () -> AnyView
+    private let makeDeveloperDiagnosticsView: () -> AnyView
+    @State private var isChatListPresented = false
+    @State private var isUserSearchPresented = false
+    @State private var isDeveloperDiagnosticsPresented = false
 
     init(
         presenter: ProfilePresenter,
@@ -19,7 +26,10 @@ struct ProfileRootView: View {
         makeLikedStoresView: @escaping () -> AnyView,
         makeMyPostsView: @escaping (String) -> AnyView,
         makeLikedPostsView: @escaping () -> AnyView,
-        makeMyReviewsView: @escaping (String) -> AnyView
+        makeMyReviewsView: @escaping (String) -> AnyView,
+        makeChatListView: @escaping () -> AnyView,
+        makeUserSearchView: @escaping () -> AnyView,
+        makeDeveloperDiagnosticsView: @escaping () -> AnyView
     ) {
         _presenter = StateObject(wrappedValue: presenter)
         _router = StateObject(wrappedValue: router)
@@ -28,6 +38,9 @@ struct ProfileRootView: View {
         self.makeMyPostsView = makeMyPostsView
         self.makeLikedPostsView = makeLikedPostsView
         self.makeMyReviewsView = makeMyReviewsView
+        self.makeChatListView = makeChatListView
+        self.makeUserSearchView = makeUserSearchView
+        self.makeDeveloperDiagnosticsView = makeDeveloperDiagnosticsView
     }
 
     var body: some View {
@@ -105,6 +118,20 @@ struct ProfileRootView: View {
                     }
 
                     SecondaryButton(
+                        title: "채팅",
+                        systemImage: "bubble.left.and.bubble.right"
+                    ) {
+                        isChatListPresented = true
+                    }
+
+                    SecondaryButton(
+                        title: "유저 검색",
+                        systemImage: "person.text.rectangle"
+                    ) {
+                        isUserSearchPresented = true
+                    }
+
+                    SecondaryButton(
                         title: presenter.viewState.myPostsActionTitle,
                         systemImage: "square.text.square"
                     ) {
@@ -137,6 +164,15 @@ struct ProfileRootView: View {
                     ) {
                         isLogoutConfirmationPresented = true
                     }
+
+                    #if DEBUG
+                    SecondaryButton(
+                        title: "개발자 진단",
+                        systemImage: "wrench.and.screwdriver"
+                    ) {
+                        isDeveloperDiagnosticsPresented = true
+                    }
+                    #endif
                 }
             }
             .padding(PikkoSpacing.xl)
@@ -158,6 +194,17 @@ struct ProfileRootView: View {
                 makeMyReviewsView(userID)
             }
         }
+        .navigationDestination(isPresented: $isChatListPresented) {
+            makeChatListView()
+        }
+        .navigationDestination(isPresented: $isUserSearchPresented) {
+            makeUserSearchView()
+        }
+        #if DEBUG
+        .navigationDestination(isPresented: $isDeveloperDiagnosticsPresented) {
+            makeDeveloperDiagnosticsView()
+        }
+        #endif
         .sheet(
             isPresented: profileEditorPresentedBinding,
             onDismiss: {
@@ -936,6 +983,766 @@ private struct ProfileListSkeletonView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct UserSearchRootView: View {
+    private let authRepository: AuthRepository
+    private let imageLoader: any AuthorizedImageLoading
+    private let makeChatView: (String) -> AnyView
+
+    @State private var query = ""
+    @State private var users: [SearchUser] = []
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var emptyMessage: String?
+    @State private var presentedOpponentID: String?
+
+    init(
+        authRepository: AuthRepository,
+        imageLoader: any AuthorizedImageLoading,
+        makeChatView: @escaping (String) -> AnyView
+    ) {
+        self.authRepository = authRepository
+        self.imageLoader = imageLoader
+        self.makeChatView = makeChatView
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.lg) {
+            SearchBar(
+                text: $query,
+                placeholder: "닉네임으로 유저 검색",
+                onSubmit: {
+                    Task { await search() }
+                },
+                style: .compact
+            )
+
+            if isLoading {
+                LoadingView(message: "유저를 검색하고 있어요")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let message = errorMessage ?? emptyMessage, users.isEmpty {
+                EmptyStateView(
+                    title: errorMessage == nil ? "검색 결과가 없어요" : "유저 검색 실패",
+                    message: message,
+                    systemImage: errorMessage == nil ? "person.crop.circle.badge.questionmark" : "exclamationmark.triangle",
+                    actionTitle: errorMessage == nil ? nil : "다시 시도",
+                    action: errorMessage == nil ? nil : {
+                        Task { await search() }
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(spacing: PikkoSpacing.sm) {
+                        ForEach(users) { user in
+                            Button {
+                                presentedOpponentID = user.id
+                            } label: {
+                                HStack(spacing: PikkoSpacing.md) {
+                                    AuthorizedAsyncImage(
+                                        path: user.profileImagePath,
+                                        loader: imageLoader,
+                                        cornerRadius: 24,
+                                        showsProgress: false
+                                    )
+                                    .frame(width: 48, height: 48)
+                                    .clipShape(Circle())
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(user.nick)
+                                            .font(PikkoTypography.bodyStrong)
+                                            .foregroundStyle(PikkoColor.primaryText)
+                                            .lineLimit(1)
+                                        Text("채팅 시작")
+                                            .font(PikkoTypography.caption)
+                                            .foregroundStyle(PikkoColor.secondaryText)
+                                    }
+
+                                    Spacer()
+
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(PikkoColor.tertiaryText)
+                                }
+                                .padding(PikkoSpacing.md)
+                                .background(PikkoColor.surfaceElevated)
+                                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.bottom, RootTabBarMetrics.scrollContentBottomInset)
+                }
+            }
+        }
+        .padding(PikkoSpacing.xl)
+        .background(PikkoColor.background.ignoresSafeArea())
+        .navigationTitle("유저 검색")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: chatPresentedBinding) {
+            if let presentedOpponentID {
+                makeChatView(presentedOpponentID)
+            }
+        }
+    }
+
+    private var chatPresentedBinding: Binding<Bool> {
+        Binding(
+            get: { presentedOpponentID != nil },
+            set: { isPresented in
+                if !isPresented {
+                    presentedOpponentID = nil
+                }
+            }
+        )
+    }
+
+    private func search() async {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            users = []
+            errorMessage = nil
+            emptyMessage = "검색어를 입력해 주세요."
+            return
+        }
+
+        isLoading = true
+        errorMessage = nil
+        emptyMessage = nil
+        defer { isLoading = false }
+
+        do {
+            users = try await authRepository.searchUsers(nick: trimmed)
+            emptyMessage = users.isEmpty ? "일치하는 닉네임이 없어요." : nil
+        } catch let error as NetworkError {
+            if error.isAuthenticationFailure {
+                errorMessage = "로그인 후 유저를 검색할 수 있어요."
+            } else if case .rateLimited = error {
+                errorMessage = "요청이 많아요. 잠시 후 다시 시도해 주세요."
+            } else {
+                errorMessage = "유저 검색을 완료하지 못했어요."
+            }
+            users = []
+        } catch {
+            errorMessage = "유저 검색을 완료하지 못했어요."
+            users = []
+        }
+    }
+}
+
+#if DEBUG
+private struct DeveloperLogDTO: Decodable, Sendable, Identifiable {
+    var id: String { "\(date ?? "")-\(routePath ?? "")-\(statusCode ?? "")" }
+    let date: String?
+    let name: String?
+    let method: String?
+    let routePath: String?
+    let body: String?
+    let contentType: String?
+    let statusCode: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case date, name, method, body, contentType
+        case routePath = "route_path"
+        case statusCode = "status_code"
+    }
+}
+
+private struct DeveloperLogListResponseDTO: Decodable, Sendable {
+    let count: Int?
+    let logs: [DeveloperLogDTO]?
+}
+
+private struct PushNotificationDebugRequestDTO: Encodable, Sendable {
+    let userID: String
+    let title: String
+    let subtitle: String?
+    let body: String
+
+    private enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
+        case title, subtitle, body
+    }
+}
+
+private struct VideoDebugListResponseDTO: Decodable, Sendable {
+    let data: [VideoDebugDTO]
+    let nextCursor: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case data
+        case nextCursor = "next_cursor"
+    }
+}
+
+private struct VideoDebugDTO: Decodable, Sendable, Identifiable {
+    var id: String { videoID }
+    let videoID: String
+    let title: String
+    let description: String
+    let thumbnailURL: String?
+    let likeCount: Int
+    let isLiked: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case videoID = "video_id"
+        case title, description
+        case thumbnailURL = "thumbnail_url"
+        case likeCount = "like_count"
+        case isLiked = "is_liked"
+    }
+}
+
+private struct VideoStreamDebugResponseDTO: Decodable, Sendable {
+    let videoID: String
+    let streamURL: String
+
+    private enum CodingKeys: String, CodingKey {
+        case videoID = "video_id"
+        case streamURL = "stream_url"
+    }
+}
+
+private struct DebugLikeRequestDTO: Encodable, Sendable {
+    let likeStatus: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case likeStatus = "like_status"
+    }
+}
+
+private struct DebugLikeResponseDTO: Decodable, Sendable {
+    let likeStatus: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case likeStatus = "like_status"
+    }
+}
+
+private struct StoreDebugFileResponseDTO: Decodable, Sendable {
+    let storeImageURLs: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case storeImageURLs = "store_image_urls"
+    }
+}
+
+private struct MenuDebugFileResponseDTO: Decodable, Sendable {
+    let menuImageURL: String
+
+    private enum CodingKeys: String, CodingKey {
+        case menuImageURL = "menu_image_url"
+    }
+}
+
+private struct StoreDebugMutationRequestDTO: Encodable, Sendable {
+    var name: String
+    var category: String
+    var description: String
+    var address: String
+    var longitude: Double
+    var latitude: Double
+    var open: String
+    var close: String
+    var parkingGuide: String
+    var storeImageURLs: [String]
+    var hashTags: [String]
+    var isPicchelin: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case name, category, description, address, longitude, latitude, open, close, hashTags
+        case parkingGuide = "parking_guide"
+        case storeImageURLs = "store_image_urls"
+        case isPicchelin = "is_picchelin"
+    }
+}
+
+private struct MenuDebugMutationRequestDTO: Encodable, Sendable {
+    var name: String
+    var description: String
+    var originInformation: String
+    var price: Int
+    var category: String
+    var tags: [String]
+    var menuImageURL: String?
+    var isSoldOut: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case name, description, price, category, tags
+        case originInformation = "origin_information"
+        case menuImageURL = "menu_image_url"
+        case isSoldOut = "is_sold_out"
+    }
+}
+
+private struct MenuDebugResponseDTO: Decodable, Sendable {
+    let menuID: String?
+    let storeID: String?
+    let name: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case menuID = "menu_id"
+        case storeID = "store_id"
+        case name
+    }
+}
+
+private struct DeveloperDiagnosticsClient: Sendable {
+    let apiClient: any APIClientProtocol
+    let appConfiguration: AppConfiguration
+
+    func fetchCommon() async throws {
+        let endpoint = Endpoint<EmptyResponse>(
+            path: "/common",
+            method: .get,
+            authorizationPolicy: .none
+        )
+        _ = try await apiClient.execute(endpoint)
+    }
+
+    func fetchLogs() async throws -> DeveloperLogListResponseDTO {
+        try await apiClient.execute(
+            Endpoint<DeveloperLogListResponseDTO>(
+                path: "/v1/log",
+                method: .get,
+                authorizationPolicy: .none
+            )
+        )
+    }
+
+    func sendPush(userID: String, title: String, subtitle: String?, body: String) async throws {
+        let request = PushNotificationDebugRequestDTO(userID: userID, title: title, subtitle: subtitle, body: body)
+        _ = try await apiClient.execute(
+            Endpoint<EmptyResponse>(
+                path: "/v1/notifications/push",
+                method: .post,
+                body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(request)),
+                authorizationPolicy: .accessToken
+            )
+        )
+    }
+
+    func fetchVideos(next: String?) async throws -> VideoDebugListResponseDTO {
+        let query = [
+            next.map { URLQueryItem(name: "next", value: $0) },
+            URLQueryItem(name: "limit", value: "5")
+        ].compactMap { $0 }
+        return try await apiClient.execute(
+            Endpoint<VideoDebugListResponseDTO>(
+                path: "/v1/videos",
+                method: .get,
+                query: query,
+                authorizationPolicy: .accessToken
+            )
+        )
+    }
+
+    func fetchVideoStream(videoID: String) async throws -> URL {
+        let response = try await apiClient.execute(
+            Endpoint<VideoStreamDebugResponseDTO>(
+                path: "/v1/videos/\(videoID)/stream",
+                method: .get,
+                authorizationPolicy: .accessToken
+            )
+        )
+        return resolveURL(response.streamURL)
+    }
+
+    func updateVideoLike(videoID: String, isLiked: Bool) async throws -> Bool {
+        let response = try await apiClient.execute(
+            Endpoint<DebugLikeResponseDTO>(
+                path: "/v1/videos/\(videoID)/like",
+                method: .post,
+                body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(DebugLikeRequestDTO(likeStatus: isLiked))),
+                authorizationPolicy: .accessToken
+            )
+        )
+        return response.likeStatus
+    }
+
+    func uploadStoreImages(_ files: [StoreReviewUploadFile]) async throws -> [String] {
+        var builder = MultipartFormDataBuilder()
+        for file in files {
+            builder.addFile(fieldName: "files", fileName: file.fileName, mimeType: file.mimeType, fileData: file.data)
+        }
+        let response = try await apiClient.execute(
+            Endpoint<StoreDebugFileResponseDTO>(
+                path: "/v1/stores/files",
+                method: .post,
+                body: builder.build(),
+                timeout: .upload,
+                authorizationPolicy: .accessToken
+            )
+        )
+        return response.storeImageURLs
+    }
+
+    func uploadMenuImage(_ file: StoreReviewUploadFile) async throws -> String {
+        var builder = MultipartFormDataBuilder()
+        builder.addFile(fieldName: "menu_image", fileName: file.fileName, mimeType: file.mimeType, fileData: file.data)
+        let response = try await apiClient.execute(
+            Endpoint<MenuDebugFileResponseDTO>(
+                path: "/v1/menus/image",
+                method: .post,
+                body: builder.build(),
+                timeout: .upload,
+                authorizationPolicy: .accessToken
+            )
+        )
+        return response.menuImageURL
+    }
+
+    func createStore(_ request: StoreDebugMutationRequestDTO) async throws {
+        _ = try await apiClient.execute(
+            Endpoint<StoreDetailResponseDTO>(
+                path: "/v1/stores",
+                method: .post,
+                body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(request)),
+                authorizationPolicy: .accessToken
+            )
+        )
+    }
+
+    func updateStore(storeID: String, request: StoreDebugMutationRequestDTO) async throws {
+        _ = try await apiClient.execute(
+            Endpoint<StoreDetailResponseDTO>(
+                path: "/v1/stores/\(storeID)",
+                method: .put,
+                body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(request)),
+                authorizationPolicy: .accessToken
+            )
+        )
+    }
+
+    func createMenu(storeID: String, request: MenuDebugMutationRequestDTO) async throws {
+        _ = try await apiClient.execute(
+            Endpoint<MenuDebugResponseDTO>(
+                path: "/v1/menus/stores/\(storeID)",
+                method: .post,
+                body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(request)),
+                authorizationPolicy: .accessToken
+            )
+        )
+    }
+
+    func updateMenu(menuID: String, request: MenuDebugMutationRequestDTO) async throws {
+        _ = try await apiClient.execute(
+            Endpoint<MenuDebugResponseDTO>(
+                path: "/v1/menus/\(menuID)",
+                method: .put,
+                body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(request)),
+                authorizationPolicy: .accessToken
+            )
+        )
+    }
+
+    private func resolveURL(_ value: String) -> URL {
+        if let absolute = URL(string: value),
+           absolute.scheme != nil {
+            return absolute
+        }
+        return URL(string: value, relativeTo: appConfiguration.baseURL)?.absoluteURL ?? appConfiguration.baseURL!
+    }
+}
+
+struct DeveloperDiagnosticsRootView: View {
+    private let client: DeveloperDiagnosticsClient
+    private let imageLoader: any AuthorizedImageLoading
+
+    @State private var status = "대기 중"
+    @State private var logs: [DeveloperLogDTO] = []
+    @State private var videos: [VideoDebugDTO] = []
+    @State private var videoNextCursor: String?
+    @State private var player: AVPlayer?
+    @State private var pushUserID = ""
+    @State private var pushTitle = "Pikko 테스트"
+    @State private var pushSubtitle = "Developer Diagnostics"
+    @State private var pushBody = "푸시 테스트입니다."
+    @State private var storeID = ""
+    @State private var storeImages: [String] = []
+    @State private var menuID = ""
+    @State private var menuImage: String?
+    @State private var selectedStoreImages: [PhotosPickerItem] = []
+    @State private var selectedMenuImage: PhotosPickerItem?
+
+    fileprivate init(
+        client: DeveloperDiagnosticsClient,
+        imageLoader: any AuthorizedImageLoading
+    ) {
+        self.client = client
+        self.imageLoader = imageLoader
+    }
+
+    var body: some View {
+        List {
+            Section("상태") {
+                Text(status)
+                    .font(PikkoTypography.caption)
+                    .foregroundStyle(PikkoColor.secondaryText)
+            }
+
+            Section("Common / Log") {
+                Button("GET /common") { Task { await run("공통 정책 조회") { try await client.fetchCommon() } } }
+                Button("GET /v1/log") { Task { await fetchLogs() } }
+                ForEach(logs.prefix(5)) { log in
+                    Text("\(log.method ?? "-") \(log.routePath ?? "-") \(log.statusCode ?? "-")")
+                        .font(PikkoTypography.caption)
+                }
+            }
+
+            Section("Push") {
+                TextField("user_id", text: $pushUserID)
+                TextField("title", text: $pushTitle)
+                TextField("subtitle", text: $pushSubtitle)
+                TextField("body", text: $pushBody)
+                Button("POST /v1/notifications/push") {
+                    Task {
+                        await run("푸시 전송") {
+                            try await client.sendPush(
+                                userID: pushUserID,
+                                title: pushTitle,
+                                subtitle: pushSubtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : pushSubtitle,
+                                body: pushBody
+                            )
+                        }
+                    }
+                }
+            }
+
+            Section("Video") {
+                Button("GET /v1/videos") { Task { await fetchVideos(next: nil) } }
+                if videoNextCursor != nil {
+                    Button("다음 비디오 페이지") { Task { await fetchVideos(next: videoNextCursor) } }
+                }
+                ForEach(videos) { video in
+                    VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+                        Text(video.title)
+                            .font(PikkoTypography.bodyStrong)
+                        Text(video.description)
+                            .font(PikkoTypography.caption)
+                            .lineLimit(2)
+                        HStack {
+                            Button("재생") { Task { await play(videoID: video.videoID) } }
+                            Button(video.isLiked ? "좋아요 취소" : "좋아요") {
+                                Task { await like(video: video) }
+                            }
+                        }
+                    }
+                }
+                if let player {
+                    VideoPlayer(player: player)
+                        .frame(height: 220)
+                }
+            }
+
+            Section("Admin Store") {
+                TextField("store_id 수정 시 입력", text: $storeID)
+                PhotosPicker(selection: $selectedStoreImages, maxSelectionCount: 5, matching: .images) {
+                    Text("가게 이미지 선택")
+                }
+                Button("POST /v1/stores/files") { Task { await uploadStoreImages() } }
+                Text(storeImages.joined(separator: "\n"))
+                    .font(PikkoTypography.caption)
+                Button("POST /v1/stores") { Task { await mutateStore(isUpdate: false) } }
+                Button("PUT /v1/stores/{store_id}") { Task { await mutateStore(isUpdate: true) } }
+            }
+
+            Section("Admin Menu") {
+                TextField("store_id", text: $storeID)
+                TextField("menu_id 수정 시 입력", text: $menuID)
+                PhotosPicker(selection: $selectedMenuImage, matching: .images) {
+                    Text("메뉴 이미지 선택")
+                }
+                Button("POST /v1/menus/image") { Task { await uploadMenuImage() } }
+                Text(menuImage ?? "업로드된 메뉴 이미지 없음")
+                    .font(PikkoTypography.caption)
+                Button("POST /v1/menus/stores/{store_id}") { Task { await mutateMenu(isUpdate: false) } }
+                Button("PUT /v1/menus/{menu_id}") { Task { await mutateMenu(isUpdate: true) } }
+            }
+        }
+        .navigationTitle("개발자 진단")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func run(_ label: String, action: () async throws -> Void) async {
+        status = "\(label) 실행 중"
+        do {
+            try await action()
+            status = "\(label) 성공"
+        } catch {
+            status = "\(label) 실패: \(error.localizedDescription)"
+        }
+    }
+
+    private func fetchLogs() async {
+        status = "로그 조회 중"
+        do {
+            let response = try await client.fetchLogs()
+            logs = response.logs ?? []
+            status = "로그 \(response.count ?? logs.count)개 조회"
+        } catch {
+            status = "로그 조회 실패: \(error.localizedDescription)"
+        }
+    }
+
+    private func fetchVideos(next: String?) async {
+        status = "비디오 조회 중"
+        do {
+            let response = try await client.fetchVideos(next: next)
+            videos = next == nil ? response.data : videos + response.data
+            videoNextCursor = response.nextCursor
+            status = "비디오 \(videos.count)개 조회"
+        } catch {
+            status = "비디오 조회 실패: \(error.localizedDescription)"
+        }
+    }
+
+    private func play(videoID: String) async {
+        status = "스트림 URL 조회 중"
+        do {
+            let url = try await client.fetchVideoStream(videoID: videoID)
+            player = AVPlayer(url: url)
+            player?.play()
+            status = "비디오 재생 요청 완료"
+        } catch {
+            status = "스트림 조회 실패: \(error.localizedDescription)"
+        }
+    }
+
+    private func like(video: VideoDebugDTO) async {
+        await run("비디오 좋아요") {
+            let confirmed = try await client.updateVideoLike(videoID: video.videoID, isLiked: !video.isLiked)
+            videos = videos.map { item in
+                guard item.videoID == video.videoID else { return item }
+                return VideoDebugDTO(
+                    videoID: item.videoID,
+                    title: item.title,
+                    description: item.description,
+                    thumbnailURL: item.thumbnailURL,
+                    likeCount: max(item.likeCount + (confirmed ? 1 : -1), 0),
+                    isLiked: confirmed
+                )
+            }
+        }
+    }
+
+    private func uploadStoreImages() async {
+        guard let files = await makeUploadFiles(from: selectedStoreImages), !files.isEmpty else {
+            status = "가게 이미지를 선택해 주세요."
+            return
+        }
+        await run("가게 이미지 업로드") {
+            storeImages = try await client.uploadStoreImages(files)
+            selectedStoreImages = []
+        }
+    }
+
+    private func uploadMenuImage() async {
+        guard let selectedMenuImage,
+              let file = await makeUploadFiles(from: [selectedMenuImage])?.first else {
+            status = "메뉴 이미지를 선택해 주세요."
+            return
+        }
+        await run("메뉴 이미지 업로드") {
+            menuImage = try await client.uploadMenuImage(file)
+            self.selectedMenuImage = nil
+        }
+    }
+
+    private func mutateStore(isUpdate: Bool) async {
+        let request = StoreDebugMutationRequestDTO(
+            name: "새싹 테스트 가게",
+            category: "커피",
+            description: "DEBUG 진단 화면에서 생성한 테스트 가게",
+            address: "서울특별시 마포구 월드컵북로 400",
+            longitude: 126.8997,
+            latitude: 37.571,
+            open: "09:00",
+            close: "18:00",
+            parkingGuide: "주차 불가",
+            storeImageURLs: storeImages,
+            hashTags: ["#테스트"],
+            isPicchelin: false
+        )
+        await run(isUpdate ? "가게 수정" : "가게 등록") {
+            if isUpdate {
+                try await client.updateStore(storeID: storeID, request: request)
+            } else {
+                try await client.createStore(request)
+            }
+        }
+    }
+
+    private func mutateMenu(isUpdate: Bool) async {
+        let request = MenuDebugMutationRequestDTO(
+            name: "새싹 테스트 메뉴",
+            description: "DEBUG 진단 화면에서 생성한 테스트 메뉴",
+            originInformation: "원산지 테스트",
+            price: 100,
+            category: "대표 메뉴",
+            tags: ["테스트"],
+            menuImageURL: menuImage,
+            isSoldOut: false
+        )
+        await run(isUpdate ? "메뉴 수정" : "메뉴 등록") {
+            if isUpdate {
+                try await client.updateMenu(menuID: menuID, request: request)
+            } else {
+                try await client.createMenu(storeID: storeID, request: request)
+            }
+        }
+    }
+
+    private func makeUploadFiles(from items: [PhotosPickerItem]) async -> [StoreReviewUploadFile]? {
+        var files: [StoreReviewUploadFile] = []
+        for (index, item) in items.enumerated() {
+            guard let rawData = try? await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: rawData),
+                  let jpegData = image.jpegData(compressionQuality: 0.88),
+                  !jpegData.isEmpty else {
+                continue
+            }
+            files.append(
+                StoreReviewUploadFile(
+                    data: jpegData,
+                    fileName: "debug-\(Int(Date().timeIntervalSince1970))-\(index).jpg",
+                    mimeType: "image/jpeg"
+                )
+            )
+        }
+        return files
+    }
+}
+
+@MainActor
+struct DeveloperDiagnosticsBuilder {
+    let apiClient: any APIClientProtocol
+    let appConfiguration: AppConfiguration
+    let imageLoader: any AuthorizedImageLoading
+
+    func build() -> DeveloperDiagnosticsRootView {
+        DeveloperDiagnosticsRootView(
+            client: DeveloperDiagnosticsClient(apiClient: apiClient, appConfiguration: appConfiguration),
+            imageLoader: imageLoader
+        )
+    }
+}
+#endif
+
+@MainActor
+struct UserSearchBuilder {
+    let authRepository: AuthRepository
+    let imageLoader: any AuthorizedImageLoading
+    let makeChatView: (String) -> AnyView
+
+    func build() -> UserSearchRootView {
+        UserSearchRootView(
+            authRepository: authRepository,
+            imageLoader: imageLoader,
+            makeChatView: makeChatView
+        )
     }
 }
 

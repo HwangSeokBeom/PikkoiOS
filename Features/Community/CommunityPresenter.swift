@@ -8,7 +8,6 @@ final class CommunityPresenter: ObservableObject {
     private let interactor: CommunityInteracting
     private let router: CommunityRouting
     private let sessionStore: SessionStore
-    private let routesSearchSubmissions: Bool
     private let distanceFormatter = DistanceFormatter()
     private let distanceCalculator = CommunityDistanceCalculator()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
@@ -32,7 +31,7 @@ final class CommunityPresenter: ObservableObject {
         self.interactor = interactor
         self.router = router
         self.sessionStore = sessionStore
-        self.routesSearchSubmissions = routesSearchSubmissions
+        _ = routesSearchSubmissions
         let trimmedInitialQuery = initialQuery?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.activeQuery = {
             guard let trimmedInitialQuery, !trimmedInitialQuery.isEmpty else {
@@ -58,11 +57,20 @@ final class CommunityPresenter: ObservableObject {
             viewState.searchText = text
         case .searchSubmitted:
             let query = normalizedQuery(viewState.searchText)
-            if routesSearchSubmissions, let query {
-                router.routeToSearch(query: query)
-                return
-            }
             activeQuery = query
+            viewState.searchText = query ?? ""
+            viewState.nextCursor = nil
+            #if DEBUG
+            Logger.shared.debug("[CommunitySearch] query=\"\(query ?? "")\"")
+            #endif
+            await loadFeed(isRefresh: false)
+        case .searchCleared:
+            activeQuery = nil
+            viewState.searchText = ""
+            viewState.nextCursor = nil
+            #if DEBUG
+            Logger.shared.debug("[CommunitySearch] query=\"\"")
+            #endif
             await loadFeed(isRefresh: false)
         case .composeTapped:
             guard sessionStore.isAuthenticated else {
@@ -73,15 +81,14 @@ final class CommunityPresenter: ObservableObject {
                 return
             }
             router.routeToComposer()
-        case .sortSelected(let sortID):
-            guard let selectedSort = CommunitySort(rawValue: sortID) else { return }
-            guard viewState.selectedSort != selectedSort else { return }
-            viewState.selectedSort = selectedSort
-            viewState.nextCursor = nil
-            applyFilters()
-            await loadFeed(isRefresh: false)
+        case .sortSelected(let categoryID):
+            guard let category = CommunitySortCategory(rawValue: categoryID) else { return }
+            await selectSort(category.defaultSelection)
+        case .sortToggleTapped:
+            await selectSort(viewState.selectedSort.toggledDirection)
         case .distanceSelected(let distanceID):
             guard let selectedDistance = viewState.distanceOptions.first(where: { $0.id == distanceID }) else { return }
+            guard viewState.selectedDistance != selectedDistance else { return }
             viewState.selectedDistance = selectedDistance
             viewState.nextCursor = nil
             await loadFeed(isRefresh: false)
@@ -122,6 +129,18 @@ final class CommunityPresenter: ObservableObject {
         viewState.feedStatus = .loading
         viewState.errorMessage = nil
         viewState.emptyState = nil
+        defer {
+            if requestID == feedRequestID {
+                viewState.isLoading = false
+                viewState.isRefreshing = false
+            }
+        }
+
+        #if DEBUG
+        Logger.shared.debug(
+            "[CommunityList] \(isRefresh ? "refresh started" : "reload") requestID=\(requestID) category=\(viewState.selectedSort.category.id) direction=\(viewState.selectedSort.direction.rawValue) orderBy=\(viewState.selectedSort.requestOrderBy.rawValue) query=\(activeQuery ?? "") distance=\(viewState.selectedDistance.title) hasLocation=\(viewState.hasReferenceLocation)"
+        )
+        #endif
 
         if reason == "postCreated" {
             viewState.nextCursor = nil
@@ -136,12 +155,37 @@ final class CommunityPresenter: ObservableObject {
                 selectedDistance: viewState.selectedDistance,
                 selectedSort: viewState.selectedSort
             )
-            guard requestID == feedRequestID else { return }
+            guard requestID == feedRequestID else {
+                #if DEBUG
+                Logger.shared.debug("[CommunityList] stale response ignored requestID=\(requestID)")
+                #endif
+                return
+            }
             apply(content: content)
             hasLoaded = true
+        } catch is CancellationError {
+            guard requestID == feedRequestID else {
+                #if DEBUG
+                Logger.shared.debug("[CommunityList] stale response ignored requestID=\(requestID)")
+                #endif
+                return
+            }
+            #if DEBUG
+            Logger.shared.debug("[CommunityList] request cancelled, suppress user error")
+            #endif
         } catch {
-            guard requestID == feedRequestID else { return }
-            viewState.errorMessage = resolveErrorMessage(from: error)
+            guard requestID == feedRequestID else {
+                #if DEBUG
+                Logger.shared.debug("[CommunityList] stale response ignored requestID=\(requestID)")
+                #endif
+                return
+            }
+            viewState.errorMessage = transientErrorMessage(from: error)
+            if let feedError = error as? CommunityFeedError,
+               case .locationRequired = feedError {
+                referenceLocation = nil
+                viewState.hasReferenceLocation = false
+            }
             if allPosts.isEmpty {
                 viewState.featuredBanner = nil
                 viewState.emptyState = makeFailureEmptyState(for: error)
@@ -150,14 +194,12 @@ final class CommunityPresenter: ObservableObject {
                 viewState.feedStatus = .content
             }
         }
-
-        viewState.isLoading = false
-        viewState.isRefreshing = false
     }
 
     private func apply(content: CommunityFeedContent) {
         viewState.featuredBanner = content.featuredBanner
         referenceLocation = content.referenceLocation
+        viewState.hasReferenceLocation = content.referenceLocation != nil
         allPosts = content.posts
         viewState.nextCursor = content.nextCursor
         applyFilters()
@@ -166,23 +208,31 @@ final class CommunityPresenter: ObservableObject {
     private func applyFilters() {
         var filteredPosts = allPosts
 
-        if let maxDistance = viewState.selectedDistance.meters,
-           referenceLocation != nil {
-            filteredPosts = filteredPosts.filter { post in
-                guard let distance = distance(from: post) else {
-                    return false
+        if let maxDistance = viewState.selectedDistance.meters {
+            if referenceLocation != nil {
+                filteredPosts = filteredPosts.filter { post in
+                    guard let distance = distance(from: post) else {
+                        return false
+                    }
+                    return distance <= maxDistance
                 }
-                return distance <= maxDistance
+                #if DEBUG
+                Logger.shared.debug("[CommunityList] distanceFilter=\(Int(maxDistance))m resultCount=\(filteredPosts.count)")
+                #endif
+            } else {
+                #if DEBUG
+                Logger.shared.info("[CommunityLocation] location pending, skip distance error")
+                #endif
             }
-            #if DEBUG
-            Logger.shared.debug("[CommunityList] distanceFilter=\(Int(maxDistance))m resultCount=\(filteredPosts.count)")
-            #endif
         }
 
         for selectedFilter in viewState.selectedFilters {
             filteredPosts = filteredPosts.filter { post in
                 switch selectedFilter {
                 case .nearbyOnly:
+                    guard referenceLocation != nil else {
+                        return true
+                    }
                     guard let distance = distance(from: post) else {
                         return false
                     }
@@ -197,41 +247,17 @@ final class CommunityPresenter: ObservableObject {
             }
         }
 
-        switch viewState.selectedSort {
-        case .popular:
-            filteredPosts.sort { lhs, rhs in
-                if lhs.likeCount == rhs.likeCount {
-                    return (distance(from: lhs) ?? .greatestFiniteMagnitude) < (distance(from: rhs) ?? .greatestFiniteMagnitude)
-                }
-                return lhs.likeCount > rhs.likeCount
-            }
-        case .nearest:
-            filteredPosts.sort { lhs, rhs in
-                let lhsDistance = distance(from: lhs) ?? .greatestFiniteMagnitude
-                let rhsDistance = distance(from: rhs) ?? .greatestFiniteMagnitude
-                if lhsDistance == rhsDistance {
-                    return lhs.likeCount > rhs.likeCount
-                }
-                return lhsDistance < rhsDistance
-            }
-        case .latest:
-            filteredPosts.sort { lhs, rhs in
-                switch (lhs.createdAt, rhs.createdAt) {
-                case let (lhsDate?, rhsDate?):
-                    return lhsDate > rhsDate
-                case (.some, .none):
-                    return true
-                case (.none, .some):
-                    return false
-                case (.none, .none):
-                    return lhs.title < rhs.title
-                }
-            }
-        }
+        sort(&filteredPosts, by: viewState.selectedSort)
 
         viewState.posts = filteredPosts.map(makeCommunityCardModel)
         viewState.emptyState = makeEmptyState(filteredPosts: filteredPosts)
         viewState.feedStatus = filteredPosts.isEmpty ? .empty : .content
+        viewState.errorMessage = nil
+        #if DEBUG
+        Logger.shared.debug(
+            "[CommunityList] response count=\(allPosts.count) filtered=\(filteredPosts.count) state=\(viewState.feedStatus.debugName) clearError=true"
+        )
+        #endif
     }
 
     private func handleSubmittedPost(postID: String) async {
@@ -249,6 +275,18 @@ final class CommunityPresenter: ObservableObject {
         }
 
         await mergeSubmittedPost(postID: postID)
+    }
+
+    private func selectSort(_ selectedSort: CommunitySort) async {
+        guard viewState.selectedSort != selectedSort else { return }
+        viewState.selectedSort = selectedSort
+        viewState.nextCursor = nil
+        #if DEBUG
+        Logger.shared.debug(
+            "[CommunitySort] category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) orderBy=\(selectedSort.requestOrderBy.rawValue)"
+        )
+        #endif
+        await loadFeed(isRefresh: false)
     }
 
     func shouldRefreshAfterDetailDismiss(postID: String?) -> Bool {
@@ -310,11 +348,12 @@ final class CommunityPresenter: ObservableObject {
                 nextCursor: nextCursor
             )
             referenceLocation = content.referenceLocation ?? referenceLocation
+            viewState.hasReferenceLocation = referenceLocation != nil
             allPosts.append(contentsOf: content.posts)
             viewState.nextCursor = content.nextCursor
             applyFilters()
         } catch {
-            viewState.errorMessage = resolveErrorMessage(from: error)
+            viewState.errorMessage = transientErrorMessage(from: error)
             if viewState.posts.isEmpty {
                 viewState.emptyState = makeFailureEmptyState(for: error)
             }
@@ -393,7 +432,7 @@ final class CommunityPresenter: ObservableObject {
         } catch {
             allPosts = previousPosts
             applyFilters()
-            viewState.errorMessage = resolveErrorMessage(from: error)
+            viewState.errorMessage = transientErrorMessage(from: error)
         }
     }
 
@@ -530,6 +569,14 @@ final class CommunityPresenter: ObservableObject {
             )
         }
 
+        if viewState.selectedDistance.meters != nil, referenceLocation != nil {
+            return CommunityEmptyState(
+                title: "주변 게시글이 없어요",
+                message: "\(viewState.selectedDistance.title) 안에서 볼 수 있는 게시글이 아직 없어요.",
+                actionTitle: "다시 불러오기"
+            )
+        }
+
         return CommunityEmptyState(
             title: "조건에 맞는 게시글이 없어요",
             message: "거리, 정렬, 필터를 바꿔서 다시 확인해 주세요.",
@@ -548,8 +595,17 @@ final class CommunityPresenter: ObservableObject {
                     requiresAuthentication: true
                 )
             case .locationRequired(let message):
+                #if DEBUG
+                Logger.shared.debug("[CommunityLocation] missing location, show locationRequired")
+                #endif
                 return CommunityEmptyState(
                     title: "위치가 필요해요",
+                    message: message,
+                    actionTitle: "다시 시도"
+                )
+            case .networkUnavailable(let message):
+                return CommunityEmptyState(
+                    title: "커뮤니티를 불러오지 못했어요",
                     message: message,
                     actionTitle: "다시 시도"
                 )
@@ -579,8 +635,31 @@ final class CommunityPresenter: ObservableObject {
             return .authenticationRequired
         case .locationRequired:
             return .locationRequired
+        case .networkUnavailable:
+            return .failure
         case .unavailable:
             return .failure
+        }
+    }
+
+    private func transientErrorMessage(from error: Error) -> String? {
+        guard shouldShowTransientError(for: error) else {
+            return nil
+        }
+
+        return resolveErrorMessage(from: error)
+    }
+
+    private func shouldShowTransientError(for error: Error) -> Bool {
+        guard let communityError = error as? CommunityFeedError else {
+            return false
+        }
+
+        switch communityError {
+        case .networkUnavailable:
+            return true
+        case .authenticationRequired, .locationRequired, .unavailable:
+            return false
         }
     }
 
@@ -592,5 +671,125 @@ final class CommunityPresenter: ObservableObject {
         }
 
         return error.localizedDescription
+    }
+
+    private func sort(_ posts: inout [CommunityPostSummary], by selection: CommunitySort) {
+        switch (selection.category, selection.direction) {
+        case (.latest, .descending):
+            posts.sort(by: compareCreatedAtDescending)
+        case (.latest, .ascending):
+            posts.sort(by: compareCreatedAtAscending)
+        case (.popularity, .descending):
+            posts.sort { lhs, rhs in
+                // Swagger exposes `likes` as the popularity order. The summary
+                // entity currently exposes likeCount only, so "없는순" uses the
+                // same field ascending as a client-side fallback.
+                if lhs.likeCount == rhs.likeCount {
+                    return compareCreatedAtDescending(lhs, rhs)
+                }
+                return lhs.likeCount > rhs.likeCount
+            }
+        case (.popularity, .ascending):
+            posts.sort { lhs, rhs in
+                if lhs.likeCount == rhs.likeCount {
+                    return compareCreatedAtDescending(lhs, rhs)
+                }
+                return lhs.likeCount < rhs.likeCount
+            }
+        case (.distance, .ascending):
+            posts.sort(by: compareDistanceAscending)
+        case (.distance, .descending):
+            posts.sort(by: compareDistanceDescending)
+        }
+    }
+
+    private func compareCreatedAtDescending(
+        _ lhs: CommunityPostSummary,
+        _ rhs: CommunityPostSummary
+    ) -> Bool {
+        switch (lhs.createdAt, rhs.createdAt) {
+        case let (lhsDate?, rhsDate?):
+            return lhsDate > rhsDate
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            return lhs.title < rhs.title
+        }
+    }
+
+    private func compareCreatedAtAscending(
+        _ lhs: CommunityPostSummary,
+        _ rhs: CommunityPostSummary
+    ) -> Bool {
+        switch (lhs.createdAt, rhs.createdAt) {
+        case let (lhsDate?, rhsDate?):
+            return lhsDate < rhsDate
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            return lhs.title < rhs.title
+        }
+    }
+
+    private func compareDistanceAscending(
+        _ lhs: CommunityPostSummary,
+        _ rhs: CommunityPostSummary
+    ) -> Bool {
+        switch (distance(from: lhs), distance(from: rhs)) {
+        case let (lhsDistance?, rhsDistance?):
+            if lhsDistance == rhsDistance {
+                return compareCreatedAtDescending(lhs, rhs)
+            }
+            return lhsDistance < rhsDistance
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            return compareCreatedAtDescending(lhs, rhs)
+        }
+    }
+
+    private func compareDistanceDescending(
+        _ lhs: CommunityPostSummary,
+        _ rhs: CommunityPostSummary
+    ) -> Bool {
+        switch (distance(from: lhs), distance(from: rhs)) {
+        case let (lhsDistance?, rhsDistance?):
+            if lhsDistance == rhsDistance {
+                return compareCreatedAtDescending(lhs, rhs)
+            }
+            return lhsDistance > rhsDistance
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            return compareCreatedAtDescending(lhs, rhs)
+        }
+    }
+
+}
+
+private extension CommunityFeedStatus {
+    var debugName: String {
+        switch self {
+        case .loading:
+            return "loading"
+        case .content:
+            return "loaded"
+        case .empty:
+            return "emptyNoPosts"
+        case .failure:
+            return "error"
+        case .locationRequired:
+            return "locationRequired"
+        case .authenticationRequired:
+            return "authenticationRequired"
+        }
     }
 }

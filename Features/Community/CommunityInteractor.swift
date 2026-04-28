@@ -39,11 +39,16 @@ struct CommunityInteractor: CommunityInteracting {
         selectedSort: CommunitySort
     ) async throws -> CommunityFeedContent {
         do {
+            #if DEBUG
+            Logger.shared.debug(
+                "[CommunitySort] category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) orderBy=\(selectedSort.requestOrderBy.rawValue)"
+            )
+            #endif
             if let query = normalizedQuery(query) {
                 let referenceLocation = await resolveReferenceLocation()
                 #if DEBUG
                 Logger.shared.debug(
-                    "[CommunityList] request query cursor=nil sort=\(selectedSort.id) distance=\(selectedDistance.title) hasLocation=\(referenceLocation != nil)"
+                    "[CommunityList] request query cursor=nil category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) distance=\(selectedDistance.title) hasLocation=\(referenceLocation != nil)"
                 )
                 Logger.shared.debug("[CommunityDistance] selected latExists=\(referenceLocation?.latitude != nil) lonExists=\(referenceLocation?.longitude != nil)")
                 #endif
@@ -62,7 +67,7 @@ struct CommunityInteractor: CommunityInteracting {
             let locationContext = try await resolveLocationContext(requestIfNeeded: true)
             #if DEBUG
             Logger.shared.debug(
-                "[CommunityList] request query cursor=nil sort=\(selectedSort.id) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil)"
+                "[CommunityList] request query cursor=nil category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil)"
             )
             Logger.shared.debug("[CommunityDistance] selected latExists=\(locationContext.referenceLocation?.latitude != nil) lonExists=\(locationContext.referenceLocation?.longitude != nil)")
             #endif
@@ -85,6 +90,8 @@ struct CommunityInteractor: CommunityInteracting {
                 nextCursor: page.nextCursor,
                 referenceLocation: locationContext.referenceLocation
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             let mappedError = map(error)
             throw mappedError
@@ -100,7 +107,12 @@ struct CommunityInteractor: CommunityInteracting {
             let locationContext = try await resolveLocationContext(requestIfNeeded: false)
             #if DEBUG
             Logger.shared.debug(
-                "[CommunityList] request query cursor=\(nextCursor) sort=\(selectedSort.id) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil)"
+                "[CommunitySort] category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) orderBy=\(selectedSort.requestOrderBy.rawValue)"
+            )
+            #endif
+            #if DEBUG
+            Logger.shared.debug(
+                "[CommunityList] request query cursor=\(nextCursor) category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil)"
             )
             Logger.shared.debug("[CommunityDistance] selected latExists=\(locationContext.referenceLocation?.latitude != nil) lonExists=\(locationContext.referenceLocation?.longitude != nil)")
             #endif
@@ -123,6 +135,8 @@ struct CommunityInteractor: CommunityInteracting {
                 nextCursor: page.nextCursor,
                 referenceLocation: locationContext.referenceLocation
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw map(error)
         }
@@ -131,6 +145,8 @@ struct CommunityInteractor: CommunityInteracting {
     func loadPost(postID: String) async throws -> CommunityPostSummary {
         do {
             return try await communityRepository.fetchPostDetail(postID: postID).summary
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw map(error)
         }
@@ -139,6 +155,8 @@ struct CommunityInteractor: CommunityInteracting {
     func updateLikeStatus(postID: String, isLiked: Bool) async throws -> Bool {
         do {
             return try await communityRepository.updateLikeStatus(postID: postID, isLiked: isLiked)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw map(error)
         }
@@ -154,12 +172,7 @@ struct CommunityInteractor: CommunityInteracting {
     }
 
     private func serverSortOrder(for selectedSort: CommunitySort) -> CommunityPostSortOrder {
-        switch selectedSort {
-        case .popular:
-            return .likes
-        case .latest, .nearest:
-            return .createdAt
-        }
+        selectedSort.requestOrderBy
     }
 
     private func resolveReferenceLocation() async -> CommunityReferenceLocation? {
@@ -213,7 +226,10 @@ struct CommunityInteractor: CommunityInteracting {
         }
 
         guard requestIfNeeded else {
-            throw CommunityFeedError.locationRequired(message: "위치를 선택하거나 현재 위치 권한을 허용해 주세요.")
+            #if DEBUG
+            Logger.shared.info("[CommunityLocation] location pending, skip distance error")
+            #endif
+            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
         }
 
         do {
@@ -225,16 +241,29 @@ struct CommunityInteractor: CommunityInteracting {
                 throw CommunityFeedError.locationRequired(message: "현재 위치 좌표를 확인하지 못했어요. 위치를 선택한 뒤 다시 시도해 주세요.")
             }
             return makeLocationContext(from: location)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch LocationServiceError.authorizationNotDetermined {
             locationService.requestWhenInUseAuthorization()
-            throw CommunityFeedError.locationRequired(message: "커뮤니티 피드를 보려면 위치 권한을 허용해 주세요.")
+            #if DEBUG
+            Logger.shared.info("[CommunityLocation] location pending, skip distance error")
+            #endif
+            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
         } catch LocationServiceError.unauthorized, LocationServiceError.servicesDisabled {
-            throw CommunityFeedError.locationRequired(message: "위치를 선택하거나 현재 위치 권한을 허용해 주세요.")
+            #if DEBUG
+            Logger.shared.info("[CommunityLocation] location unavailable, skip distance error")
+            #endif
+            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
         } catch LocationServiceError.noLocationAvailable {
-            throw CommunityFeedError.locationRequired(message: "현재 위치를 확인하지 못했어요. 위치를 선택한 뒤 다시 시도해 주세요.")
+            #if DEBUG
+            Logger.shared.info("[CommunityLocation] location pending, skip distance error")
+            #endif
+            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
         } catch {
-            Logger.shared.debug("Community location resolution failed; using the app default location.")
-            throw CommunityFeedError.locationRequired(message: "현재 위치를 확인하지 못했어요. 위치를 선택한 뒤 다시 시도해 주세요.")
+            #if DEBUG
+            Logger.shared.info("[CommunityLocation] location pending, skip distance error")
+            #endif
+            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
         }
     }
 
@@ -281,9 +310,10 @@ struct CommunityInteractor: CommunityInteracting {
              .server(let message):
             return .unavailable(message: message)
         case .decoding:
-            return .unavailable(message: "커뮤니티 응답을 해석하지 못했어요.")
+            return .unavailable(message: "데이터를 불러오지 못했어요.")
         case .transport:
-            return .unavailable(message: "네트워크 연결을 확인한 뒤 다시 시도해 주세요.")
+            Logger.shared.warning("[CommunityList] network failed error=transport")
+            return .networkUnavailable(message: "네트워크 연결을 확인한 뒤 다시 시도해 주세요.")
         case .unauthorized, .accessTokenExpired, .refreshTokenExpired, .configuration:
             return .unavailable(message: networkError.localizedDescription)
         }

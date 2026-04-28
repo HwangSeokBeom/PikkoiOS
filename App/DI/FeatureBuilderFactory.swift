@@ -161,6 +161,15 @@ struct FeatureBuilderFactory {
             },
             makeMyReviewsView: { userID in
                 AnyView(makeMyReviewsView(userID: userID))
+            },
+            makeChatListView: {
+                AnyView(makeChatView())
+            },
+            makeUserSearchView: {
+                AnyView(makeUserSearchView())
+            },
+            makeDeveloperDiagnosticsView: {
+                AnyView(makeDeveloperDiagnosticsView())
             }
         ).build()
     }
@@ -298,15 +307,40 @@ struct FeatureBuilderFactory {
         )
     }
 
-    func makeChatView(storeID: String? = nil) -> ChatRootView {
+    func makeChatView(storeID: String? = nil, opponentID: String? = nil) -> ChatRootView {
         ChatBuilder(
             storeID: storeID,
+            opponentID: opponentID,
             chatRepository: container.chatRepository,
             storeRepository: container.storeRepository,
             sessionStore: appState.sessionStore,
             imageLoader: container.authorizedImageLoader
         ).build()
     }
+
+    private func makeUserSearchView() -> UserSearchRootView {
+        UserSearchBuilder(
+            authRepository: container.authRepository,
+            imageLoader: container.authorizedImageLoader,
+            makeChatView: { opponentID in
+                AnyView(makeChatView(opponentID: opponentID))
+            }
+        ).build()
+    }
+
+    #if DEBUG
+    private func makeDeveloperDiagnosticsView() -> DeveloperDiagnosticsRootView {
+        DeveloperDiagnosticsBuilder(
+            apiClient: container.apiClient,
+            appConfiguration: container.appConfiguration,
+            imageLoader: container.authorizedImageLoader
+        ).build()
+    }
+    #else
+    private func makeDeveloperDiagnosticsView() -> EmptyView {
+        EmptyView()
+    }
+    #endif
 
     func makeStoreSearchView(query: String) -> StoreListRootView {
         makeStoreListView(mode: .search(query: query))

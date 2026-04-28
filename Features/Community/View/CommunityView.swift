@@ -20,6 +20,9 @@ struct CommunityView: View {
                     onSearchSubmit: {
                         Task { await presenter.send(.searchSubmitted) }
                     },
+                    onSearchClear: {
+                        Task { await presenter.send(.searchCleared) }
+                    },
                     onComposeTap: {
                         Task { await presenter.send(.composeTapped) }
                     }
@@ -29,15 +32,15 @@ struct CommunityView: View {
                 CommunityFilterSectionView(
                     distanceOptions: presenter.viewState.distanceOptions,
                     selectedDistanceID: presenter.viewState.selectedDistance.id,
-                    sortOptions: presenter.viewState.sortOptions,
-                    selectedSortID: presenter.viewState.selectedSort.id,
+                    sortCategories: presenter.viewState.sortCategories,
+                    selectedSortCategoryID: presenter.viewState.selectedSort.category.id,
                     filterChips: presenter.viewState.filterChips,
                     selectedFilterChipIDs: presenter.viewState.selectedFilterChipIDs,
                     onDistanceSelect: { distanceID in
                         Task { await presenter.send(.distanceSelected(distanceID)) }
                     },
-                    onSortSelect: { sortID in
-                        Task { await presenter.send(.sortSelected(sortID)) }
+                    onSortCategoryTap: { sortCategoryID in
+                        Task { await presenter.send(.sortSelected(sortCategoryID)) }
                     },
                     onFilterChipTap: { chipID in
                         Task { await presenter.send(.filterChipTapped(chipID)) }
@@ -83,6 +86,10 @@ struct CommunityView: View {
                 banner: presenter.viewState.featuredBanner,
                 posts: presenter.viewState.posts,
                 selectedSortTitle: presenter.viewState.selectedSort.title,
+                selectedSortSystemImage: presenter.viewState.selectedSort.systemImage,
+                onSortTap: {
+                    Task { await presenter.send(.sortToggleTapped) }
+                },
                 imageLoader: imageLoader,
                 onPostTap: { postID in
                     Task { await presenter.send(.postTapped(postID)) }

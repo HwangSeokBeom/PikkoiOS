@@ -73,6 +73,79 @@ final class CommunityFeatureTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.searchText, "")
     }
 
+    func testCommunitySortMapsToSwaggerOrderByValues() {
+        XCTAssertEqual(CommunitySort.latest.title, "최신순")
+        XCTAssertEqual(CommunitySort.latest.category, .latest)
+        XCTAssertEqual(CommunitySort.latest.direction, .descending)
+        XCTAssertEqual(CommunitySort.latest.requestOrderBy, .createdAt)
+
+        XCTAssertEqual(CommunitySort.popular.title, "인기순")
+        XCTAssertEqual(CommunitySort.popular.category, .popularity)
+        XCTAssertEqual(CommunitySort.popular.direction, .descending)
+        XCTAssertEqual(CommunitySort.popular.requestOrderBy, .likes)
+
+        XCTAssertEqual(CommunitySort.distance.title, "가까운순")
+        XCTAssertEqual(CommunitySort.distance.category, .distance)
+        XCTAssertEqual(CommunitySort.distance.direction, .ascending)
+        XCTAssertEqual(CommunitySort.distance.requestOrderBy, .createdAt)
+    }
+
+    func testSortToggleFlipsDirectionAndReloadsFirstPage() async {
+        let interactor = RecordingCommunityInteractor(nextCursors: ["cursor-2", nil, nil])
+        let presenter = CommunityPresenter(
+            interactor: interactor,
+            router: CommunityRouter(),
+            sessionStore: makeSessionStore()
+        )
+
+        await presenter.send(.onAppear)
+        XCTAssertEqual(presenter.viewState.nextCursor, "cursor-2")
+
+        await presenter.send(.sortToggleTapped)
+
+        XCTAssertEqual(
+            presenter.viewState.selectedSort,
+            CommunitySortSelection(category: .latest, direction: .ascending)
+        )
+        XCTAssertNil(presenter.viewState.nextCursor)
+        XCTAssertEqual(
+            interactor.loadFeedSorts,
+            [
+                .latest,
+                CommunitySortSelection(category: .latest, direction: .ascending)
+            ]
+        )
+
+        await presenter.send(.sortToggleTapped)
+
+        XCTAssertEqual(presenter.viewState.selectedSort, .latest)
+        XCTAssertNil(presenter.viewState.nextCursor)
+        XCTAssertEqual(
+            interactor.loadFeedSorts,
+            [
+                .latest,
+                CommunitySortSelection(category: .latest, direction: .ascending),
+                .latest
+            ]
+        )
+    }
+
+    func testSortCategoryPillSelectsDefaultDirection() async {
+        let interactor = RecordingCommunityInteractor(nextCursors: [nil, nil, nil])
+        let presenter = CommunityPresenter(
+            interactor: interactor,
+            router: CommunityRouter(),
+            sessionStore: makeSessionStore()
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.sortSelected(CommunitySortCategory.popularity.id))
+        await presenter.send(.sortSelected(CommunitySortCategory.distance.id))
+
+        XCTAssertEqual(presenter.viewState.selectedSort, .distance)
+        XCTAssertEqual(interactor.loadFeedSorts, [.latest, .popular, .distance])
+    }
+
     func testCommunityPostListPresenterRemovesPostWhenLikedListUnlikesItem() async {
         let presenter = CommunityPostListPresenter(
             mode: .liked(category: nil),
@@ -177,6 +250,69 @@ private struct StubCommunityInteractor: CommunityInteracting {
     ) async throws -> CommunityFeedContent {
         CommunityFeedContent(
             featuredBanner: .mock,
+            posts: [],
+            nextCursor: nil,
+            referenceLocation: nil
+        )
+    }
+
+    func loadPost(postID: String) async throws -> CommunityPostSummary {
+        CommunityPostSummary(
+            id: postID,
+            category: "일상",
+            title: "제목 \(postID)",
+            content: "본문 \(postID)",
+            creator: CommunityPostAuthor(
+                id: "user-\(postID)",
+                nick: "작성자",
+                profileImagePath: nil
+            ),
+            mediaPaths: [],
+            store: nil,
+            isLiked: false,
+            likeCount: 0,
+            longitude: nil,
+            latitude: nil,
+            createdAt: Date(),
+            updatedAt: nil
+        )
+    }
+
+    func updateLikeStatus(postID: String, isLiked: Bool) async throws -> Bool {
+        isLiked
+    }
+}
+
+@MainActor
+private final class RecordingCommunityInteractor: CommunityInteracting {
+    private(set) var loadFeedSorts: [CommunitySortOption] = []
+    private var nextCursors: [String?]
+
+    init(nextCursors: [String?] = []) {
+        self.nextCursors = nextCursors
+    }
+
+    func loadFeed(
+        query: String?,
+        selectedDistance: CommunityDistanceOption,
+        selectedSort: CommunitySortOption
+    ) async throws -> CommunityFeedContent {
+        loadFeedSorts.append(selectedSort)
+        return CommunityFeedContent(
+            featuredBanner: nil,
+            posts: [],
+            nextCursor: nextCursors.isEmpty ? nil : nextCursors.removeFirst(),
+            referenceLocation: nil
+        )
+    }
+
+    func loadMorePosts(
+        selectedDistance: CommunityDistanceOption,
+        selectedSort: CommunitySortOption,
+        nextCursor: String
+    ) async throws -> CommunityFeedContent {
+        CommunityFeedContent(
+            featuredBanner: nil,
             posts: [],
             nextCursor: nil,
             referenceLocation: nil

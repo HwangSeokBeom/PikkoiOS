@@ -67,34 +67,10 @@ struct OrderRepositoryImpl: OrderRepository {
     }
 
     func cancelOrder(orderCode: String) async throws -> OrderDetail {
-        let isKnownRemoteOrder: Bool
-        do {
-            let response = try await remoteDataSource.fetchOrders(cursor: nil, filter: nil)
-            isKnownRemoteOrder = response.data.contains { $0.orderCode == orderCode || $0.orderID == orderCode }
-        } catch {
-            if (error as? NetworkError)?.isAuthenticationFailure == true {
-                throw error
-            }
-            isKnownRemoteOrder = false
-        }
-
-        if let localDetail = await localSnapshotStore.detail(matching: orderCode),
-           !isKnownRemoteOrder,
-           localDetail.status.isCancellable,
-           localDetail.paidAt == nil,
-           localDetail.paymentSummary?.paidAt == nil {
-            let detail = makeCancelledDetail(from: localDetail)
-            await localSnapshotStore.markCancelled(orderCode: orderCode, updatedAt: detail.updatedAt)
-            postStatusChange(for: detail)
-            return detail
-        }
-
-        try await remoteDataSource.updateOrderStatus(orderCode: orderCode, nextStatus: "CANCELLED")
-        await localSnapshotStore.markCancelled(orderCode: orderCode, updatedAt: Date())
-
-        let detail = makeCancelledDetail(from: try await fetchOrderDetail(orderID: orderCode))
-        postStatusChange(for: detail)
-        return detail
+        _ = orderCode
+        throw NetworkError.businessAuthorization(
+            message: "현재 Swagger에는 사용자 주문 취소 API가 없습니다. 주문 취소는 서버 API 협의가 필요합니다."
+        )
     }
 
     private func postStatusChange(for detail: OrderDetail) {

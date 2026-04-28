@@ -74,6 +74,15 @@ final class APIClient: APIClientProtocol {
             }
             throw error
         } catch {
+            if error is CancellationError || Task.isCancelled {
+                throw CancellationError()
+            }
+
+            if let urlError = error as? URLError,
+               urlError.code == .cancelled {
+                throw CancellationError()
+            }
+
             if endpoint.method.isTransportRetryEligible,
                !didRetryTransport,
                error is URLError {

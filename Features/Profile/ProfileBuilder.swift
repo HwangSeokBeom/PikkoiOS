@@ -10,6 +10,9 @@ struct ProfileBuilder {
     private let makeMyPostsView: (String) -> AnyView
     private let makeLikedPostsView: () -> AnyView
     private let makeMyReviewsView: (String) -> AnyView
+    private let makeChatListView: () -> AnyView
+    private let makeUserSearchView: () -> AnyView
+    private let makeDeveloperDiagnosticsView: () -> AnyView
 
     init(
         sessionStore: SessionStore,
@@ -18,7 +21,10 @@ struct ProfileBuilder {
         makeLikedStoresView: @escaping () -> AnyView,
         makeMyPostsView: @escaping (String) -> AnyView,
         makeLikedPostsView: @escaping () -> AnyView,
-        makeMyReviewsView: @escaping (String) -> AnyView
+        makeMyReviewsView: @escaping (String) -> AnyView,
+        makeChatListView: @escaping () -> AnyView,
+        makeUserSearchView: @escaping () -> AnyView,
+        makeDeveloperDiagnosticsView: @escaping () -> AnyView
     ) {
         self.sessionStore = sessionStore
         self.authRepository = authRepository
@@ -27,6 +33,9 @@ struct ProfileBuilder {
         self.makeMyPostsView = makeMyPostsView
         self.makeLikedPostsView = makeLikedPostsView
         self.makeMyReviewsView = makeMyReviewsView
+        self.makeChatListView = makeChatListView
+        self.makeUserSearchView = makeUserSearchView
+        self.makeDeveloperDiagnosticsView = makeDeveloperDiagnosticsView
     }
 
     func build() -> ProfileRootView {
@@ -47,7 +56,10 @@ struct ProfileBuilder {
             makeLikedStoresView: makeLikedStoresView,
             makeMyPostsView: makeMyPostsView,
             makeLikedPostsView: makeLikedPostsView,
-            makeMyReviewsView: makeMyReviewsView
+            makeMyReviewsView: makeMyReviewsView,
+            makeChatListView: makeChatListView,
+            makeUserSearchView: makeUserSearchView,
+            makeDeveloperDiagnosticsView: makeDeveloperDiagnosticsView
         )
     }
 }

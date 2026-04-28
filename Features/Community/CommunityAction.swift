@@ -6,8 +6,10 @@ enum CommunityAction {
     case loginRequiredTapped
     case searchTextChanged(String)
     case searchSubmitted
+    case searchCleared
     case composeTapped
     case sortSelected(String)
+    case sortToggleTapped
     case distanceSelected(String)
     case filterChipTapped(String)
     case postSubmitted(String)

@@ -130,37 +130,33 @@ final class OrderFeatureTests: XCTestCase {
         XCTAssertEqual(router.routedOrderIDs, ["order-1"])
     }
 
-    func testPendingOrderCanBeCancelledFromList() async {
+    func testPendingOrderDoesNotExposeCancelFromList() async {
         let pendingOrder = makeOrder(id: "order-1", status: .pending)
-        let cancelledDetail = makeDetail(order: pendingOrder, status: .cancelled)
         let presenter = OrderPresenter(
             interactor: SpyOrderInteractor(
                 initialState: makeInitialState(),
-                fetchResults: [.success(CursorPage(items: [pendingOrder], nextCursor: nil))],
-                cancelResults: ["D-order-1": .success(cancelledDetail)]
+                fetchResults: [.success(CursorPage(items: [pendingOrder], nextCursor: nil))]
             ),
             router: SpyOrderRouter()
         )
 
         await presenter.send(.onAppear)
-        XCTAssertTrue(presenter.viewState.orders.first?.canCancel == true)
+        XCTAssertFalse(presenter.viewState.orders.first?.canCancel ?? true)
 
         await presenter.send(.cancelConfirmed("order-1"))
 
-        XCTAssertEqual(presenter.viewState.orders.first?.statusTitle, OrderStatus.cancelled.displayTitle)
-        XCTAssertEqual(presenter.viewState.successMessage, "주문이 취소되었어요.")
+        XCTAssertEqual(presenter.viewState.orders.first?.statusTitle, OrderStatus.pending.displayTitle)
+        XCTAssertNil(presenter.viewState.successMessage)
         XCTAssertFalse(presenter.viewState.orders.first?.canCancel ?? true)
         XCTAssertTrue(presenter.viewState.cancellingOrderIDs.isEmpty)
     }
 
-    func testCancelledOrderDisappearsFromActiveFilter() async {
+    func testPendingOrderStaysInActiveFilterWhenCancelIsNotAvailable() async {
         let pendingOrder = makeOrder(id: "order-1", status: .pending)
-        let cancelledDetail = makeDetail(order: pendingOrder, status: .cancelled)
         let presenter = OrderPresenter(
             interactor: SpyOrderInteractor(
                 initialState: makeInitialState(),
-                fetchResults: [.success(CursorPage(items: [pendingOrder], nextCursor: nil))],
-                cancelResults: ["D-order-1": .success(cancelledDetail)]
+                fetchResults: [.success(CursorPage(items: [pendingOrder], nextCursor: nil))]
             ),
             router: SpyOrderRouter()
         )
@@ -169,8 +165,8 @@ final class OrderFeatureTests: XCTestCase {
         await presenter.send(.filterTapped(.active))
         await presenter.send(.cancelConfirmed("order-1"))
 
-        XCTAssertTrue(presenter.viewState.orders.isEmpty)
-        XCTAssertEqual(presenter.viewState.emptyState?.title, "선택한 상태의 주문이 없어요")
+        XCTAssertEqual(presenter.viewState.orders.first?.id, "order-1")
+        XCTAssertNil(presenter.viewState.emptyState)
     }
 
     func testHighlightedOrderAutoRoutesToDetail() async {
@@ -284,7 +280,7 @@ final class OrderFeatureTests: XCTestCase {
         }
     }
 
-    func testRepositoryCancelsUnpaidLocalPendingOrderWithoutStatusUpdateAPI() async throws {
+    func testRepositoryRejectsLocalCancellationWhenSwaggerHasNoCancelAPI() async throws {
         let localSnapshotStore = makeLocalSnapshotStore()
         let remoteDataSource = StubOrderRemoteDataSource(
             fetchOrdersResult: .failure(NetworkError.transport),
@@ -296,15 +292,21 @@ final class OrderFeatureTests: XCTestCase {
         )
 
         _ = try await repository.createOrder(makeSubmission())
-        let detail = try await repository.cancelOrder(orderCode: "D123456")
-        let page = try await repository.fetchOrders(cursor: nil, filter: nil)
 
-        XCTAssertEqual(detail.status, .cancelled)
-        XCTAssertEqual(page.items.first?.status, .cancelled)
+        do {
+            _ = try await repository.cancelOrder(orderCode: "D123456")
+            XCTFail("Expected cancellation to be blocked")
+        } catch let error as NetworkError {
+            XCTAssertEqual(
+                error,
+                .businessAuthorization(message: "현재 Swagger에는 사용자 주문 취소 API가 없습니다. 주문 취소는 서버 API 협의가 필요합니다.")
+            )
+        }
+
         XCTAssertTrue(remoteDataSource.updateStatusRequests.isEmpty)
     }
 
-    func testRepositoryUsesStatusUpdateAPIForRemoteOrderCancellation() async throws {
+    func testRepositoryDoesNotUseStatusUpdateAPIForRemoteCancellation() async throws {
         let localSnapshotStore = makeLocalSnapshotStore()
         let remoteDataSource = StubOrderRemoteDataSource(
             fetchOrdersResult: .success(
@@ -317,12 +319,17 @@ final class OrderFeatureTests: XCTestCase {
             localSnapshotStore: localSnapshotStore
         )
 
-        let detail = try await repository.cancelOrder(orderCode: "D123456")
+        do {
+            _ = try await repository.cancelOrder(orderCode: "D123456")
+            XCTFail("Expected cancellation to be blocked")
+        } catch let error as NetworkError {
+            XCTAssertEqual(
+                error,
+                .businessAuthorization(message: "현재 Swagger에는 사용자 주문 취소 API가 없습니다. 주문 취소는 서버 API 협의가 필요합니다.")
+            )
+        }
 
-        XCTAssertEqual(detail.status, .cancelled)
-        XCTAssertEqual(remoteDataSource.updateStatusRequests, [
-            OrderStatusUpdateRequest(orderCode: "D123456", nextStatus: "CANCELLED")
-        ])
+        XCTAssertTrue(remoteDataSource.updateStatusRequests.isEmpty)
     }
 
     private func makeInitialState() -> OrderViewState {

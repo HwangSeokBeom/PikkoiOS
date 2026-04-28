@@ -4,6 +4,8 @@ struct CommunityFeedSectionView: View {
     let banner: CommunityFeaturedBanner?
     let posts: [CommunityCard.Model]
     let selectedSortTitle: String
+    let selectedSortSystemImage: String
+    let onSortTap: () -> Void
     let imageLoader: any AuthorizedImageLoading
     let onPostTap: (String) -> Void
     let onStoreSnippetTap: (String) -> Void
@@ -15,7 +17,8 @@ struct CommunityFeedSectionView: View {
             SectionHeader(
                 title: "타임라인",
                 actionTitle: selectedSortTitle,
-                actionSystemImage: "line.3.horizontal.decrease"
+                actionSystemImage: selectedSortSystemImage,
+                action: onSortTap
             )
             .padding(.horizontal, PikkoSpacing.xl)
 
@@ -87,6 +90,8 @@ struct CommunityFeedSectionView: View {
             )
         ],
         selectedSortTitle: "최신순",
+        selectedSortSystemImage: "clock",
+        onSortTap: {},
         imageLoader: PreviewAuthorizedImageLoader(),
         onPostTap: { _ in },
         onStoreSnippetTap: { _ in },

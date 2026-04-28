@@ -3,8 +3,8 @@ import Foundation
 struct CommunityViewState {
     var searchText = ""
     var selectedSort: CommunitySort = .latest
+    var sortCategories: [CommunitySortCategory] = CommunitySortCategory.allCases
     var selectedDistance: CommunityDistanceOption = .defaultOption
-    var sortOptions: [CommunitySort] = CommunitySort.all
     var distanceOptions: [CommunityDistanceOption] = CommunityDistanceOption.all
     var filterChips: [CommunityFilter] = CommunityFilter.defaults
     var selectedFilterChipIDs: Set<String> = []
@@ -13,6 +13,7 @@ struct CommunityViewState {
     var nextCursor: String?
     var emptyState: CommunityEmptyState?
     var feedStatus: CommunityFeedStatus = .loading
+    var hasReferenceLocation = false
     var isLoading = true
     var isRefreshing = false
     var errorMessage: String?

@@ -25,7 +25,7 @@ final class StoreDetailPresenterCartTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.menus.first?.quantity, 1)
         XCTAssertEqual(presenter.viewState.stickyCartSummary.itemCountText, "1")
         XCTAssertEqual(presenter.viewState.stickyCartSummary.totalPriceText, "4,500원")
-        XCTAssertEqual(presenter.viewState.stickyCartSummary.buttonTitle, "장바구니 보기")
+        XCTAssertEqual(presenter.viewState.stickyCartSummary.buttonTitle, "결제하기")
         XCTAssertTrue(presenter.viewState.stickyCartSummary.isEnabled)
     }
 

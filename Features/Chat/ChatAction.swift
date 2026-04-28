@@ -7,5 +7,7 @@ enum ChatAction {
     case roomTapped(String)
     case backToRoomsTapped
     case messageTextChanged(String)
+    case filesSelected([ChatUploadFile])
+    case attachedFileRemoved(String)
     case sendMessageTapped
 }
