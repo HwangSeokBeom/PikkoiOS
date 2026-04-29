@@ -340,7 +340,7 @@ struct CheckoutInteractor: CheckoutInteracting {
             PaymentPreparationDiagnostic(
                 key: "PORTONE_PG_ID",
                 status: isOptionalPortOnePgIDState(appConfiguration.portOnePgIDDiagnostic.state)
-                    ? "missing_optional"
+                    ? "\(appConfiguration.portOnePgIDDiagnostic.state)(\(appConfiguration.portOnePgIDDiagnostic.logStatus))"
                     : appConfiguration.portOnePgIDDiagnostic.logStatus,
                 blocksPayment: false
             ),
@@ -372,10 +372,20 @@ struct CheckoutInteractor: CheckoutInteracting {
     }
 
     private func isOptionalPortOnePgIDState(_ state: String) -> Bool {
-        state == "missing" || state == "empty" || state == "placeholder"
+        state == "missing"
+            || state == "empty"
+            || state == "placeholder"
+            || state == "emptyOptional"
+            || state == "placeholderOptional"
     }
 
     private func logPaymentConfigurationState(blocksPaymentConfiguration: Bool) {
+        Logger.shared.debug(
+            "[PaymentConfig] infoPlistFile=\(Bundle.main.url(forResource: "Info", withExtension: "plist")?.path ?? "unknown")"
+        )
+        Logger.shared.debug(
+            "[PaymentConfig] bundleIdentifier=\(Bundle.main.bundleIdentifier ?? "unknown")"
+        )
         Logger.shared.debug(
             "[PaymentConfig] userCodeState=\(appConfiguration.portOneUserCodeDiagnostic.state) source=\(appConfiguration.portOneUserCodeDiagnostic.source) rawMasked=\(appConfiguration.portOneUserCodeDiagnostic.rawMasked)"
         )

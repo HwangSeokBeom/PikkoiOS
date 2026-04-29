@@ -8,7 +8,7 @@ struct ChatRootView: View {
         static let estimatedComposerHeight: CGFloat = 76
         static let composerBottomPadding: CGFloat = PikkoSpacing.sm
         static let messageListBottomGap: CGFloat = PikkoSpacing.lg
-        static let inputFrameTolerance: CGFloat = 1
+        static let geometryTolerance: CGFloat = 1
     }
 
     private enum CoordinateSpaceName {
@@ -21,7 +21,6 @@ struct ChatRootView: View {
     @FocusState private var isComposerFocused: Bool
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isFileImporterPresented = false
-    @State private var hasLoggedComposerInstall = false
     @State private var isDetailEmptyStateVisible = false
     @State private var chatViewInstanceID = UUID().uuidString
     @State private var isRoomDetailVisible = false
@@ -152,14 +151,16 @@ struct ChatRootView: View {
                 .coordinateSpace(name: CoordinateSpaceName.roomDetailRoot)
                 .onAppear {
                     isRoomDetailVisible = true
-                    Logger.shared.debug("[ChatVC] viewWillAppear id=\(chatViewInstanceID)")
-                    Logger.shared.debug("[ChatVC] viewDidAppear id=\(chatViewInstanceID)")
+                    keyboardObserver.activate()
+                    Logger.shared.debug("[ChatView] onAppear id=\(chatViewInstanceID)")
+                    Logger.shared.debug("[ChatComposer] visible=true")
                 }
                 .onDisappear {
                     isRoomDetailVisible = false
                     isComposerFocused = false
-                    Logger.shared.debug("[ChatVC] viewWillDisappear id=\(chatViewInstanceID)")
-                    Logger.shared.debug("[ChatInput] observerRemoved=true")
+                    keyboardObserver.deactivate()
+                    Logger.shared.debug("[ChatView] onDisappear id=\(chatViewInstanceID)")
+                    Logger.shared.debug("[ChatKeyboard] observerRemoved=true")
                 }
         }
     }
@@ -351,8 +352,7 @@ struct ChatRootView: View {
             GeometryReader { proxy in
                 PikkoColor.background.opacity(0.96)
                     .onAppear {
-                        installInputContainerIfNeeded()
-                        logChatInputLayout(
+                        logComposerGeometry(
                             proxy: proxy,
                             containerWidth: resolvedContainerWidth,
                             reason: "onAppear",
@@ -360,7 +360,7 @@ struct ChatRootView: View {
                         )
                     }
                     .onChange(of: proxy.frame(in: .named(CoordinateSpaceName.roomDetailRoot))) { _, _ in
-                        logChatInputLayout(
+                        logComposerGeometry(
                             proxy: proxy,
                             containerWidth: resolvedContainerWidth,
                             reason: "frameChanged",
@@ -377,8 +377,9 @@ struct ChatRootView: View {
             isComposerFocused = true
         }
         .onChange(of: isComposerFocused) { _, focused in
-            updateInputBottomConstraint(target: keyboardObserver.isKeyboardVisible ? "keyboard" : "tabBarTop")
-            Logger.shared.debug("[ChatInput] keyboardVisible=\(focused)")
+            Logger.shared.debug(
+                "[ChatComposer] focused=\(focused) bottomTarget=\(keyboardObserver.isKeyboardVisible ? "keyboard" : "tabBarTop")"
+            )
         }
         .onChange(of: keyboardObserver.keyboardHeight) { _, _ in
             logComposerKeyboardState()
@@ -447,22 +448,9 @@ struct ChatRootView: View {
         await presenter.send(.filesSelected(files))
     }
 
-    private func installInputContainerIfNeeded() {
-        if hasLoggedComposerInstall {
-            Logger.shared.debug("[ChatInput] install skipped if already added")
-        } else {
-            hasLoggedComposerInstall = true
-            Logger.shared.debug("[ChatInput] installInputContainerIfNeeded added=true")
-        }
-    }
-
-    private func updateInputBottomConstraint(target: String) {
-        Logger.shared.debug("[ChatInput] bottomTarget=\(target)")
-    }
-
     private func updateMeasuredComposerHeight(_ height: CGFloat) {
         guard height.isFinite, height > 0 else { return }
-        guard abs(measuredComposerHeight - height) > Layout.inputFrameTolerance else { return }
+        guard abs(measuredComposerHeight - height) > Layout.geometryTolerance else { return }
         measuredComposerHeight = height
         Logger.shared.debug("[ChatComposer] measuredHeight=\(height)")
     }
@@ -477,7 +465,7 @@ struct ChatRootView: View {
         Logger.shared.debug("[ChatComposer] visible=true")
     }
 
-    private func logChatInputLayout(
+    private func logComposerGeometry(
         proxy: GeometryProxy,
         containerWidth: CGFloat,
         reason: String,
@@ -486,18 +474,15 @@ struct ChatRootView: View {
         guard isRoomDetailVisible else { return }
 
         let localFrame = proxy.frame(in: .named(CoordinateSpaceName.roomDetailRoot))
-        let globalFrame = proxy.frame(in: .global)
+        let screenFrame = proxy.frame(in: .global)
         let expectedWidth = containerWidth
         let bottomTarget = keyboardVisible ? "keyboard" : "tabBarTop"
-        updateInputBottomConstraint(target: bottomTarget)
-        Logger.shared.debug("[ChatInput] inputFrame=\(localFrame.debugDescription)")
-        Logger.shared.debug("[ChatInput] globalFrame=\(globalFrame.debugDescription)")
-        Logger.shared.debug("[ChatInput] isHidden=false alpha=1 frame=\(localFrame.debugDescription)")
-        Logger.shared.debug("[ChatInput] superviewExists=true")
-        Logger.shared.debug("[ChatInput] coveredByEmptyState=false")
-        Logger.shared.debug("[ChatInput] viewSafeAreaInsets=\(String(describing: proxy.safeAreaInsets))")
-        Logger.shared.debug("[ChatInput] tabBarFrame=custom(height:\(RootTabBarMetrics.contentHeight))")
-        Logger.shared.debug("[ChatInput] keyboardVisible=\(keyboardVisible)")
+        Logger.shared.debug(
+            "[ChatComposer] geometry reason=\(reason) minY=\(localFrame.minY) maxY=\(localFrame.maxY) width=\(localFrame.width) targetWidth=\(expectedWidth) bottomTarget=\(bottomTarget)"
+        )
+        Logger.shared.debug("[ChatComposer] safeAreaInsets=\(String(describing: proxy.safeAreaInsets))")
+        Logger.shared.debug("[ChatComposer] customTabBarHeight=\(keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)")
+        Logger.shared.debug("[ChatComposer] keyboardVisible=\(keyboardVisible)")
         Logger.shared.debug(
             "[ChatComposer] keyboardHeight=\(keyboardObserver.keyboardHeight) isKeyboardVisible=\(keyboardObserver.isKeyboardVisible)"
         )
@@ -506,9 +491,9 @@ struct ChatRootView: View {
         )
         Logger.shared.debug("[ChatComposer] visible=true")
 
-        validateComposerVisibility(globalFrame: globalFrame)
+        validateComposerVisibility(screenFrame: screenFrame)
 
-        validateInputHorizontalFrame(
+        validateComposerHorizontalGeometry(
             frame: localFrame,
             expectedWidth: expectedWidth,
             bottomTarget: bottomTarget,
@@ -516,31 +501,31 @@ struct ChatRootView: View {
         )
     }
 
-    private func validateComposerVisibility(globalFrame: CGRect) {
+    private func validateComposerVisibility(screenFrame: CGRect) {
         let screenBounds = UIScreen.main.bounds
-        let hasVisibleHeight = globalFrame.height > 0
-            && globalFrame.maxY > screenBounds.minY
-            && globalFrame.minY < screenBounds.maxY
+        let hasVisibleHeight = screenFrame.height > 0
+            && screenFrame.maxY > screenBounds.minY
+            && screenFrame.minY < screenBounds.maxY
 
         if hasVisibleHeight {
             return
         }
 
         let reason: String
-        if globalFrame.height <= 0 {
+        if screenFrame.height <= 0 {
             reason = "zeroHeight"
-        } else if globalFrame.minY >= screenBounds.maxY {
+        } else if screenFrame.minY >= screenBounds.maxY {
             reason = "belowScreen"
         } else {
             reason = "aboveScreen"
         }
 
         Logger.shared.error(
-            "[ChatComposer] composerNotVisible reason=\(reason) globalFrame=\(globalFrame.debugDescription) screenBounds=\(screenBounds.debugDescription)"
+            "[ChatComposer] composerNotVisible reason=\(reason) screenFrame=\(screenFrame.debugDescription) screenBounds=\(screenBounds.debugDescription)"
         )
     }
 
-    private func validateInputHorizontalFrame(
+    private func validateComposerHorizontalGeometry(
         frame: CGRect,
         expectedWidth: CGFloat,
         bottomTarget: String,
@@ -548,23 +533,23 @@ struct ChatRootView: View {
     ) {
         guard expectedWidth > 0 else { return }
 
-        let hasInvalidMinX = abs(frame.minX) > Layout.inputFrameTolerance
-        let hasInvalidWidth = abs(frame.width - expectedWidth) > Layout.inputFrameTolerance
+        let hasInvalidMinX = abs(frame.minX) > Layout.geometryTolerance
+        let hasInvalidWidth = abs(frame.width - expectedWidth) > Layout.geometryTolerance
         guard hasInvalidMinX || hasInvalidWidth else {
             Logger.shared.debug(
-                "[ChatInput] layoutValid minX=\(frame.minX) width=\(frame.width) targetWidth=\(expectedWidth) bottomTarget=\(bottomTarget)"
+                "[ChatComposer] geometryValid minX=\(frame.minX) width=\(frame.width) targetWidth=\(expectedWidth) bottomTarget=\(bottomTarget)"
             )
             return
         }
 
         Logger.shared.error(
-            "[ChatInput] invalidHorizontalFrame minX=\(frame.minX) expected=0 width=\(frame.width) expectedWidth=\(expectedWidth) reason=\(reason)"
+            "[ChatComposer] invalidHorizontalGeometry minX=\(frame.minX) expected=0 width=\(frame.width) expectedWidth=\(expectedWidth) reason=\(reason)"
         )
     }
 
     private func updateMessageListInsets() {
         Logger.shared.debug(
-            "[ChatInput] messageListBottomInset=\(messageListBottomInset) composerMeasuredHeight=\(measuredComposerHeight) keyboardVisible=\(keyboardObserver.isKeyboardVisible)"
+            "[ChatComposer] messageListBottomInset=\(messageListBottomInset) composerMeasuredHeight=\(measuredComposerHeight) keyboardVisible=\(keyboardObserver.isKeyboardVisible)"
         )
     }
 
@@ -770,48 +755,107 @@ private struct ChatComposerHeightPreferenceKey: PreferenceKey {
 
 @MainActor
 private final class ChatKeyboardObserver: ObservableObject {
+    private static var activeObserverID: UUID?
+
     @Published private(set) var keyboardHeight: CGFloat = 0
     @Published private(set) var isKeyboardVisible = false
     @Published private(set) var animationDuration: Double = 0.25
     @Published private(set) var animationCurve: UInt = 0
 
-    init() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleKeyboardWillChangeFrame(_:)),
-            name: UIResponder.keyboardWillChangeFrameNotification,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleKeyboardWillHide(_:)),
-            name: UIResponder.keyboardWillHideNotification,
-            object: nil
-        )
+    private let observerID = UUID()
+    private var willChangeFrameObserver: NSObjectProtocol?
+    private var willHideObserver: NSObjectProtocol?
+    private var lastLoggedEvent: (name: String, height: CGFloat, timestamp: TimeInterval)?
+
+    func activate() {
+        Self.activeObserverID = observerID
+        guard willChangeFrameObserver == nil, willHideObserver == nil else { return }
+
+        willChangeFrameObserver = NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let payload = KeyboardEventPayload(notification: notification)
+            MainActor.assumeIsolated {
+                self?.handleKeyboardWillChangeFrame(payload)
+            }
+        }
+
+        willHideObserver = NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillHideNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let payload = KeyboardEventPayload(notification: notification)
+            MainActor.assumeIsolated {
+                self?.handleKeyboardWillHide(payload)
+            }
+        }
+    }
+
+    func deactivate() {
+        if let willChangeFrameObserver {
+            NotificationCenter.default.removeObserver(willChangeFrameObserver)
+            self.willChangeFrameObserver = nil
+        }
+
+        if let willHideObserver {
+            NotificationCenter.default.removeObserver(willHideObserver)
+            self.willHideObserver = nil
+        }
+
+        if Self.activeObserverID == observerID {
+            Self.activeObserverID = nil
+        }
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        MainActor.assumeIsolated {
+            deactivate()
+        }
     }
 
-    @objc private func handleKeyboardWillChangeFrame(_ notification: Notification) {
-        keyboardHeight = keyboardOverlapHeight(from: notification)
+    private func handleKeyboardWillChangeFrame(_ payload: KeyboardEventPayload) {
+        guard Self.activeObserverID == observerID else { return }
+        keyboardHeight = keyboardOverlapHeight(from: payload)
         isKeyboardVisible = keyboardHeight > 0
-        animationDuration = keyboardAnimationDuration(from: notification)
-        animationCurve = keyboardAnimationCurve(from: notification)
-        Logger.shared.debug("[ChatKeyboard] willChangeFrame height=\(keyboardHeight)")
+        animationDuration = payload.animationDuration
+        animationCurve = payload.animationCurve
+        logKeyboardEventIfNeeded(name: "willChangeFrame", height: keyboardHeight)
     }
 
-    @objc private func handleKeyboardWillHide(_ notification: Notification) {
+    private func handleKeyboardWillHide(_ payload: KeyboardEventPayload) {
+        guard Self.activeObserverID == observerID else { return }
         keyboardHeight = 0
         isKeyboardVisible = false
-        animationDuration = keyboardAnimationDuration(from: notification)
-        animationCurve = keyboardAnimationCurve(from: notification)
-        Logger.shared.debug("[ChatKeyboard] willHide")
+        animationDuration = payload.animationDuration
+        animationCurve = payload.animationCurve
+        logKeyboardEventIfNeeded(name: "willHide", height: 0)
     }
 
-    private func keyboardOverlapHeight(from notification: Notification) -> CGFloat {
-        guard let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+    private func logKeyboardEventIfNeeded(name: String, height: CGFloat) {
+        let now = Date().timeIntervalSince1970
+        if let lastLoggedEvent,
+           lastLoggedEvent.name == name,
+           abs(lastLoggedEvent.height - height) < 0.5,
+           now - lastLoggedEvent.timestamp < 0.05 {
+            return
+        }
+
+        lastLoggedEvent = (name, height, now)
+        switch name {
+        case "willChangeFrame":
+            Logger.shared.debug("[ChatKeyboard] willChangeFrame height=\(height)")
+        case "willHide":
+            Logger.shared.debug("[ChatKeyboard] willHide")
+        default:
+            break
+        }
+    }
+
+    private func keyboardOverlapHeight(from payload: KeyboardEventPayload) -> CGFloat {
+        guard let endFrame = payload.endFrame else {
             return 0
         }
 
@@ -822,12 +866,16 @@ private final class ChatKeyboardObserver: ObservableObject {
             .bounds ?? UIScreen.main.bounds
         return max(0, windowBounds.maxY - endFrame.minY)
     }
+}
 
-    private func keyboardAnimationDuration(from notification: Notification) -> Double {
-        notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
-    }
+private struct KeyboardEventPayload: Sendable {
+    let endFrame: CGRect?
+    let animationDuration: Double
+    let animationCurve: UInt
 
-    private func keyboardAnimationCurve(from notification: Notification) -> UInt {
-        notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 0
+    init(notification: Notification) {
+        endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        animationDuration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        animationCurve = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 0
     }
 }

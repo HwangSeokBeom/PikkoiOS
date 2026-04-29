@@ -170,6 +170,40 @@ final class AppConfigurationTests: XCTestCase {
         XCTAssertEqual(configuration.portOneUserCodeDiagnostic.state, "valid")
         XCTAssertEqual(configuration.portOneUserCodeDiagnostic.source, "AppConfiguration.explicit.PORTONE_USER_CODE")
     }
+
+    func testPortOnePgIDIsOptionalWhenEmpty() {
+        let configuration = AppConfiguration(
+            environment: .development,
+            baseURL: URL(string: "http://pickup.sesac.kr:42678/"),
+            seSACKey: "test-sesac-key",
+            portOneUserCode: "imp12345678",
+            portOnePg: "html5_inicis",
+            portOnePgID: "",
+            portOnePayMethod: "card",
+            portOneAppScheme: "pikko",
+            paymentTestMode: true
+        )
+
+        XCTAssertNil(configuration.portOnePgID)
+        XCTAssertEqual(configuration.portOnePgIDDiagnostic.state, "emptyOptional")
+    }
+
+    func testPortOnePgIDPlaceholderDoesNotBlockAsRequiredValue() {
+        let configuration = AppConfiguration(
+            environment: .development,
+            baseURL: URL(string: "http://pickup.sesac.kr:42678/"),
+            seSACKey: "test-sesac-key",
+            portOneUserCode: "imp12345678",
+            portOnePg: "html5_inicis",
+            portOnePgID: "REPLACE_WITH_PORTONE_PG_ID",
+            portOnePayMethod: "card",
+            portOneAppScheme: "pikko",
+            paymentTestMode: true
+        )
+
+        XCTAssertNil(configuration.portOnePgID)
+        XCTAssertEqual(configuration.portOnePgIDDiagnostic.state, "placeholderOptional")
+    }
 }
 
 private extension AppConfigurationTests {

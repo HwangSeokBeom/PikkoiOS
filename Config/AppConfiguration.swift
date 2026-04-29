@@ -173,7 +173,7 @@ struct AppConfiguration: Sendable {
             bundle: bundle,
             defaultValue: "html5_inicis"
         )
-        let resolvedPortOnePgID = Self.resolveConfiguredValue(
+        let resolvedPortOnePgID = Self.resolveOptionalConfiguredValue(
             explicitValue: portOnePgID,
             key: BundleKey.portOnePgID,
             bundle: bundle,
@@ -449,14 +449,54 @@ struct AppConfiguration: Sendable {
         return (normalizedValue, diagnostic)
     }
 
+    private static func resolveOptionalConfiguredValue(
+        explicitValue: String?,
+        key: String,
+        bundle: Bundle,
+        placeholder: String? = nil
+    ) -> (value: String?, diagnostic: ConfiguredValueDiagnostic) {
+        let rawValue: String?
+        let source: String
+
+        if let explicitValue {
+            rawValue = explicitValue
+            source = "AppConfiguration.explicit.\(key)"
+        } else if let configured = configuredRawStringWithSource(
+            forAnyOf: [key],
+            bundle: bundle,
+            allowEmpty: true
+        ) {
+            rawValue = configured.value
+            source = configured.source
+        } else {
+            rawValue = nil
+            source = "missing:optional_xcconfig=Config/Secrets.xcconfig"
+        }
+
+        let diagnostic = optionalConfiguredValueDiagnostic(
+            key: key,
+            rawValue: rawValue,
+            source: source,
+            placeholder: placeholder
+        )
+
+        guard diagnostic.state == "valid",
+              let normalizedValue = normalizedConfiguredValue(rawValue) else {
+            return (nil, diagnostic)
+        }
+
+        return (normalizedValue, diagnostic)
+    }
+
     private static func configuredRawStringWithSource(
         forAnyOf keys: [String],
-        bundle: Bundle
+        bundle: Bundle,
+        allowEmpty: Bool = false
     ) -> (value: String, source: String)? {
         for key in keys {
             if let environmentValue = ProcessInfo.processInfo.environment[key] {
                 let trimmedEnvironmentValue = environmentValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmedEnvironmentValue.isEmpty {
+                if allowEmpty || !trimmedEnvironmentValue.isEmpty {
                     return (trimmedEnvironmentValue, "ProcessInfo.environment.\(key)")
                 }
             }
@@ -468,7 +508,7 @@ struct AppConfiguration: Sendable {
             }
 
             let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
+            if allowEmpty || !trimmed.isEmpty {
                 return (trimmed, "Info.plist.\(key)")
             }
         }
@@ -536,6 +576,39 @@ struct AppConfiguration: Sendable {
         return ConfiguredValueDiagnostic(key: key, source: source, state: "valid", rawMasked: maskedConfiguredValue(normalized))
     }
 
+    private static func optionalConfiguredValueDiagnostic(
+        key: String,
+        rawValue: String?,
+        source: String,
+        placeholder: String? = nil
+    ) -> ConfiguredValueDiagnostic {
+        let diagnostic = configuredValueDiagnostic(
+            key: key,
+            rawValue: rawValue,
+            source: source,
+            placeholder: placeholder
+        )
+
+        switch diagnostic.state {
+        case "missing", "empty":
+            return ConfiguredValueDiagnostic(
+                key: key,
+                source: diagnostic.source,
+                state: "emptyOptional",
+                rawMasked: diagnostic.rawMasked
+            )
+        case "placeholder":
+            return ConfiguredValueDiagnostic(
+                key: key,
+                source: diagnostic.source,
+                state: "placeholderOptional",
+                rawMasked: diagnostic.rawMasked
+            )
+        default:
+            return diagnostic
+        }
+    }
+
     static func isValidSeSACKey(_ key: String) -> Bool {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty &&
@@ -586,7 +659,8 @@ struct AppConfiguration: Sendable {
     private static func maskedConfiguredValue(_ value: String) -> String {
         let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if normalizedValue.hasPrefix("imp"), normalizedValue.count > 3 {
-            return "imp…****"
+            let suffix = normalizedValue.suffix(min(4, normalizedValue.count - 3))
+            return "imp…\(suffix)"
         }
 
         guard normalizedValue.count > 6 else {
