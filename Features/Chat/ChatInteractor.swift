@@ -101,8 +101,8 @@ enum ChatTarget: Equatable, Sendable {
 
     var preferredTitle: String {
         switch self {
-        case .store(_, _, _, let ownerName, _):
-            return ownerName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "채팅"
+        case .store(_, let storeName, _, _, _):
+            return storeName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "문의하기"
         case .user(_, let nickname, _):
             return nickname
         case .room(_, let title, _):
@@ -122,19 +122,46 @@ struct ChatRoomContext: Equatable, Sendable {
     let roomID: String
     let opponentID: String?
     let storeID: String?
+    let storeName: String?
     let displayTitle: String
     let canUseStoreScopedTitle: Bool
 }
 
 enum ChatRoomContextPolicy {
-    static let supportsStoreScopedRooms = false
+    static let supportsStoreScopedRooms = true
 }
 
 struct CreateChatRoomRequestDTO: Encodable, Sendable {
-    let opponentID: String
+    let opponentID: String?
+    let storeID: String?
 
     private enum CodingKeys: String, CodingKey {
         case opponentID = "opponent_id"
+        case storeID = "store_id"
+    }
+
+    init(opponentID: String) {
+        self.opponentID = opponentID
+        self.storeID = nil
+    }
+
+    init(storeID: String) {
+        self.opponentID = nil
+        self.storeID = storeID
+    }
+}
+
+enum ChatRoomCreationMode: Equatable, Sendable {
+    case storeID(String)
+    case opponentID(String)
+
+    var requestBodyKey: String {
+        switch self {
+        case .storeID:
+            return "store_id"
+        case .opponentID:
+            return "opponent_id"
+        }
     }
 }
 
@@ -193,7 +220,7 @@ struct ChatFileResponseDTO: Decodable, Sendable {
 
 protocol ChatRemoteDataSourceProtocol: Sendable {
     func fetchChatRooms() async throws -> ChatRoomListResponseDTO
-    func createOrFetchChatRoom(opponentID: String) async throws -> ChatRoomDTO
+    func createOrFetchChatRoom(mode: ChatRoomCreationMode) async throws -> ChatRoomDTO
     func fetchMessages(roomID: String, next: String?) async throws -> ChatMessageListResponseDTO
     func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessageDTO
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> ChatFileResponseDTO
@@ -215,10 +242,17 @@ struct ChatRemoteDataSource: ChatRemoteDataSourceProtocol {
         return try await apiClient.execute(endpoint)
     }
 
-    func createOrFetchChatRoom(opponentID: String) async throws -> ChatRoomDTO {
+    func createOrFetchChatRoom(mode: ChatRoomCreationMode) async throws -> ChatRoomDTO {
+        let requestDTO: CreateChatRoomRequestDTO
+        switch mode {
+        case .storeID(let storeID):
+            requestDTO = CreateChatRoomRequestDTO(storeID: storeID)
+        case .opponentID(let opponentID):
+            requestDTO = CreateChatRoomRequestDTO(opponentID: opponentID)
+        }
         let body = RequestBody.json(
             try NetworkCoding.makeJSONEncoder().encode(
-                CreateChatRoomRequestDTO(opponentID: opponentID)
+                requestDTO
             )
         )
         let endpoint = Endpoint<ChatRoomDTO>(
@@ -280,7 +314,7 @@ struct ChatRemoteDataSource: ChatRemoteDataSourceProtocol {
 
 protocol ChatRepository: Sendable {
     func fetchChatRooms() async throws -> [ChatRoom]
-    func createOrFetchChatRoom(opponentID: String) async throws -> ChatRoom
+    func createOrFetchChatRoom(mode: ChatRoomCreationMode) async throws -> ChatRoom
     func fetchMessages(roomID: String, next: String?) async throws -> [ChatMessage]
     func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessage
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String]
@@ -299,8 +333,8 @@ struct DefaultChatRepository: ChatRepository {
         try await remoteDataSource.fetchChatRooms().data.map(mapper.mapRoom)
     }
 
-    func createOrFetchChatRoom(opponentID: String) async throws -> ChatRoom {
-        let response = try await remoteDataSource.createOrFetchChatRoom(opponentID: opponentID)
+    func createOrFetchChatRoom(mode: ChatRoomCreationMode) async throws -> ChatRoom {
+        let response = try await remoteDataSource.createOrFetchChatRoom(mode: mode)
         return mapper.mapRoom(response)
     }
 
@@ -710,7 +744,11 @@ struct ChatInteractor: ChatInteracting {
         guard sessionStore.isAuthenticated else {
             throw ChatFeatureError.authenticationRequired
         }
-        guard case let .store(storeID, _, ownerID, _, _) = target else {
+        guard case let .store(storeID, storeName, ownerID, _, _) = target else {
+            throw ChatFeatureError.unavailable(message: "문의할 가게 정보를 찾지 못했어요.")
+        }
+        let normalizedStoreID = storeID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedStoreID.isEmpty else {
             throw ChatFeatureError.unavailable(message: "문의할 가게 정보를 찾지 못했어요.")
         }
 
@@ -730,9 +768,26 @@ struct ChatInteractor: ChatInteracting {
             if ownerID == sessionStore.currentUserID {
                 throw ChatFeatureError.unavailable(message: "내 가게에는 채팅 문의를 보낼 수 없어요.")
             }
-            let room = try await chatRepository.createOrFetchChatRoom(opponentID: ownerID)
+
             Logger.shared.debug(
-                "[ChatRepository] createOrFetchRoom opponentId=\(ownerID) storeId=\(storeID) storeScoped=false requestBody=opponent_id resultRoomId=\(room.id)"
+                "[ChatRepository] createOrFetchRoom storeIdExists=true opponentIdExists=true selectedRoomCreationMode=store_id requestBodyKey=store_id storeId=\(normalizedStoreID) opponentId=\(ownerID) storeName=\(storeName)"
+            )
+
+            do {
+                let room = try await chatRepository.createOrFetchChatRoom(mode: .storeID(normalizedStoreID))
+                Logger.shared.debug(
+                    "[ChatRepository] createOrFetchRoom resultRoomId=\(room.id) selectedRoomCreationMode=store_id requestBodyKey=store_id storeId=\(normalizedStoreID) opponentId=\(ownerID)"
+                )
+                return room
+            } catch let error as NetworkError where error.allowsStoreChatFallbackToOpponent {
+                Logger.shared.warning(
+                    "[ChatRepository] createOrFetchRoom store_id failed; falling back to opponent_id storeId=\(normalizedStoreID) opponentId=\(ownerID) error=\(error.localizedDescription)"
+                )
+            }
+
+            let room = try await chatRepository.createOrFetchChatRoom(mode: .opponentID(ownerID))
+            Logger.shared.debug(
+                "[ChatRepository] createOrFetchRoom resultRoomId=\(room.id) selectedRoomCreationMode=opponent_id requestBodyKey=opponent_id storeId=\(normalizedStoreID) opponentId=\(ownerID)"
             )
             return room
         } catch let error as ChatFeatureError {
@@ -757,9 +812,12 @@ struct ChatInteractor: ChatInteracting {
         }
 
         do {
-            let room = try await chatRepository.createOrFetchChatRoom(opponentID: opponentID)
             Logger.shared.debug(
-                "[ChatRepository] createOrFetchRoom opponentId=\(opponentID) storeId=- storeScoped=false requestBody=opponent_id resultRoomId=\(room.id)"
+                "[ChatRepository] createOrFetchRoom storeIdExists=false opponentIdExists=true selectedRoomCreationMode=opponent_id requestBodyKey=opponent_id opponentId=\(opponentID)"
+            )
+            let room = try await chatRepository.createOrFetchChatRoom(mode: .opponentID(opponentID))
+            Logger.shared.debug(
+                "[ChatRepository] createOrFetchRoom resultRoomId=\(room.id) selectedRoomCreationMode=opponent_id requestBodyKey=opponent_id opponentId=\(opponentID)"
             )
             return room
         } catch is CancellationError {
@@ -950,20 +1008,39 @@ struct ChatInteractor: ChatInteracting {
     func makeContext(for room: ChatRoom, entryPoint: ChatRoomEntryPoint) -> ChatRoomContext {
         let opponent = room.participants.first { $0.id != sessionStore.currentUserID } ?? room.participants.first
         let targetStoreID: String?
-        if case let .store(storeID, _, _, _, _) = target {
+        let targetStoreName: String?
+        if case let .store(storeID, storeName, _, _, _) = target {
             targetStoreID = storeID
+            targetStoreName = storeName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         } else {
             targetStoreID = nil
+            targetStoreName = nil
         }
+        let displayTitle = targetStoreName
+            ?? opponent?.nick.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            ?? target?.preferredTitle
+            ?? "채팅"
 
         return ChatRoomContext(
             entryPoint: entryPoint,
             roomID: room.id,
             opponentID: opponent?.id,
             storeID: targetStoreID,
-            displayTitle: opponent?.nick ?? target?.preferredTitle ?? "채팅",
-            canUseStoreScopedTitle: ChatRoomContextPolicy.supportsStoreScopedRooms
+            storeName: targetStoreName,
+            displayTitle: displayTitle,
+            canUseStoreScopedTitle: targetStoreID != nil && ChatRoomContextPolicy.supportsStoreScopedRooms
         )
+    }
+}
+
+private extension NetworkError {
+    var allowsStoreChatFallbackToOpponent: Bool {
+        switch self {
+        case .invalidRequest, .abnormalRequest:
+            return true
+        default:
+            return false
+        }
     }
 }
 

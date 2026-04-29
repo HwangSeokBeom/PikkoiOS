@@ -81,6 +81,43 @@ final class StoreDetailPresenterCartTests: XCTestCase {
         XCTAssertEqual(router.routedCartStoreID, "store-1")
     }
 
+    func testChatTappedRoutesStoreContextWithStoreNameAndOwner() async throws {
+        let router = SpyStoreDetailRouter()
+        let presenter = makePresenter(
+            content: makeContent(
+                storeID: "store-1",
+                storeName: "새싹 카페",
+                owner: StoreOwner(id: "owner-1", nick: "점주", profileImagePath: "/profile/owner.png")
+            ),
+            cartStore: CartStore(cartRepository: InMemoryCartRepository()),
+            router: router
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.chatTapped)
+
+        let target = try XCTUnwrap(router.routedChatTarget)
+        guard case let .store(storeID, storeName, ownerID, ownerName, ownerProfileImagePath) = target else {
+            return XCTFail("Expected store chat target")
+        }
+        XCTAssertEqual(storeID, "store-1")
+        XCTAssertEqual(storeName, "새싹 카페")
+        XCTAssertEqual(ownerID, "owner-1")
+        XCTAssertEqual(ownerName, "점주")
+        XCTAssertEqual(ownerProfileImagePath, "/profile/owner.png")
+        XCTAssertEqual(target.preferredTitle, "새싹 카페")
+    }
+
+    func testCreateChatRoomRequestDTOEncodesStoreIDWithoutOpponentFallback() throws {
+        let data = try NetworkCoding.makeJSONEncoder().encode(
+            CreateChatRoomRequestDTO(storeID: "store-1")
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+
+        XCTAssertEqual(object["store_id"], "store-1")
+        XCTAssertNil(object["opponent_id"])
+    }
+
     func testReviewWriteUnavailableShowsEligibilityBannerState() async {
         let router = SpyStoreDetailRouter()
         let presenter = makePresenter(
@@ -144,7 +181,11 @@ final class StoreDetailPresenterCartTests: XCTestCase {
         )
     }
 
-    private func makeContent(storeID: String, storeName: String) -> StoreDetailContent {
+    private func makeContent(
+        storeID: String,
+        storeName: String,
+        owner: StoreOwner? = nil
+    ) -> StoreDetailContent {
         StoreDetailContent(
             detail: StoreDetail(
                 id: storeID,
@@ -164,7 +205,7 @@ final class StoreDetailPresenterCartTests: XCTestCase {
                 totalReviewCount: 0,
                 totalOrderCount: 0,
                 totalRating: 4.5,
-                owner: nil,
+                owner: owner,
                 longitude: 126.9,
                 latitude: 37.5,
                 menus: [

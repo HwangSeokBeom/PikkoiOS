@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import WebKit
 
 struct CheckoutRootView: View {
     @StateObject private var presenter: CheckoutPresenter
@@ -29,7 +31,10 @@ struct CheckoutRootView: View {
                 CheckoutView(presenter: presenter)
             }
         }
-        .navigationBarBackButtonHidden(presenter.viewState.createdOrderID != nil)
+        .navigationBarBackButtonHidden(
+            presenter.viewState.showsCompletionView
+                || presenter.viewState.paymentStage.blocksBackNavigation
+        )
         .navigationDestination(
             isPresented: Binding(
                 get: {
@@ -100,53 +105,55 @@ struct CheckoutRootView: View {
 
 struct CheckoutPaymentBridgeView: View {
     let context: CheckoutPaymentBridgeContext
-    let requestLoader: @Sendable () async throws -> URLRequest
+    let paymentGateway: any PaymentGateway
     let onResult: @MainActor (CheckoutPaymentBridgeResult) -> Void
 
     @State private var hasCompleted = false
 
     var body: some View {
         NavigationStack {
-            PikkoWebContentView(
-                title: "결제 진행",
-                requestLoader: requestLoader,
-                onURLChange: { url in
-                    Task { @MainActor in
-                        handle(url: url)
-                    }
-                },
-                onNavigationError: { message in
-                    Task { @MainActor in
-                        sendResult(.failed(message: "결제 창을 불러오지 못했어요. \(message)"))
-                    }
-                },
-                onClose: {
-                    sendResult(.cancelled)
-                }
+            PortOnePaymentWebView(
+                context: context,
+                paymentGateway: paymentGateway,
+                onResult: sendGatewayResult(_:)
             )
+            .ignoresSafeArea(edges: .bottom)
+            .navigationTitle("결제 진행")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("닫기") {
+                        sendResult(.cancelled)
+                    }
+                }
+            }
         }
     }
 
-    private func handle(url: URL) {
-        guard !hasCompleted else { return }
-
-        if let impUID = extractValue(named: "imp_uid", from: url) {
-            sendResult(.succeeded(impUID: impUID))
-            return
-        }
-
-        if let redirectURL = context.redirectURL,
-           matchesRedirect(url, redirectURL: redirectURL) {
-            if let failureMessage = extractFailureMessage(from: url) {
-                sendResult(.failed(message: failureMessage))
-            } else {
+    private func sendGatewayResult(_ result: PaymentGatewayResult) {
+        Logger.shared.debug(
+            "PortOne payment callback orderCode=\(context.orderCode) success=\(result.success) impUidPresent=\(result.impUID?.isEmpty == false) merchantUid=\(result.merchantUID ?? "nil") errorCode=\(result.errorCode ?? "nil")"
+        )
+        if result.success {
+            guard let impUID = result.impUID else {
                 sendResult(.missingImpUID)
+                return
             }
+            sendResult(.succeeded(impUID: impUID, merchantUID: result.merchantUID))
             return
         }
 
-        if let failureMessage = extractFailureMessage(from: url) {
-            sendResult(.failed(message: failureMessage))
+        Logger.shared.debug(
+            "PortOne payment callback failed orderCode=\(context.orderCode) errorCode=\(result.errorCode ?? "nil") message=\(result.errorMessage ?? "nil") raw=\(result.rawDescription ?? "nil")"
+        )
+
+        // Current server validation accepts imp_uid only. For success=false callbacks,
+        // even if PortOne returns imp_uid, the default client policy is to keep the cart
+        // and avoid server validation until the backend accepts success/error metadata.
+        if isCancellation(result) {
+            sendResult(.cancelled)
+        } else {
+            sendResult(.failed(message: friendlyFailureMessage(from: result)))
         }
     }
 
@@ -159,43 +166,98 @@ struct CheckoutPaymentBridgeView: View {
         }
     }
 
-    private func matchesRedirect(_ currentURL: URL, redirectURL: URL) -> Bool {
-        guard let currentComponents = URLComponents(url: currentURL, resolvingAgainstBaseURL: false),
-              let redirectComponents = URLComponents(url: redirectURL, resolvingAgainstBaseURL: false) else {
-            return false
-        }
+    private func isCancellation(_ result: PaymentGatewayResult) -> Bool {
+        let combined = [
+            result.errorCode,
+            result.errorMessage,
+            result.rawDescription
+        ]
+        .compactMap { $0?.lowercased() }
+        .joined(separator: " ")
 
-        return currentComponents.scheme == redirectComponents.scheme
-            && currentComponents.host == redirectComponents.host
-            && currentComponents.path == redirectComponents.path
+        return combined.contains("cancel") || combined.contains("취소")
     }
 
-    private func extractFailureMessage(from url: URL) -> String? {
-        for key in ["error_msg", "error_message", "message", "msg"] {
-            if let value = extractValue(named: key, from: url) {
-                return "결제를 완료하지 못했어요. \(value)"
-            }
+    private func friendlyFailureMessage(from result: PaymentGatewayResult) -> String {
+        if let errorMessage = result.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !errorMessage.isEmpty {
+            return "결제를 완료하지 못했어요. \(errorMessage)"
         }
-        return nil
+
+        return "결제를 완료하지 못했어요. 결제 수단 또는 네트워크 상태를 확인한 뒤 다시 시도해 주세요."
+    }
+}
+
+private struct PortOnePaymentWebView: UIViewControllerRepresentable {
+    let context: CheckoutPaymentBridgeContext
+    let paymentGateway: any PaymentGateway
+    let onResult: @MainActor (PaymentGatewayResult) -> Void
+
+    func makeUIViewController(context: Context) -> PortOnePaymentViewController {
+        PortOnePaymentViewController(
+            paymentContext: self.context,
+            paymentGateway: paymentGateway,
+            onResult: onResult
+        )
     }
 
-    private func extractValue(named name: String, from url: URL) -> String? {
-        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-           let value = components.queryItems?.first(where: { $0.name == name })?.value,
-           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return value
-        }
+    func updateUIViewController(_ uiViewController: PortOnePaymentViewController, context: Context) {}
+}
 
-        guard let fragment = url.fragment, !fragment.isEmpty else {
-            return nil
-        }
+@MainActor
+private final class PortOnePaymentViewController: UIViewController {
+    private let paymentContext: CheckoutPaymentBridgeContext
+    private let paymentGateway: any PaymentGateway
+    private let onResult: @MainActor (PaymentGatewayResult) -> Void
+    private let webView = WKWebView(frame: .zero)
+    private var didStartPayment = false
 
-        let prefixedFragment = fragment.hasPrefix("?") ? String(fragment.dropFirst()) : fragment
-        let fragmentURL = URL(string: "https://fragment.local?\(prefixedFragment)")
-        let fragmentComponents = fragmentURL.flatMap {
-            URLComponents(url: $0, resolvingAgainstBaseURL: false)
-        }
+    init(
+        paymentContext: CheckoutPaymentBridgeContext,
+        paymentGateway: any PaymentGateway,
+        onResult: @escaping @MainActor (PaymentGatewayResult) -> Void
+    ) {
+        self.paymentContext = paymentContext
+        self.paymentGateway = paymentGateway
+        self.onResult = onResult
+        super.init(nibName: nil, bundle: nil)
+    }
 
-        return fragmentComponents?.queryItems?.first(where: { $0.name == name })?.value
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        webView.backgroundColor = .clear
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !didStartPayment else { return }
+        didStartPayment = true
+
+        paymentGateway.requestPayment(
+            on: webView,
+            request: paymentContext.paymentRequest
+        ) { [weak self] result in
+            guard let self else { return }
+            onResult(result)
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        paymentGateway.close()
     }
 }

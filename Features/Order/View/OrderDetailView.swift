@@ -55,13 +55,13 @@ struct OrderDetailView: View {
         }
         .navigationTitle("주문 상세")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("주문을 취소할까요?", isPresented: $isCancelConfirmationPresented) {
+        .alert("주문 취소 안내", isPresented: $isCancelConfirmationPresented) {
             Button("아니요", role: .cancel) {}
             Button("주문 취소", role: .destructive) {
                 Task { await presenter.send(.cancelConfirmed) }
             }
         } message: {
-            Text("주문이 취소되면 다시 되돌릴 수 없어요.")
+            Text("결제 완료 주문 취소는 환불 처리가 필요합니다. 현재 앱에서는 지원 준비 중입니다.")
         }
     }
 

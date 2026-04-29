@@ -6,6 +6,8 @@ struct CheckoutBuilder {
     private let draft: CheckoutDraft
     private let orderRepository: OrderRepository
     private let cartStore: CartStore
+    private let appConfiguration: AppConfiguration
+    private let sessionStore: SessionStore
     private let makeAuthView: () -> AnyView
     private let makeOrderView: (String?) -> OrderRootView
     private let makePaymentBridgeView: (CheckoutPaymentBridgeContext, @escaping @MainActor (CheckoutPaymentBridgeResult) -> Void) -> AnyView
@@ -15,6 +17,8 @@ struct CheckoutBuilder {
         draft: CheckoutDraft,
         orderRepository: OrderRepository,
         cartStore: CartStore,
+        appConfiguration: AppConfiguration,
+        sessionStore: SessionStore,
         makeAuthView: @escaping () -> AnyView,
         makeOrderView: @escaping (String?) -> OrderRootView,
         makePaymentBridgeView: @escaping (CheckoutPaymentBridgeContext, @escaping @MainActor (CheckoutPaymentBridgeResult) -> Void) -> AnyView,
@@ -23,6 +27,8 @@ struct CheckoutBuilder {
         self.draft = draft
         self.orderRepository = orderRepository
         self.cartStore = cartStore
+        self.appConfiguration = appConfiguration
+        self.sessionStore = sessionStore
         self.makeAuthView = makeAuthView
         self.makeOrderView = makeOrderView
         self.makePaymentBridgeView = makePaymentBridgeView
@@ -33,7 +39,9 @@ struct CheckoutBuilder {
         let router = CheckoutRouter(onOrderHistoryRoute: onOrderHistoryRoute)
         let interactor = CheckoutInteractor(
             draft: draft,
-            orderRepository: orderRepository
+            orderRepository: orderRepository,
+            appConfiguration: appConfiguration,
+            sessionStore: sessionStore
         )
         let presenter = CheckoutPresenter(
             interactor: interactor,

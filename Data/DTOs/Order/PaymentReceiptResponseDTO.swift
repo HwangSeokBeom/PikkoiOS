@@ -2,6 +2,18 @@ import Foundation
 
 struct PaymentValidationRequestDTO: Encodable, Sendable {
     let impUID: String
+    let orderCode: String?
+    let merchantUID: String?
+    let success: Bool?
+    let errorMessage: String?
+
+    init(request: PaymentValidationRequest) {
+        self.impUID = request.impUID
+        self.orderCode = request.orderCode
+        self.merchantUID = request.merchantUID
+        self.success = request.success
+        self.errorMessage = request.errorMessage
+    }
 
     private enum CodingKeys: String, CodingKey {
         case impUID = "imp_uid"

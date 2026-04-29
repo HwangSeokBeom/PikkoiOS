@@ -152,6 +152,16 @@ final class OrderDetailPresenter: ObservableObject {
     private func apply(error: Error) {
         let featureError = (error as? OrderFeatureError) ?? .unavailable(message: "주문 상세를 불러오지 못했어요.")
         viewState.hasLoadedContent = false
+        if featureError == .notFound {
+            viewState.emptyState = OrderEmptyState(
+                title: "주문 반영 대기 중",
+                message: "주문이 접수되었습니다. 목록 반영까지 잠시 걸릴 수 있습니다.",
+                actionTitle: "다시 확인",
+                requiresAuthentication: false
+            )
+            return
+        }
+
         viewState.emptyState = OrderEmptyState(
             title: featureError == .authenticationRequired ? "로그인이 필요해요" : "주문 상세를 불러오지 못했어요",
             message: featureError.userMessage,

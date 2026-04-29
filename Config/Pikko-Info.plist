@@ -38,6 +38,16 @@
 				<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.pikko.ios.portone</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(PORTONE_APP_SCHEME)</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
@@ -57,10 +67,46 @@
 	<string>$(KAKAO_NATIVE_APP_KEY)</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
+		<string>ansimclickipcollect</string>
+		<string>ansimclickscard</string>
+		<string>chaipayment</string>
+		<string>citicardappkr</string>
+		<string>citimobileapp</string>
+		<string>citispay</string>
+		<string>cloudpay</string>
+		<string>com.wooricard.wcard</string>
+		<string>hdcardappcardansimclick</string>
+		<string>hyundaicardappcardid</string>
+		<string>ispmobile</string>
+		<string>itms-apps</string>
 		<string>kakao</string>
+		<string>kakaobank</string>
 		<string>kakaokompassauth</string>
 		<string>kakaolink</string>
 		<string>kakaotalk</string>
+		<string>kb-acp</string>
+		<string>kb-auth</string>
+		<string>kb-screen</string>
+		<string>kbbank</string>
+		<string>kftc-bankpay</string>
+		<string>lguthepay-xpay</string>
+		<string>liivbank</string>
+		<string>lmslpay</string>
+		<string>lotteappcard</string>
+		<string>lottesmartpay</string>
+		<string>mpocket.online.ansimclick</string>
+		<string>newliiv</string>
+		<string>newsmartpib</string>
+		<string>nhappcardansimclick</string>
+		<string>nonghyupcardansimclick</string>
+		<string>payco</string>
+		<string>samsungpay</string>
+		<string>scardcertiapp</string>
+		<string>shinhan-sr-ansimclick</string>
+		<string>smhyundaiansimclick</string>
+		<string>smshinhanansimclick</string>
+		<string>supertoss</string>
+		<string>vguardstart</string>
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
@@ -93,6 +139,18 @@
 	<string>$(PIKKO_CHAT_SOCKET_DEBUG_ENABLED)</string>
 	<key>PIKKO_SESAC_KEY</key>
 	<string>$(PIKKO_SESAC_KEY)</string>
+	<key>PORTONE_APP_SCHEME</key>
+	<string>$(PORTONE_APP_SCHEME)</string>
+	<key>PORTONE_PAY_METHOD</key>
+	<string>$(PORTONE_PAY_METHOD)</string>
+	<key>PORTONE_PG</key>
+	<string>$(PORTONE_PG)</string>
+	<key>PORTONE_PG_ID</key>
+	<string>$(PORTONE_PG_ID)</string>
+	<key>PORTONE_USER_CODE</key>
+	<string>$(PORTONE_USER_CODE)</string>
+	<key>PAYMENT_TEST_MODE</key>
+	<string>$(PAYMENT_TEST_MODE)</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

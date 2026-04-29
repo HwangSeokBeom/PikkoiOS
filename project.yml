@@ -14,6 +14,9 @@ packages:
   SocketIO:
     url: https://github.com/socketio/socket.io-client-swift
     from: 16.1.1
+  Iamport:
+    url: https://github.com/iamport/iamport-ios
+    from: 1.4.7
 configs:
   Debug: debug
   Release: release
@@ -111,6 +114,8 @@ targets:
         product: FirebaseMessaging
       - package: SocketIO
         product: SocketIO
+      - package: Iamport
+        product: iamport-ios
     scheme:
       gatherCoverageData: false
       testTargets:
@@ -143,3 +148,9 @@ targets:
         INFOPLIST_KEY_GOOGLE_REVERSED_CLIENT_ID: $(GOOGLE_REVERSED_CLIENT_ID)
         INFOPLIST_KEY_PIKKO_INTERNAL_STUB_AUTH_ENABLED: $(PIKKO_INTERNAL_STUB_AUTH_ENABLED)
         INFOPLIST_KEY_PIKKO_CHAT_SOCKET_DEBUG_ENABLED: $(PIKKO_CHAT_SOCKET_DEBUG_ENABLED)
+        INFOPLIST_KEY_PORTONE_USER_CODE: $(PORTONE_USER_CODE)
+        INFOPLIST_KEY_PORTONE_PG: $(PORTONE_PG)
+        INFOPLIST_KEY_PORTONE_PG_ID: $(PORTONE_PG_ID)
+        INFOPLIST_KEY_PORTONE_PAY_METHOD: $(PORTONE_PAY_METHOD)
+        INFOPLIST_KEY_PORTONE_APP_SCHEME: $(PORTONE_APP_SCHEME)
+        INFOPLIST_KEY_PAYMENT_TEST_MODE: $(PAYMENT_TEST_MODE)

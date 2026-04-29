@@ -29,6 +29,7 @@ final class AppDIContainer {
     let chatLocalDataSource: any ChatLocalDataSourceProtocol
     let orderRepository: OrderRepository
     let orderMapper: OrderMapper
+    let paymentGateway: any PaymentGateway
 
     init(
         environment: AppEnvironment = .current,
@@ -148,6 +149,7 @@ final class AppDIContainer {
         self.chatLocalDataSource = resolvedChatLocalDataSource
         self.orderRepository = resolvedOrderRepository
         self.orderMapper = orderMapper
+        self.paymentGateway = PortOnePaymentGateway()
     }
 
     func makeAppState() -> AppState {

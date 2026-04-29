@@ -68,10 +68,21 @@ struct OrderStatusChangeNotification: Sendable {
     let status: OrderStatus
 }
 
+struct OrderRefreshNotification: Sendable {
+    let orderID: String?
+    let orderCode: String?
+    let message: String?
+}
+
 extension Notification.Name {
     static let pikkoOrderStatusDidChange = Notification.Name("pikko.order.statusDidChange")
+    static let pikkoOrdersShouldRefresh = Notification.Name("pikko.orders.shouldRefresh")
 }
 
 enum OrderStatusChangeNotificationUserInfoKey {
+    static let event = "event"
+}
+
+enum OrderRefreshNotificationUserInfoKey {
     static let event = "event"
 }

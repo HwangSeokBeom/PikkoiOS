@@ -44,6 +44,16 @@ struct CheckoutView: View {
                                 subtitle: presenter.viewState.createdOrderCode.map { "order_code \($0)" }
                             )
 
+                            if let paymentWarningMessage = presenter.viewState.paymentWarningMessage {
+                                Text(paymentWarningMessage)
+                                    .font(PikkoTypography.captionStrong)
+                                    .foregroundStyle(PikkoColor.danger)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(PikkoSpacing.md)
+                                    .background(PikkoColor.point.opacity(0.14))
+                                    .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                            }
+
                             infoRow(
                                 title: "수령 정보",
                                 value: presenter.viewState.addressSummaryText
@@ -138,6 +148,7 @@ struct CheckoutView: View {
                     .padding(.top, PikkoSpacing.xl)
                     .padding(.bottom, Layout.scrollBottomInset)
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -188,9 +199,15 @@ struct CheckoutView: View {
         }
 
         if presenter.viewState.isSubmittingOrder {
-            return presenter.viewState.primaryActionTitle == "결제 확인 중..."
-                ? "PG 결제 결과를 서버에 확인하고 있어요."
-                : "가격 검증이 끝나서 주문 생성 요청을 보내고 있어요."
+            return "가격 검증이 끝나서 주문 생성 요청을 보내고 있어요."
+        }
+
+        if presenter.viewState.isVerifyingPayment {
+            return "PG 결제 결과를 서버에 확인하고 있어요."
+        }
+
+        if presenter.viewState.isPaymentInProgress {
+            return "PortOne 결제창에서 결제를 진행하고 있어요."
         }
 
         return "가격 검증을 먼저 수행한 뒤 주문을 생성하고, 결제 성공 시 서버 검증까지 이어집니다."
@@ -213,7 +230,8 @@ struct CheckoutView: View {
                 .scrollContentBackground(.hidden)
                 .textInputAutocapitalization(.never)
                 .padding(.horizontal, PikkoSpacing.md)
-                .padding(.vertical, PikkoSpacing.xs)
+                .padding(.vertical, PikkoSpacing.sm)
+                .frame(height: 104)
 
             if presenter.viewState.pickupMemo.isEmpty {
                 Text("가게에 전달할 요청사항이 있으면 입력해 주세요")
@@ -227,7 +245,7 @@ struct CheckoutView: View {
                     .padding(.vertical, PikkoSpacing.md)
             }
         }
-        .frame(minHeight: 96, alignment: .topLeading)
+        .frame(height: 104, alignment: .topLeading)
         .background(PikkoColor.surfaceMuted)
         .overlay {
             RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)

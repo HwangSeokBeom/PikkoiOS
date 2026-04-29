@@ -69,7 +69,7 @@ struct OrderRepositoryImpl: OrderRepository {
     func cancelOrder(orderCode: String) async throws -> OrderDetail {
         _ = orderCode
         throw NetworkError.businessAuthorization(
-            message: "현재 Swagger에는 사용자 주문 취소 API가 없습니다. 주문 취소는 서버 API 협의가 필요합니다."
+            message: "결제 완료 주문 취소는 환불 처리가 필요합니다. 현재 앱에서는 지원 준비 중입니다."
         )
     }
 
@@ -87,8 +87,8 @@ struct OrderRepositoryImpl: OrderRepository {
         )
     }
 
-    func validatePayment(impUID: String) async throws -> ValidatedPaymentReceipt {
-        let response = try await remoteDataSource.validatePayment(impUID: impUID)
+    func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt {
+        let response = try await remoteDataSource.validatePayment(.init(request: request))
         return mapper.mapValidatedPaymentReceipt(response)
     }
 

@@ -87,6 +87,8 @@ struct FeatureBuilderFactory {
             draft: draft,
             orderRepository: container.orderRepository,
             cartStore: appState.cartStore,
+            appConfiguration: container.appConfiguration,
+            sessionStore: appState.sessionStore,
             makeAuthView: {
                 AnyView(makeAuthView(context: .checkout))
             },
@@ -176,6 +178,8 @@ struct FeatureBuilderFactory {
 
     func syncCurrentDeviceTokenIfNeeded() async {
         guard appState.sessionStore.isAuthenticated,
+              let accessToken = appState.sessionStore.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !accessToken.isEmpty,
               let deviceToken = appState.sessionStore.deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines),
               !deviceToken.isEmpty else {
             return
@@ -430,12 +434,7 @@ struct FeatureBuilderFactory {
     ) -> some View {
         CheckoutPaymentBridgeView(
             context: context,
-            requestLoader: {
-                try await makeWebRequest(
-                    path: context.initialURL.absoluteString,
-                    authorizationPolicy: .none
-                )
-            },
+            paymentGateway: container.paymentGateway,
             onResult: onResult
         )
     }

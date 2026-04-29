@@ -87,6 +87,40 @@ final class AppConfigurationTests: XCTestCase {
         XCTAssertNil(configuration.baseURL)
         XCTAssertEqual(configuration.baseURLError, .invalidBaseURL)
     }
+
+    func testProductionConfigurationBlocksTestPaymentPG() {
+        let configuration = AppConfiguration(
+            environment: .production,
+            baseURL: URL(string: "http://pickup.sesac.kr:42678/"),
+            seSACKey: "test-sesac-key",
+            portOneUserCode: "imp_test",
+            portOnePg: "html5_inicis",
+            portOnePgID: "INIpayTest",
+            portOnePayMethod: "card",
+            portOneAppScheme: "pikko",
+            paymentTestMode: false
+        )
+
+        XCTAssertTrue(configuration.blocksProductionPayment)
+        XCTAssertTrue(configuration.shouldShowPaymentWarning)
+    }
+
+    func testProductionConfigurationBlocksPaymentTestModeEvenWithLivePGID() {
+        let configuration = AppConfiguration(
+            environment: .production,
+            baseURL: URL(string: "http://pickup.sesac.kr:42678/"),
+            seSACKey: "test-sesac-key",
+            portOneUserCode: "imp_live",
+            portOnePg: "html5_inicis",
+            portOnePgID: "production-pg",
+            portOnePayMethod: "card",
+            portOneAppScheme: "pikko",
+            paymentTestMode: true
+        )
+
+        XCTAssertTrue(configuration.blocksProductionPayment)
+        XCTAssertTrue(configuration.shouldShowPaymentWarning)
+    }
 }
 
 private extension AppConfigurationTests {

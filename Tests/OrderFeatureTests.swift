@@ -188,6 +188,42 @@ final class OrderFeatureTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.orders.first(where: { $0.id == "order-2" })?.isHighlighted, true)
     }
 
+    func testPaymentValidationSuccessNotificationRefreshesLoadedOrderList() async {
+        let router = SpyOrderRouter()
+        let presenter = OrderPresenter(
+            interactor: SpyOrderInteractor(
+                initialState: makeInitialState(),
+                fetchResults: [
+                    .success(CursorPage(items: [], nextCursor: nil)),
+                    .success(CursorPage(items: [makeOrder(id: "order-validated", status: .pending)], nextCursor: nil))
+                ]
+            ),
+            router: router
+        )
+
+        await presenter.send(.onAppear)
+        NotificationCenter.default.post(
+            name: .pikkoOrdersShouldRefresh,
+            object: nil,
+            userInfo: [
+                OrderRefreshNotificationUserInfoKey.event: OrderRefreshNotification(
+                    orderID: "order-validated",
+                    orderCode: "D-order-validated",
+                    message: "주문이 접수되었습니다. 목록 반영까지 잠시 걸릴 수 있습니다."
+                )
+            ]
+        )
+        let refreshExpectation = expectation(description: "orders refresh notification handled")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            refreshExpectation.fulfill()
+        }
+        await fulfillment(of: [refreshExpectation], timeout: 1.0)
+
+        XCTAssertEqual(presenter.viewState.orders.map(\.id), ["order-validated"])
+        XCTAssertEqual(presenter.viewState.successMessage, "주문 내역을 최신 상태로 새로고침했어요.")
+        XCTAssertEqual(router.routedOrderIDs, ["order-validated"])
+    }
+
     func testUnauthenticatedInitialStateSkipsOrderFetchAndShowsLoginPrompt() async {
         let interactor = SpyOrderInteractor(
             initialState: makeUnauthenticatedInitialState(),
@@ -299,7 +335,7 @@ final class OrderFeatureTests: XCTestCase {
         } catch let error as NetworkError {
             XCTAssertEqual(
                 error,
-                .businessAuthorization(message: "현재 Swagger에는 사용자 주문 취소 API가 없습니다. 주문 취소는 서버 API 협의가 필요합니다.")
+                .businessAuthorization(message: "결제 완료 주문 취소는 환불 처리가 필요합니다. 현재 앱에서는 지원 준비 중입니다.")
             )
         }
 
@@ -325,7 +361,7 @@ final class OrderFeatureTests: XCTestCase {
         } catch let error as NetworkError {
             XCTAssertEqual(
                 error,
-                .businessAuthorization(message: "현재 Swagger에는 사용자 주문 취소 API가 없습니다. 주문 취소는 서버 API 협의가 필요합니다.")
+                .businessAuthorization(message: "결제 완료 주문 취소는 환불 처리가 필요합니다. 현재 앱에서는 지원 준비 중입니다.")
             )
         }
 
@@ -536,8 +572,8 @@ private final class StubOrderRemoteDataSource: OrderRemoteDataSourceProtocol, @u
         throw NetworkError.notFound(message: "영수증 없음")
     }
 
-    func validatePayment(impUID: String) async throws -> ReceiptOrderResponseDTO {
-        _ = impUID
+    func validatePayment(_ request: PaymentValidationRequestDTO) async throws -> ReceiptOrderResponseDTO {
+        _ = request
         throw NetworkError.transport
     }
 

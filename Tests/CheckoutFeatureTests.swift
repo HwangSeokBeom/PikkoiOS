@@ -44,7 +44,8 @@ final class CheckoutFeatureTests: XCTestCase {
         )
         let interactor = CheckoutInteractor(
             draft: makeDraft(),
-            orderRepository: repository
+            orderRepository: repository,
+            appConfiguration: makePaymentConfiguration()
         )
 
         let order = try await interactor.createOrder(
@@ -74,7 +75,8 @@ final class CheckoutFeatureTests: XCTestCase {
         let repository = SpyOrderRepository(validationResult: .valid)
         let interactor = CheckoutInteractor(
             draft: makeDraft(),
-            orderRepository: repository
+            orderRepository: repository,
+            appConfiguration: makePaymentConfiguration()
         )
 
         _ = try await interactor.validatePrice(
@@ -92,6 +94,32 @@ final class CheckoutFeatureTests: XCTestCase {
         XCTAssertEqual(request.items.count, 2)
         XCTAssertEqual(request.totalPriceAmount, 12_200)
         XCTAssertEqual(request.items.first?.clientKnownLinePriceAmount, 9_000)
+    }
+
+    func testCheckoutInteractorBuildsPortOneRequestFromOrderCode() async throws {
+        let interactor = CheckoutInteractor(
+            draft: makeDraft(),
+            orderRepository: SpyOrderRepository(validationResult: .valid),
+            appConfiguration: makePaymentConfiguration()
+        )
+
+        let paymentRequest = try await interactor.makePaymentRequest(
+            createdOrder: CreatedOrder(
+                id: "order-1",
+                orderCode: "ORDER-001",
+                totalPriceAmount: 12_200,
+                createdAt: Date(),
+                updatedAt: Date(),
+                paymentBridgePayload: nil
+            )
+        )
+
+        XCTAssertEqual(paymentRequest.merchantUID, "ORDER-001")
+        XCTAssertEqual(paymentRequest.amount, 12_200)
+        XCTAssertEqual(paymentRequest.orderName, "카페라떼 외 1개")
+        XCTAssertEqual(paymentRequest.pg, "html5_inicis")
+        XCTAssertEqual(paymentRequest.pgID, "INIpayTest")
+        XCTAssertEqual(paymentRequest.appScheme, "pikko")
     }
 
     func testCheckoutPresenterCreatesOrderAfterValidationSuccess() async {
@@ -122,13 +150,13 @@ final class CheckoutFeatureTests: XCTestCase {
         await presenter.send(.primaryButtonTapped)
 
         let recordedEvents = await interactor.recordedEvents()
-        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder])
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest])
         XCTAssertEqual(presenter.viewState.createdOrderID, "order-1")
         XCTAssertEqual(presenter.viewState.createdOrderCode, "D123456")
-        XCTAssertEqual(cartStore.summary.itemCount, 0)
-
-        await presenter.send(.orderHistoryTapped)
-        XCTAssertEqual(router.pendingRoute, .orderHistory(orderID: "order-1"))
+        XCTAssertEqual(presenter.viewState.paymentStage, .presentingPayment)
+        XCTAssertEqual(presenter.viewState.paymentBridgeContext?.paymentRequest.merchantUID, "D123456")
+        XCTAssertEqual(cartStore.summary.itemCount, 2)
+        XCTAssertNil(router.pendingRoute)
     }
 
     func testCheckoutPresenterDoesNotCreateOrderWhenValidationFails() async {
@@ -229,7 +257,7 @@ final class CheckoutFeatureTests: XCTestCase {
         _ = await (first, second)
 
         let recordedEvents = await interactor.recordedEvents()
-        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder])
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest])
     }
 
     func testCheckoutPresenterValidatesPaymentAfterBridgeSuccess() async {
@@ -244,7 +272,7 @@ final class CheckoutFeatureTests: XCTestCase {
                     totalPriceAmount: 4_500,
                     createdAt: Date(),
                     updatedAt: Date(),
-                    paymentBridgePayload: makePaymentBridgePayload()
+                    paymentBridgePayload: nil
                 )
             ),
             validatePaymentResult: .success(
@@ -270,19 +298,21 @@ final class CheckoutFeatureTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.paymentBridgeContext?.orderCode, "ORDER-001")
         XCTAssertFalse(presenter.viewState.showsCompletionView)
 
-        await presenter.send(.paymentBridgeResult(.succeeded(impUID: "imp_123")))
+        await presenter.send(.paymentBridgeResult(.succeeded(impUID: "imp_123", merchantUID: "ORDER-001")))
 
         let recordedEvents = await interactor.recordedEvents()
-        let validatedImpUID = await interactor.lastValidatedImpUID()
-        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .validatePayment])
-        XCTAssertEqual(validatedImpUID, "imp_123")
+        let validatedRequest = await interactor.lastValidatedRequest()
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest, .validatePayment])
+        XCTAssertEqual(validatedRequest?.impUID, "imp_123")
+        XCTAssertEqual(validatedRequest?.merchantUID, "ORDER-001")
         XCTAssertEqual(presenter.viewState.completionState, .paymentValidated)
+        XCTAssertEqual(presenter.viewState.paymentStage, .paymentCompleted)
         XCTAssertTrue(presenter.viewState.showsCompletionView)
         XCTAssertNil(presenter.viewState.paymentBridgeContext)
         XCTAssertEqual(cartStore.summary.itemCount, 0)
     }
 
-    func testCheckoutPresenterShowsPendingStateWhenPaymentValidationFails() async {
+    func testCheckoutPresenterShowsValidationFailedStateWhenPaymentValidationFails() async {
         let cartStore = makeFilledCartStore()
         let interactor = SpyCheckoutInteractor(
             initialState: makeLoadedViewState(),
@@ -294,7 +324,7 @@ final class CheckoutFeatureTests: XCTestCase {
                     totalPriceAmount: 4_500,
                     createdAt: Date(),
                     updatedAt: Date(),
-                    paymentBridgePayload: makePaymentBridgePayload()
+                    paymentBridgePayload: nil
                 )
             ),
             validatePaymentResult: .failure(
@@ -309,16 +339,126 @@ final class CheckoutFeatureTests: XCTestCase {
 
         await presenter.send(.onAppear)
         await presenter.send(.primaryButtonTapped)
-        await presenter.send(.paymentBridgeResult(.succeeded(impUID: "imp_delayed")))
+        await presenter.send(.paymentBridgeResult(.succeeded(impUID: "imp_delayed", merchantUID: "ORDER-001")))
 
-        XCTAssertEqual(presenter.viewState.completionState, .validationPending)
-        XCTAssertTrue(presenter.viewState.showsCompletionView)
-        XCTAssertEqual(presenter.viewState.primaryActionTitle, "결제 확인 지연")
-        XCTAssertNotNil(presenter.viewState.successMessage)
-        XCTAssertEqual(cartStore.summary.itemCount, 0)
+        XCTAssertEqual(presenter.viewState.completionState, .none)
+        XCTAssertEqual(presenter.viewState.paymentStage, .paymentValidationFailed)
+        XCTAssertFalse(presenter.viewState.showsCompletionView)
+        XCTAssertEqual(presenter.viewState.primaryActionTitle, "결제 확인 재시도")
+        XCTAssertEqual(
+            presenter.viewState.errorMessage,
+            "결제 확인에 실패했습니다. 결제가 실제로 완료되었을 수 있으니 잠시 후 주문 내역을 확인하거나 고객센터에 문의해주세요."
+        )
+        XCTAssertEqual(cartStore.summary.itemCount, 2)
     }
 
-    func testCheckoutPresenterRoutesOrderHistoryAfterPaymentCancellation() async {
+    func testCheckoutPresenterRetriesValidationWithoutCreatingNewOrderAfterValidationFailure() async {
+        let cartStore = makeFilledCartStore()
+        let interactor = SpyCheckoutInteractor(
+            initialState: makeLoadedViewState(),
+            validationResult: .success(.valid),
+            createResult: .success(
+                CreatedOrder(
+                    id: "order-1",
+                    orderCode: "ORDER-001",
+                    totalPriceAmount: 4_500,
+                    createdAt: Date(),
+                    updatedAt: Date(),
+                    paymentBridgePayload: nil
+                )
+            ),
+            validatePaymentResult: .failure(
+                .unavailable(message: "PG 승인 확인이 지연되고 있어요.")
+            )
+        )
+        let presenter = CheckoutPresenter(
+            interactor: interactor,
+            router: CheckoutRouter(),
+            cartStore: cartStore
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.primaryButtonTapped)
+        await presenter.send(.paymentBridgeResult(.succeeded(impUID: "imp_delayed", merchantUID: "ORDER-001")))
+        await presenter.send(.primaryButtonTapped)
+
+        let recordedEvents = await interactor.recordedEvents()
+        let validatedRequests = await interactor.validatedRequests()
+        XCTAssertEqual(
+            recordedEvents,
+            [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest, .validatePayment, .validatePayment]
+        )
+        XCTAssertEqual(validatedRequests.count, 2)
+        XCTAssertEqual(validatedRequests.first?.impUID, "imp_delayed")
+        XCTAssertEqual(validatedRequests.last?.orderCode, "ORDER-001")
+        XCTAssertEqual(cartStore.summary.itemCount, 2)
+    }
+
+    func testCheckoutPresenterKeepsCartAndSkipsValidationWhenImpUIDIsMissing() async {
+        let cartStore = makeFilledCartStore()
+        let interactor = SpyCheckoutInteractor(
+            initialState: makeLoadedViewState(),
+            validationResult: .success(.valid),
+            createResult: .success(
+                CreatedOrder(
+                    id: "order-1",
+                    orderCode: "ORDER-001",
+                    totalPriceAmount: 4_500,
+                    createdAt: Date(),
+                    updatedAt: Date(),
+                    paymentBridgePayload: nil
+                )
+            )
+        )
+        let presenter = CheckoutPresenter(
+            interactor: interactor,
+            router: CheckoutRouter(),
+            cartStore: cartStore
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.primaryButtonTapped)
+        await presenter.send(.paymentBridgeResult(.missingImpUID))
+
+        let recordedEvents = await interactor.recordedEvents()
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest])
+        XCTAssertEqual(presenter.viewState.paymentStage, .paymentFailed)
+        XCTAssertEqual(cartStore.summary.itemCount, 2)
+    }
+
+    func testCheckoutPresenterKeepsCartAndSkipsValidationWhenPaymentFails() async {
+        let cartStore = makeFilledCartStore()
+        let interactor = SpyCheckoutInteractor(
+            initialState: makeLoadedViewState(),
+            validationResult: .success(.valid),
+            createResult: .success(
+                CreatedOrder(
+                    id: "order-1",
+                    orderCode: "ORDER-001",
+                    totalPriceAmount: 4_500,
+                    createdAt: Date(),
+                    updatedAt: Date(),
+                    paymentBridgePayload: nil
+                )
+            )
+        )
+        let presenter = CheckoutPresenter(
+            interactor: interactor,
+            router: CheckoutRouter(),
+            cartStore: cartStore
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.primaryButtonTapped)
+        await presenter.send(.paymentBridgeResult(.failed(message: "결제를 완료하지 못했어요.")))
+
+        let recordedEvents = await interactor.recordedEvents()
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest])
+        XCTAssertEqual(presenter.viewState.paymentStage, .paymentFailed)
+        XCTAssertEqual(cartStore.summary.itemCount, 2)
+    }
+
+    func testCheckoutPresenterKeepsCartAndSkipsValidationAfterPaymentCancellation() async {
         let cartStore = makeFilledCartStore()
         let router = CheckoutRouter()
         let interactor = SpyCheckoutInteractor(
@@ -331,7 +471,7 @@ final class CheckoutFeatureTests: XCTestCase {
                     totalPriceAmount: 4_500,
                     createdAt: Date(),
                     updatedAt: Date(),
-                    paymentBridgePayload: makePaymentBridgePayload()
+                    paymentBridgePayload: nil
                 )
             )
         )
@@ -345,12 +485,44 @@ final class CheckoutFeatureTests: XCTestCase {
         await presenter.send(.primaryButtonTapped)
         await presenter.send(.paymentBridgeResult(.cancelled))
 
-        XCTAssertEqual(presenter.viewState.primaryActionTitle, "주문 내역 보기")
-        XCTAssertTrue(presenter.viewState.canRouteToOrderHistoryFromPrimary)
+        XCTAssertEqual(presenter.viewState.primaryActionTitle, "결제 다시 시도하기")
+        XCTAssertEqual(presenter.viewState.paymentStage, .paymentCanceled)
+        XCTAssertFalse(presenter.viewState.canRouteToOrderHistoryFromPrimary)
+        XCTAssertEqual(cartStore.summary.itemCount, 2)
 
         await presenter.send(.primaryButtonTapped)
 
-        XCTAssertEqual(router.pendingRoute, .orderHistory(orderID: "order-1"))
+        XCTAssertNil(router.pendingRoute)
+    }
+
+    func testCheckoutPresenterIgnoresPrimaryTapWhilePaymentIsPresented() async {
+        let cartStore = makeFilledCartStore()
+        let interactor = SpyCheckoutInteractor(
+            initialState: makeLoadedViewState(),
+            validationResult: .success(.valid),
+            createResult: .success(
+                CreatedOrder(
+                    id: "order-1",
+                    orderCode: "ORDER-001",
+                    totalPriceAmount: 4_500,
+                    createdAt: Date(),
+                    updatedAt: Date(),
+                    paymentBridgePayload: nil
+                )
+            )
+        )
+        let presenter = CheckoutPresenter(
+            interactor: interactor,
+            router: CheckoutRouter(),
+            cartStore: cartStore
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.primaryButtonTapped)
+        await presenter.send(.primaryButtonTapped)
+
+        let recordedEvents = await interactor.recordedEvents()
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest])
     }
 
     private func makeDraft() -> CheckoutDraft {
@@ -442,6 +614,20 @@ final class CheckoutFeatureTests: XCTestCase {
         )
         return cartStore
     }
+
+    private func makePaymentConfiguration(environment: AppEnvironment = .development) -> AppConfiguration {
+        AppConfiguration(
+            environment: environment,
+            baseURL: URL(string: "http://pickup.sesac.kr:42678"),
+            seSACKey: "test-sesac-key",
+            portOneUserCode: "imp_test",
+            portOnePg: "html5_inicis",
+            portOnePgID: "INIpayTest",
+            portOnePayMethod: "card",
+            portOneAppScheme: "pikko",
+            paymentTestMode: true
+        )
+    }
 }
 
 private actor SpyOrderRepository: OrderRepository {
@@ -476,8 +662,8 @@ private actor SpyOrderRepository: OrderRepository {
         throw NetworkError.invalidRequest
     }
 
-    func validatePayment(impUID: String) async throws -> ValidatedPaymentReceipt {
-        _ = impUID
+    func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt {
+        _ = request
         return ValidatedPaymentReceipt(
             paymentID: nil,
             orderID: nil,
@@ -511,6 +697,7 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
         case loadInitialState
         case validatePrice
         case createOrder
+        case makePaymentRequest
         case validatePayment
     }
 
@@ -521,7 +708,7 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
     var validationDelayNanos: UInt64 = 0
 
     private let recorder = EventRecorder()
-    private let impUIDRecorder = StringRecorder()
+    private let validationRequestRecorder = PaymentValidationRequestRecorder()
 
     init(
         initialState: CheckoutViewState,
@@ -574,9 +761,26 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
         }
     }
 
-    func validatePayment(impUID: String) async throws -> ValidatedPaymentReceipt {
+    func makePaymentRequest(createdOrder: CreatedOrder) async throws -> PaymentGatewayRequest {
+        await recorder.append(.makePaymentRequest)
+        return PaymentGatewayRequest(
+            orderID: createdOrder.id,
+            merchantUID: createdOrder.orderCode,
+            amount: createdOrder.totalPriceAmount,
+            orderName: "카페라떼",
+            buyerName: "테스트 사용자",
+            pg: "html5_inicis",
+            pgID: "INIpayTest",
+            payMethod: "card",
+            appScheme: "pikko",
+            userCode: "imp_test",
+            isTestMode: true
+        )
+    }
+
+    func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt {
         await recorder.append(.validatePayment)
-        await impUIDRecorder.set(impUID)
+        await validationRequestRecorder.set(request)
         switch validatePaymentResult {
         case .success(let receipt):
             return receipt
@@ -589,8 +793,12 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
         await recorder.events
     }
 
-    func lastValidatedImpUID() async -> String? {
-        await impUIDRecorder.value
+    func lastValidatedRequest() async -> PaymentValidationRequest? {
+        await validationRequestRecorder.value
+    }
+
+    func validatedRequests() async -> [PaymentValidationRequest] {
+        await validationRequestRecorder.values
     }
 }
 
@@ -602,10 +810,12 @@ private actor EventRecorder {
     }
 }
 
-private actor StringRecorder {
-    private(set) var value: String?
+    private actor PaymentValidationRequestRecorder {
+    private(set) var value: PaymentValidationRequest?
+    private(set) var values: [PaymentValidationRequest] = []
 
-    func set(_ value: String) {
+    func set(_ value: PaymentValidationRequest) {
         self.value = value
+        values.append(value)
     }
 }

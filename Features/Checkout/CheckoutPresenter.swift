@@ -8,6 +8,7 @@ final class CheckoutPresenter: ObservableObject {
     private let router: CheckoutRouting
     private let cartStore: CartStore
     private var hasLoaded = false
+    private var pendingValidationRequest: PaymentValidationRequest?
 
     init(
         interactor: CheckoutInteracting,
@@ -35,6 +36,12 @@ final class CheckoutPresenter: ObservableObject {
                 router.routeToOrderHistory(orderID: viewState.createdOrderID)
                 return
             }
+
+            if viewState.paymentStage == .paymentValidationFailed {
+                await retryPaymentValidation()
+                return
+            }
+
             await submitOrder()
         case .orderHistoryTapped:
             guard let createdOrderID = viewState.createdOrderID else { return }
@@ -50,11 +57,18 @@ final class CheckoutPresenter: ObservableObject {
     private func submitOrder() async {
         guard viewState.isPrimaryEnabled, !viewState.isPrimaryLoading else { return }
 
+        // The backend does not currently expose a re-pay contract for an unpaid order.
+        // After a PortOne cancellation/failure, retry creates a new order instead of reusing
+        // the previous unpaid order_code, which may not appear in GET /v1/orders.
+        pendingValidationRequest = nil
         clearTransientStateForSubmit()
         setLoadingState(
             isValidatingPrice: true,
             isSubmittingOrder: false,
-            title: "가격 확인 중..."
+            isPaymentInProgress: false,
+            isVerifyingPayment: false,
+            title: "가격 확인 중...",
+            stage: .validatingPrice
         )
 
         let input = CheckoutSubmissionInput(
@@ -72,7 +86,10 @@ final class CheckoutPresenter: ObservableObject {
                 setLoadingState(
                     isValidatingPrice: false,
                     isSubmittingOrder: false,
-                    title: "주문 정보 다시 확인하기"
+                    isPaymentInProgress: false,
+                    isVerifyingPayment: false,
+                    title: "주문 정보 다시 확인하기",
+                    stage: .idle
                 )
                 viewState.isPrimaryEnabled = !viewState.isEmpty
                 viewState.errorMessage = validationResult.message ?? "결제 전 확인이 필요해요."
@@ -82,43 +99,72 @@ final class CheckoutPresenter: ObservableObject {
             setLoadingState(
                 isValidatingPrice: false,
                 isSubmittingOrder: true,
-                title: "주문 생성 중..."
+                isPaymentInProgress: false,
+                isVerifyingPayment: false,
+                title: "주문 생성 중...",
+                stage: .creatingOrder
             )
 
             let createdOrder = try await interactor.createOrder(input: input)
             viewState.createdOrderID = createdOrder.id
             viewState.createdOrderCode = createdOrder.orderCode
-            viewState.isValidatingPrice = false
-            viewState.isSubmittingOrder = false
-            viewState.isPrimaryLoading = false
             viewState.totalPriceText = formatWon(createdOrder.totalPriceAmount)
 
-            if let paymentContext = makePaymentBridgeContext(from: createdOrder) {
-                viewState.paymentBridgeContext = paymentContext
-                viewState.completionState = .none
-                viewState.canRouteToOrderHistoryFromPrimary = false
-                viewState.isPrimaryEnabled = false
-                viewState.primaryActionTitle = "결제 진행 중..."
-                viewState.successMessage = "결제 창이 열리면 결제를 완료해 주세요."
-            } else if createdOrder.paymentBridgePayload != nil {
-                configurePendingOrderHistoryState(
-                    message: "결제 창을 열지 못했어요. 주문 내역에서 상태를 확인해 주세요."
+            let paymentRequest: PaymentGatewayRequest
+            do {
+                paymentRequest = try await interactor.makePaymentRequest(createdOrder: createdOrder)
+            } catch let error as CheckoutFeatureError {
+                Logger.shared.warning(
+                    "Checkout payment preparation failed after order creation orderCode=\(createdOrder.orderCode) orderId=\(createdOrder.id) retryPolicy=create_new_order cartRetained=true error=\(debugDescription(for: error))"
                 )
-            } else {
-                cartStore.clear()
-                viewState.completionState = .orderCreated
-                viewState.canRouteToOrderHistoryFromPrimary = false
-                viewState.isPrimaryEnabled = false
-                viewState.primaryActionTitle = "주문 생성 완료"
-                viewState.successMessage = "주문번호 \(createdOrder.orderCode)가 생성됐어요. 장바구니를 비웠고, 주문 내역 화면으로 이어질 수 있어요."
+                apply(featureError: error)
+                return
+            } catch {
+                Logger.shared.warning(
+                    "Checkout payment preparation failed after order creation orderCode=\(createdOrder.orderCode) orderId=\(createdOrder.id) retryPolicy=create_new_order cartRetained=true error=\(error.localizedDescription)"
+                )
+                setLoadingState(
+                    isValidatingPrice: false,
+                    isSubmittingOrder: false,
+                    isPaymentInProgress: false,
+                    isVerifyingPayment: false,
+                    title: "주문 다시 생성하기",
+                    stage: .idle
+                )
+                viewState.isPrimaryEnabled = !viewState.isEmpty
+                viewState.errorMessage = "결제 준비 중 오류가 발생했어요. 장바구니는 유지되며 주문을 다시 생성할 수 있어요."
+                return
             }
+            Logger.shared.debug(
+                "PortOne payment prepared orderCode=\(createdOrder.orderCode) merchantUid=\(paymentRequest.merchantUID) amount=\(paymentRequest.amount) pg=\(paymentRequest.pg) payMethod=\(paymentRequest.payMethod)"
+            )
+            viewState.paymentBridgeContext = CheckoutPaymentBridgeContext(
+                orderID: createdOrder.id,
+                orderCode: createdOrder.orderCode,
+                paymentRequest: paymentRequest
+            )
+            viewState.completionState = .none
+            viewState.canRouteToOrderHistoryFromPrimary = false
+            viewState.isPrimaryEnabled = false
+            setLoadingState(
+                isValidatingPrice: false,
+                isSubmittingOrder: false,
+                isPaymentInProgress: true,
+                isVerifyingPayment: false,
+                title: "결제 진행 중...",
+                stage: .presentingPayment
+            )
+            viewState.successMessage = "결제 창이 열리면 결제를 완료해 주세요."
         } catch let error as CheckoutFeatureError {
             apply(featureError: error)
         } catch {
             setLoadingState(
                 isValidatingPrice: false,
                 isSubmittingOrder: false,
-                title: "주문 다시 생성하기"
+                isPaymentInProgress: false,
+                isVerifyingPayment: false,
+                title: "주문 다시 생성하기",
+                stage: .idle
             )
             viewState.isPrimaryEnabled = !viewState.isEmpty
             viewState.errorMessage = "주문 생성 중 알 수 없는 오류가 발생했어요."
@@ -130,6 +176,11 @@ final class CheckoutPresenter: ObservableObject {
         viewState.successMessage = nil
         viewState.validationIssues = []
         viewState.canRouteToOrderHistoryFromPrimary = false
+        viewState.createdOrderID = nil
+        viewState.createdOrderCode = nil
+        viewState.paymentBridgeContext = nil
+        viewState.completionState = .none
+        viewState.paymentStage = .idle
         applyValidationMessages()
     }
 
@@ -171,7 +222,10 @@ final class CheckoutPresenter: ObservableObject {
         setLoadingState(
             isValidatingPrice: false,
             isSubmittingOrder: false,
-            title: "주문 다시 생성하기"
+            isPaymentInProgress: false,
+            isVerifyingPayment: false,
+            title: "주문 다시 생성하기",
+            stage: .idle
         )
         viewState.isPrimaryEnabled = !viewState.isEmpty
 
@@ -194,133 +248,239 @@ final class CheckoutPresenter: ObservableObject {
             viewState.errorMessage = "로그인 후 주문을 생성할 수 있어요."
             router.routeToAuth()
         case .configurationRequired:
-            viewState.errorMessage = "앱 설정을 확인해 주세요."
+            viewState.errorMessage = "결제 설정 문제로 결제를 시작할 수 없어요. 장바구니는 유지되며 주문을 다시 생성할 수 있어요."
         }
     }
 
     private func handlePaymentBridge(_ result: CheckoutPaymentBridgeResult) async {
         switch result {
         case .cancelled:
-            configurePendingOrderHistoryState(
-                message: "결제가 취소되었어요. 주문 내역에서 상태를 확인해 주세요."
+            Logger.shared.debug("PortOne payment canceled orderCode=\(viewState.createdOrderCode ?? "nil")")
+            configureRetryablePaymentState(
+                stage: .paymentCanceled,
+                message: "결제가 취소되었습니다. 장바구니는 유지됩니다."
             )
         case .failed(let message):
-            configurePendingOrderHistoryState(
+            Logger.shared.debug("PortOne payment failed orderCode=\(viewState.createdOrderCode ?? "nil")")
+            configureRetryablePaymentState(
+                stage: .paymentFailed,
                 message: message.isEmpty
-                    ? "결제를 완료하지 못했어요. 주문 내역에서 상태를 확인해 주세요."
+                    ? "결제를 완료하지 못했어요. 장바구니는 유지되며 다시 결제할 수 있어요."
                     : message
             )
         case .missingImpUID:
-            configurePendingOrderHistoryState(
-                message: "결제 완료 정보를 확인하지 못했어요. 주문 내역에서 상태를 확인해 주세요."
+            Logger.shared.debug("PortOne payment callback missing imp_uid orderCode=\(viewState.createdOrderCode ?? "nil")")
+            configureRetryablePaymentState(
+                stage: .paymentFailed,
+                message: "결제 완료 정보를 확인하지 못했어요. 장바구니는 유지되며 다시 결제할 수 있어요."
             )
-        case .succeeded(let impUID):
+        case .succeeded(let impUID, let merchantUID):
+            Logger.shared.debug(
+                "PortOne payment callback received success=true orderCode=\(viewState.createdOrderCode ?? "nil") merchantUid=\(merchantUID ?? "nil") impUidPresent=\(!impUID.isEmpty)"
+            )
+            let validationRequest = PaymentValidationRequest(
+                orderID: viewState.createdOrderID,
+                orderCode: viewState.createdOrderCode,
+                merchantUID: merchantUID ?? viewState.createdOrderCode,
+                impUID: impUID,
+                success: true,
+                errorMessage: nil
+            )
             viewState.paymentBridgeContext = nil
             viewState.errorMessage = nil
             viewState.successMessage = nil
             viewState.isPrimaryEnabled = false
             viewState.canRouteToOrderHistoryFromPrimary = false
-            setLoadingState(
-                isValidatingPrice: false,
-                isSubmittingOrder: true,
-                title: "결제 확인 중..."
-            )
-
-            do {
-                let receipt = try await interactor.validatePayment(impUID: impUID)
-                cartStore.clear()
-
-                viewState.isSubmittingOrder = false
-                viewState.isPrimaryLoading = false
-                viewState.isPrimaryEnabled = false
-                viewState.completionState = .paymentValidated
-                viewState.createdOrderID = receipt.orderID ?? viewState.createdOrderID
-                viewState.createdOrderCode = receipt.orderCode ?? viewState.createdOrderCode
-                viewState.primaryActionTitle = "결제 확인 완료"
-                viewState.successMessage = "결제가 확인됐어요. 주문 상태는 승인 대기 중일 수 있으니 주문 내역에서 이어서 확인해 주세요."
-            } catch let error as CheckoutFeatureError {
-                applyPendingValidationState(for: error)
-            } catch {
-                applyPendingValidationState(
-                    message: "결제 확인이 지연되고 있어요. 주문 내역에서 상태를 확인해 주세요."
-                )
-            }
+            viewState.paymentStage = .paymentCallbackReceived
+            await validatePaymentWithServer(validationRequest)
         }
     }
 
     private func setLoadingState(
         isValidatingPrice: Bool,
         isSubmittingOrder: Bool,
-        title: String
+        isPaymentInProgress: Bool,
+        isVerifyingPayment: Bool,
+        title: String,
+        stage: CheckoutPaymentStage
     ) {
         viewState.isValidatingPrice = isValidatingPrice
         viewState.isSubmittingOrder = isSubmittingOrder
-        viewState.isPrimaryLoading = isValidatingPrice || isSubmittingOrder
+        viewState.isPaymentInProgress = isPaymentInProgress
+        viewState.isVerifyingPayment = isVerifyingPayment
+        viewState.isPrimaryLoading = isValidatingPrice || isSubmittingOrder || isPaymentInProgress || isVerifyingPayment
         viewState.primaryActionTitle = title
+        viewState.paymentStage = stage
     }
 
-    private func makePaymentBridgeContext(from createdOrder: CreatedOrder) -> CheckoutPaymentBridgeContext? {
-        guard let payload = createdOrder.paymentBridgePayload else {
-            return nil
-        }
-
-        guard let initialURL = payload.paymentURL ?? payload.redirectURL else {
-            return nil
-        }
-
-        return CheckoutPaymentBridgeContext(
-            orderID: createdOrder.id,
-            orderCode: createdOrder.orderCode,
-            initialURL: initialURL,
-            redirectURL: payload.redirectURL
-        )
-    }
-
-    private func configurePendingOrderHistoryState(message: String) {
+    private func configureRetryablePaymentState(stage: CheckoutPaymentStage, message: String) {
         viewState.paymentBridgeContext = nil
         viewState.isValidatingPrice = false
         viewState.isSubmittingOrder = false
+        viewState.isPaymentInProgress = false
+        viewState.isVerifyingPayment = false
         viewState.isPrimaryLoading = false
-        viewState.isPrimaryEnabled = viewState.createdOrderID != nil
-        viewState.canRouteToOrderHistoryFromPrimary = viewState.createdOrderID != nil
-        viewState.primaryActionTitle = "주문 내역 보기"
+        viewState.isPrimaryEnabled = !viewState.isEmpty
+        viewState.canRouteToOrderHistoryFromPrimary = false
+        viewState.completionState = .none
+        viewState.paymentStage = stage
+        viewState.primaryActionTitle = "결제 다시 시도하기"
         viewState.errorMessage = message
         viewState.successMessage = nil
     }
 
-    private func applyPendingValidationState(for error: CheckoutFeatureError) {
-        let message: String
+    private func retryPaymentValidation() async {
+        guard let validationRequest = pendingValidationRequest else {
+            configureRetryablePaymentState(
+                stage: .paymentFailed,
+                message: "결제 확인에 필요한 정보를 찾지 못했어요. 장바구니는 유지되며 다시 결제할 수 있어요."
+            )
+            return
+        }
 
+        await validatePaymentWithServer(validationRequest)
+    }
+
+    private func validatePaymentWithServer(_ validationRequest: PaymentValidationRequest) async {
+        pendingValidationRequest = validationRequest
+        Logger.shared.debug(
+            "Payment validation started orderCode=\(validationRequest.orderCode ?? "nil") merchantUid=\(validationRequest.merchantUID ?? "nil") impUidPresent=\(!validationRequest.impUID.isEmpty)"
+        )
+        setLoadingState(
+            isValidatingPrice: false,
+            isSubmittingOrder: false,
+            isPaymentInProgress: false,
+            isVerifyingPayment: true,
+            title: "결제 확인 중...",
+            stage: .validatingPayment
+        )
+
+        do {
+            let receipt = try await interactor.validatePayment(validationRequest)
+            cartStore.clear()
+            pendingValidationRequest = nil
+
+            viewState.isSubmittingOrder = false
+            viewState.isVerifyingPayment = false
+            viewState.isPrimaryLoading = false
+            viewState.isPrimaryEnabled = false
+            viewState.completionState = .paymentValidated
+            viewState.paymentStage = .paymentCompleted
+            viewState.createdOrderID = receipt.orderID ?? viewState.createdOrderID
+            viewState.createdOrderCode = receipt.orderCode ?? viewState.createdOrderCode
+            viewState.primaryActionTitle = "결제 확인 완료"
+            viewState.successMessage = "결제가 확인됐어요. 주문이 접수되었고, 목록 반영까지 잠시 걸릴 수 있습니다."
+            postOrderRefreshRequested()
+            Logger.shared.debug(
+                "Payment validation succeeded orderCode=\(viewState.createdOrderCode ?? "nil") impUidPresent=\(!validationRequest.impUID.isEmpty)"
+            )
+        } catch let error as CheckoutFeatureError {
+            applyFailedValidationState(for: error, validationRequest: validationRequest)
+        } catch {
+            applyFailedValidationState(
+                message: "결제 확인에 실패했습니다. 결제가 실제로 완료되었을 수 있으니 잠시 후 주문 내역을 확인하거나 고객센터에 문의해주세요.",
+                validationRequest: validationRequest,
+                debugError: error
+            )
+        }
+    }
+
+    private func applyFailedValidationState(
+        for error: CheckoutFeatureError,
+        validationRequest: PaymentValidationRequest
+    ) {
         switch error {
         case .authenticationRequired:
-            message = "결제는 완료됐지만 세션이 만료되어 서버 확인이 지연되고 있어요. 다시 로그인 후 주문 내역을 확인해 주세요."
             router.routeToAuth()
         case .configurationRequired:
-            message = "결제는 완료됐지만 앱 설정 문제로 서버 확인이 지연되고 있어요. 주문 내역에서 상태를 확인해 주세요."
+            break
         case .validation(let featureMessage),
              .businessAuthorization(let featureMessage),
              .notFound(let featureMessage),
              .unavailable(let featureMessage):
-            message = "결제는 완료됐지만 서버 확인이 아직 끝나지 않았어요. 주문 내역에서 상태를 확인해 주세요. \(featureMessage)"
+            Logger.shared.debug(
+                "Payment validation failed orderCode=\(validationRequest.orderCode ?? "nil") merchantUid=\(validationRequest.merchantUID ?? "nil") impUidPresent=\(!validationRequest.impUID.isEmpty) error=\(featureMessage)"
+            )
         case .validationIssues:
-            message = "결제는 완료됐지만 주문 검증 이슈가 남아 있어요. 주문 내역에서 상태를 확인해 주세요."
+            Logger.shared.debug(
+                "Payment validation failed orderCode=\(validationRequest.orderCode ?? "nil") merchantUid=\(validationRequest.merchantUID ?? "nil") impUidPresent=\(!validationRequest.impUID.isEmpty) error=validationIssues"
+            )
         }
 
-        applyPendingValidationState(message: message)
+        applyFailedValidationState(
+            message: safeValidationFailureMessage(for: error),
+            validationRequest: validationRequest
+        )
     }
 
-    private func applyPendingValidationState(message: String) {
-        cartStore.clear()
+    private func applyFailedValidationState(
+        message: String,
+        validationRequest: PaymentValidationRequest? = nil,
+        debugError: Error? = nil
+    ) {
+        if let validationRequest, let debugError {
+            Logger.shared.debug(
+                "Payment validation failed orderCode=\(validationRequest.orderCode ?? "nil") merchantUid=\(validationRequest.merchantUID ?? "nil") impUidPresent=\(!validationRequest.impUID.isEmpty) error=\(debugError)"
+            )
+        }
         viewState.paymentBridgeContext = nil
         viewState.isValidatingPrice = false
         viewState.isSubmittingOrder = false
+        viewState.isPaymentInProgress = false
+        viewState.isVerifyingPayment = false
         viewState.isPrimaryLoading = false
-        viewState.isPrimaryEnabled = false
+        viewState.isPrimaryEnabled = !viewState.isEmpty
         viewState.canRouteToOrderHistoryFromPrimary = false
-        viewState.completionState = .validationPending
-        viewState.primaryActionTitle = "결제 확인 지연"
-        viewState.errorMessage = nil
-        viewState.successMessage = message
+        viewState.completionState = .none
+        viewState.paymentStage = .paymentValidationFailed
+        viewState.primaryActionTitle = "결제 확인 재시도"
+        viewState.errorMessage = message
+        viewState.successMessage = nil
+    }
+
+    private func safeValidationFailureMessage(for error: CheckoutFeatureError) -> String {
+        switch error {
+        case .authenticationRequired:
+            return "결제 확인 중 세션이 만료되었어요. 결제가 실제로 완료되었을 수 있으니 다시 로그인한 뒤 주문 내역을 확인해 주세요."
+        case .configurationRequired:
+            return "앱 결제 설정 문제로 결제 확인에 실패했습니다. 결제가 실제로 완료되었을 수 있으니 잠시 후 주문 내역을 확인하거나 고객센터에 문의해주세요."
+        case .validation,
+             .businessAuthorization,
+             .notFound,
+             .unavailable,
+             .validationIssues:
+            return "결제 확인에 실패했습니다. 결제가 실제로 완료되었을 수 있으니 잠시 후 주문 내역을 확인하거나 고객센터에 문의해주세요."
+        }
+    }
+
+    private func postOrderRefreshRequested() {
+        NotificationCenter.default.post(
+            name: .pikkoOrdersShouldRefresh,
+            object: nil,
+            userInfo: [
+                OrderRefreshNotificationUserInfoKey.event: OrderRefreshNotification(
+                    orderID: viewState.createdOrderID,
+                    orderCode: viewState.createdOrderCode,
+                    message: "주문이 접수되었습니다. 목록 반영까지 잠시 걸릴 수 있습니다."
+                )
+            ]
+        )
+    }
+
+    private func debugDescription(for error: CheckoutFeatureError) -> String {
+        switch error {
+        case .validation(let message),
+             .businessAuthorization(let message),
+             .notFound(let message),
+             .unavailable(let message):
+            return message
+        case .validationIssues(let issues):
+            return "validationIssues(count=\(issues.count))"
+        case .authenticationRequired:
+            return "authenticationRequired"
+        case .configurationRequired:
+            return "configurationRequired"
+        }
     }
 
     private func title(for kind: CheckoutPriceValidationIssue.Kind) -> String {

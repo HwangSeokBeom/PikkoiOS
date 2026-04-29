@@ -3,7 +3,7 @@ import Foundation
 protocol OrderRemoteDataSourceProtocol: Sendable {
     func fetchOrders(cursor: String?, filter: String?) async throws -> OrderListResponseDTO
     func fetchPaymentReceipt(orderCode: String) async throws -> PaymentResponseDTO
-    func validatePayment(impUID: String) async throws -> ReceiptOrderResponseDTO
+    func validatePayment(_ request: PaymentValidationRequestDTO) async throws -> ReceiptOrderResponseDTO
     func validatePrice(_ request: CheckoutPriceValidationRequestDTO) async throws -> CheckoutPriceValidationResponseDTO
     func createOrder(_ request: OrderCreateRequestDTO) async throws -> OrderCreateResponseDTO
     func updateOrderStatus(orderCode: String, nextStatus: String) async throws
@@ -36,12 +36,12 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
         return try await apiClient.execute(endpoint)
     }
 
-    func validatePayment(impUID: String) async throws -> ReceiptOrderResponseDTO {
+    func validatePayment(_ request: PaymentValidationRequestDTO) async throws -> ReceiptOrderResponseDTO {
         let endpoint = Endpoint<ReceiptOrderResponseDTO>(
             path: "/v1/payments/validation",
             method: .post,
             body: RequestBody.json(
-                try NetworkCoding.makeJSONEncoder().encode(PaymentValidationRequestDTO(impUID: impUID))
+                try NetworkCoding.makeJSONEncoder().encode(request)
             ),
             timeout: .paymentValidation,
             authorizationPolicy: .accessToken

@@ -37,6 +37,7 @@
 		1AC9A57CB366C433160B0F8F /* OrderStatusTimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47A0EDA97474F17B2546E97A /* OrderStatusTimelineView.swift */; };
 		1C1B8AB0D75FEB804CFBBB74 /* KakaoSDKCommon in Frameworks */ = {isa = PBXBuildFile; productRef = D658924EE5979BDED7876FE4 /* KakaoSDKCommon */; };
 		1D8551E7DBB59F22431B643E /* CommunityMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = F97AB069D8EA9B8D2663D8F4 /* CommunityMapper.swift */; };
+		1F489982234A16ECF1050026 /* PaymentValidationRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC160D2F5D85F380A06A7DE6 /* PaymentValidationRequest.swift */; };
 		205A9E3EAD6CDB14824B43EF /* CommunityRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD4B87D36088EEEAE1373EDD /* CommunityRootView.swift */; };
 		227455BD2FA612DE1C7C9960 /* HomeViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A326CF5B42F594F864C35AA /* HomeViewState.swift */; };
 		23CFA179FD7F023604CE8BA9 /* CartRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A6C95DE2C9049EC2347092F /* CartRootView.swift */; };
@@ -116,7 +117,9 @@
 		5D8E188D1077595543DAA9E3 /* SocketIO in Frameworks */ = {isa = PBXBuildFile; productRef = 388AE022EC709F1CBEACD1D2 /* SocketIO */; };
 		5DB615CA60BDA3EEA7C17F47 /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96D63FC8324E76077240B952 /* Logger.swift */; };
 		5DD9940CED39BAFB3253E327 /* ChatRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E258F59B1E5199534B9CF180 /* ChatRootView.swift */; };
+		5E4E182BE2018D272E288D4B /* PaymentGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BDA32263C9C4CB3FDEC632D /* PaymentGateway.swift */; };
 		5E8C701678975B49D255F945 /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A601A67E6D65538EBAB6897 /* KeychainTokenStore.swift */; };
+		5EADEB41AA17FCA5EB994C4F /* iamport-ios in Frameworks */ = {isa = PBXBuildFile; productRef = 586D04CA1547C5C818F57818 /* iamport-ios */; };
 		5FC6F7157BC44C9955878177 /* DistanceChipBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AECE04BD7907B463D5474B9 /* DistanceChipBar.swift */; };
 		5FD6CC88F1D54A170A6330DB /* HTTPMethod.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5304DF39A31E6507B7C1F1B0 /* HTTPMethod.swift */; };
 		601A97C5518504DDB80A3B85 /* BannerMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1BD0E66A052A6E9248DE095 /* BannerMapper.swift */; };
@@ -140,6 +143,7 @@
 		6E45D1B05EB57ED8C443CEEA /* CommunityDetailBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F7925B11DFD6791901C5E50 /* CommunityDetailBuilder.swift */; };
 		70683158C0CD4B343E42AD34 /* SkeletonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53349451F141535306773DF2 /* SkeletonView.swift */; };
 		707CA4AA3F2DEFB81BD3197D /* AuthViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40CDC00FBF2ED7A667E74E8F /* AuthViewState.swift */; };
+		72454DD0715FFDE4CDFBE67B /* PortOnePaymentGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE17BA18DA3DE1DF8E799D63 /* PortOnePaymentGateway.swift */; };
 		72A1D2C57C102FB411ADA833 /* CartAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C401BD2131B3920C4F08206 /* CartAction.swift */; };
 		7350E844D21AEAB999A7721C /* StoreDetailPresenterCartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16DB843D97AB3AFB23C2FA6C /* StoreDetailPresenterCartTests.swift */; };
 		78E867EFD4450A6E18222FAA /* Endpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = B743FCF1E51E9197B6B45367 /* Endpoint.swift */; };
@@ -448,6 +452,7 @@
 		766D27CB86D6B196A031EB44 /* AuthRemoteDataSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRemoteDataSource.swift; sourceTree = "<group>"; };
 		7B41C71505215A6191ED8101 /* StoreDetailViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreDetailViewState.swift; sourceTree = "<group>"; };
 		7B733773BECE528ABAD16BB2 /* AppStartFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStartFlowTests.swift; sourceTree = "<group>"; };
+		7BDA32263C9C4CB3FDEC632D /* PaymentGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentGateway.swift; sourceTree = "<group>"; };
 		7DDCF7848B445B91CE0CFB85 /* CommunityDetailFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityDetailFeatureTests.swift; sourceTree = "<group>"; };
 		7DF28EF57A6D857F20994E44 /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
 		7EFA95B82D2B11CB11C885E8 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
@@ -547,8 +552,10 @@
 		CB291405D6088201838633C9 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		CB6492B7F7A9762448472E84 /* StoreRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreRepository.swift; sourceTree = "<group>"; };
 		CB71EB2004DA3C32125B55E4 /* CheckoutPriceValidationRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutPriceValidationRequest.swift; sourceTree = "<group>"; };
+		CC160D2F5D85F380A06A7DE6 /* PaymentValidationRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentValidationRequest.swift; sourceTree = "<group>"; };
 		CC487C7CA1AF34E5EB426C1C /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		CE0A6B995B443EB62F59DFA7 /* CommunityFeedSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityFeedSectionView.swift; sourceTree = "<group>"; };
+		CE17BA18DA3DE1DF8E799D63 /* PortOnePaymentGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortOnePaymentGateway.swift; sourceTree = "<group>"; };
 		CF8A455DDEE40CBFC62D9E80 /* ProfileBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileBuilder.swift; sourceTree = "<group>"; };
 		CFA9CC27B5A6E58B6F2FA1F5 /* CommunityDataMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityDataMappingTests.swift; sourceTree = "<group>"; };
 		D04B11AA6A92BEE6096DCDEB /* URLSessionConfigurationFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLSessionConfigurationFactory.swift; sourceTree = "<group>"; };
@@ -620,6 +627,7 @@
 				3FABD41FCD22CF1F4089FD11 /* FirebaseCore in Frameworks */,
 				D677499C6EB0FA86F381906B /* FirebaseMessaging in Frameworks */,
 				5D8E188D1077595543DAA9E3 /* SocketIO in Frameworks */,
+				5EADEB41AA17FCA5EB994C4F /* iamport-ios in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -805,6 +813,7 @@
 				429FD05B7DE94C567FBD13F2 /* CursorPage.swift */,
 				E26642A05CC7A12AA824778C /* OrderDetail.swift */,
 				61F71AC1E997F6E59823868B /* OrderSummary.swift */,
+				CC160D2F5D85F380A06A7DE6 /* PaymentValidationRequest.swift */,
 				FBA537FF793BFC6C3DA5DFC8 /* Store.swift */,
 				FBA660DEDA65BFCADF86A4F2 /* StoreDetail.swift */,
 				DE4C3DE1B6A535CAD971FD8F /* StoreReview.swift */,
@@ -1139,6 +1148,15 @@
 			path = Banner;
 			sourceTree = "<group>";
 		};
+		AB2DE54C89F229A281FD84A3 /* Payment */ = {
+			isa = PBXGroup;
+			children = (
+				7BDA32263C9C4CB3FDEC632D /* PaymentGateway.swift */,
+				CE17BA18DA3DE1DF8E799D63 /* PortOnePaymentGateway.swift */,
+			);
+			path = Payment;
+			sourceTree = "<group>";
+		};
 		AC3C125F71F907CA9C4F0D91 /* Sections */ = {
 			isa = PBXGroup;
 			children = (
@@ -1283,6 +1301,7 @@
 				D18D25125760EC0317A2F6A3 /* Image */,
 				9AB39892B8ED0C43A8F8BDCF /* Location */,
 				BC0A72263D6D5BF610378AE9 /* Map */,
+				AB2DE54C89F229A281FD84A3 /* Payment */,
 			);
 			path = Platform;
 			sourceTree = "<group>";
@@ -1453,6 +1472,7 @@
 				D2C10EED87D98D0533C61E31 /* FirebaseCore */,
 				4514A90697240D2F396126AD /* FirebaseMessaging */,
 				388AE022EC709F1CBEACD1D2 /* SocketIO */,
+				586D04CA1547C5C818F57818 /* iamport-ios */,
 			);
 			productName = Pikko;
 			productReference = D387DD5610689CAC46E9E9FA /* Pikko.app */;
@@ -1488,7 +1508,7 @@
 					59CD4DF11480D2E2AC5DAE07 = {
 						DevelopmentTeam = 63SB2B8YJ5;
 						ProvisioningStyle = Automatic;
-						SystemCapabilities = "[\"com.apple.Push\": [\"enabled\": 1], \"com.apple.BackgroundModes\": [\"enabled\": 1]]";
+						SystemCapabilities = "[\"com.apple.BackgroundModes\": [\"enabled\": 1], \"com.apple.Push\": [\"enabled\": 1]]";
 					};
 				};
 			};
@@ -1504,6 +1524,7 @@
 			packageReferences = (
 				BC211450ABF8FAF85611B366 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				1A02C8BF8473C6E03463E68C /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				2E31E0A02B64DB67521514E1 /* XCRemoteSwiftPackageReference "iamport-ios" */,
 				3100CC5B00733312146D47DE /* XCRemoteSwiftPackageReference "kakao-ios-sdk" */,
 				00F6549073D50C9CDBC13C0B /* XCRemoteSwiftPackageReference "socket.io-client-swift" */,
 			);
@@ -1772,7 +1793,9 @@
 				0FD08996BB71964BB66D63E0 /* OrderSummary.swift in Sources */,
 				B9EC58D5A21CD664C9B0262C /* OrderView.swift in Sources */,
 				DB635C8C976318F828235D8D /* OrderViewState.swift in Sources */,
+				5E4E182BE2018D272E288D4B /* PaymentGateway.swift in Sources */,
 				EF901ED03B058B15FF447C05 /* PaymentReceiptResponseDTO.swift in Sources */,
+				1F489982234A16ECF1050026 /* PaymentValidationRequest.swift in Sources */,
 				2C49B2D912A8535CDBEDDB86 /* PikkoApp.swift in Sources */,
 				FA2354594A43079C34CF33B8 /* PikkoColor.swift in Sources */,
 				7F466DBE65DD68FC067B39DF /* PikkoRadius.swift in Sources */,
@@ -1781,6 +1804,7 @@
 				C4A17FDC192D0B8235EAE825 /* PikkoTypography.swift in Sources */,
 				28EE25E097A3D22448F9549C /* PlaceholderImageFactory.swift in Sources */,
 				E3B521A50FB03A06D8A3DA2C /* PopularSearchTermsResponseDTO.swift in Sources */,
+				72454DD0715FFDE4CDFBE67B /* PortOnePaymentGateway.swift in Sources */,
 				EC1EAF63C49B1D95DAADC779 /* PreviewSupport.swift in Sources */,
 				E8BF60F2569E03426248B4D3 /* PrimaryButton.swift in Sources */,
 				47EDA0DDBC64CDB13CDD8EDE /* ProfileAction.swift in Sources */,
@@ -1928,11 +1952,17 @@
 				INFOPLIST_KEY_GOOGLE_IOS_CLIENT_ID = "$(GOOGLE_IOS_CLIENT_ID)";
 				INFOPLIST_KEY_GOOGLE_REVERSED_CLIENT_ID = "$(GOOGLE_REVERSED_CLIENT_ID)";
 				INFOPLIST_KEY_KAKAO_NATIVE_APP_KEY = "$(KAKAO_NATIVE_APP_KEY)";
+				INFOPLIST_KEY_PAYMENT_TEST_MODE = "$(PAYMENT_TEST_MODE)";
 				INFOPLIST_KEY_PIKKO_APP_ENV = "$(PIKKO_APP_ENV)";
 				INFOPLIST_KEY_PIKKO_BASE_URL = "$(PIKKO_BASE_URL)";
 				INFOPLIST_KEY_PIKKO_CHAT_SOCKET_DEBUG_ENABLED = "$(PIKKO_CHAT_SOCKET_DEBUG_ENABLED)";
 				INFOPLIST_KEY_PIKKO_INTERNAL_STUB_AUTH_ENABLED = "$(PIKKO_INTERNAL_STUB_AUTH_ENABLED)";
 				INFOPLIST_KEY_PIKKO_SESAC_KEY = "$(PIKKO_SESAC_KEY)";
+				INFOPLIST_KEY_PORTONE_APP_SCHEME = "$(PORTONE_APP_SCHEME)";
+				INFOPLIST_KEY_PORTONE_PAY_METHOD = "$(PORTONE_PAY_METHOD)";
+				INFOPLIST_KEY_PORTONE_PG = "$(PORTONE_PG)";
+				INFOPLIST_KEY_PORTONE_PG_ID = "$(PORTONE_PG_ID)";
+				INFOPLIST_KEY_PORTONE_USER_CODE = "$(PORTONE_USER_CODE)";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2041,11 +2071,17 @@
 				INFOPLIST_KEY_GOOGLE_IOS_CLIENT_ID = "$(GOOGLE_IOS_CLIENT_ID)";
 				INFOPLIST_KEY_GOOGLE_REVERSED_CLIENT_ID = "$(GOOGLE_REVERSED_CLIENT_ID)";
 				INFOPLIST_KEY_KAKAO_NATIVE_APP_KEY = "$(KAKAO_NATIVE_APP_KEY)";
+				INFOPLIST_KEY_PAYMENT_TEST_MODE = "$(PAYMENT_TEST_MODE)";
 				INFOPLIST_KEY_PIKKO_APP_ENV = "$(PIKKO_APP_ENV)";
 				INFOPLIST_KEY_PIKKO_BASE_URL = "$(PIKKO_BASE_URL)";
 				INFOPLIST_KEY_PIKKO_CHAT_SOCKET_DEBUG_ENABLED = "$(PIKKO_CHAT_SOCKET_DEBUG_ENABLED)";
 				INFOPLIST_KEY_PIKKO_INTERNAL_STUB_AUTH_ENABLED = "$(PIKKO_INTERNAL_STUB_AUTH_ENABLED)";
 				INFOPLIST_KEY_PIKKO_SESAC_KEY = "$(PIKKO_SESAC_KEY)";
+				INFOPLIST_KEY_PORTONE_APP_SCHEME = "$(PORTONE_APP_SCHEME)";
+				INFOPLIST_KEY_PORTONE_PAY_METHOD = "$(PORTONE_PAY_METHOD)";
+				INFOPLIST_KEY_PORTONE_PG = "$(PORTONE_PG)";
+				INFOPLIST_KEY_PORTONE_PG_ID = "$(PORTONE_PG_ID)";
+				INFOPLIST_KEY_PORTONE_USER_CODE = "$(PORTONE_USER_CODE)";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2131,6 +2167,14 @@
 				minimumVersion = 9.0.0;
 			};
 		};
+		2E31E0A02B64DB67521514E1 /* XCRemoteSwiftPackageReference "iamport-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/iamport/iamport-ios";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.4.7;
+			};
+		};
 		3100CC5B00733312146D47DE /* XCRemoteSwiftPackageReference "kakao-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/kakao/kakao-ios-sdk";
@@ -2159,6 +2203,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = BC211450ABF8FAF85611B366 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseMessaging;
+		};
+		586D04CA1547C5C818F57818 /* iamport-ios */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2E31E0A02B64DB67521514E1 /* XCRemoteSwiftPackageReference "iamport-ios" */;
+			productName = "iamport-ios";
 		};
 		BCBA6EE0F81C0EAD96C8E290 /* KakaoSDKAuth */ = {
 			isa = XCSwiftPackageProductDependency;

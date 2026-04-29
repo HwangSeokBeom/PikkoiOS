@@ -36,6 +36,8 @@ struct CheckoutPriceValidationIssue: Identifiable, Equatable, Sendable {
     }
 }
 
+// Legacy server-driven WebView payload kept only for backward-compatible decoding.
+// The default checkout path now uses PortOne iamport-ios with order_code as merchant_uid.
 struct CheckoutPaymentBridgePayload: Equatable, Sendable {
     let paymentURL: URL?
     let redirectURL: URL?

@@ -99,6 +99,25 @@ final class OrderDetailFeatureTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.emptyState?.message, "주문 상세를 가져오지 못했어요.")
     }
 
+    func testFetchOrderDetailNotFoundShowsOrderPropagationMessage() async {
+        let presenter = OrderDetailPresenter(
+            initialOrderID: "order-1",
+            interactor: SpyOrderDetailInteractor(
+                initialState: makeInitialState(orderID: "order-1"),
+                fetchResult: .failure(.notFound)
+            ),
+            router: SpyOrderDetailRouter(),
+            mapper: OrderMapper(fileURLResolver: StubAuthorizedFileURLResolver())
+        )
+
+        await presenter.send(.onAppear)
+
+        XCTAssertFalse(presenter.viewState.hasLoadedContent)
+        XCTAssertEqual(presenter.viewState.emptyState?.title, "주문 반영 대기 중")
+        XCTAssertEqual(presenter.viewState.emptyState?.message, "주문이 접수되었습니다. 목록 반영까지 잠시 걸릴 수 있습니다.")
+        XCTAssertEqual(presenter.viewState.emptyState?.actionTitle, "다시 확인")
+    }
+
     private func makeInitialState(orderID: String) -> OrderDetailViewState {
         var state = OrderDetailViewState(orderID: orderID)
         state.isLoading = true

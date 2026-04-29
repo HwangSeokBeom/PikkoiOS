@@ -20,6 +20,7 @@ final class OrderPresenter: ObservableObject {
         self.interactor = interactor
         self.router = router
         bindOrderStatusChanges()
+        bindOrderRefreshRequests()
     }
 
     func send(_ action: OrderAction) async {
@@ -29,13 +30,13 @@ final class OrderPresenter: ObservableObject {
             hasLoaded = true
             viewState = await interactor.loadInitialState()
             guard viewState.isInitialLoading else { return }
-            await loadOrders(mode: .initial)
+            _ = await loadOrders(mode: .initial)
 
         case .refreshRequested:
-            await loadOrders(mode: .refresh)
+            _ = await loadOrders(mode: .refresh)
 
         case .retryTapped:
-            await loadOrders(mode: viewState.orders.isEmpty ? .initial : .refresh)
+            _ = await loadOrders(mode: viewState.orders.isEmpty ? .initial : .refresh)
 
         case .filterTapped(let filter):
             guard viewState.selectedFilter != filter else { return }
@@ -54,7 +55,7 @@ final class OrderPresenter: ObservableObject {
                   viewState.canLoadMore,
                   !viewState.isLoadingMore,
                   !isRequestInFlight else { return }
-            await loadOrders(mode: .loadMore)
+            _ = await loadOrders(mode: .loadMore)
 
         case .loginRequiredTapped:
             router.routeToAuth()
@@ -64,8 +65,9 @@ final class OrderPresenter: ObservableObject {
         }
     }
 
-    private func loadOrders(mode: LoadingMode) async {
-        guard !isRequestInFlight else { return }
+    @discardableResult
+    private func loadOrders(mode: LoadingMode) async -> Bool {
+        guard !isRequestInFlight else { return false }
         isRequestInFlight = true
         setLoadingFlags(for: mode, isLoading: true)
         if mode != .loadMore {
@@ -83,10 +85,14 @@ final class OrderPresenter: ObservableObject {
             await attemptAutoNavigationIfNeeded()
         } catch {
             apply(error: error, mode: mode)
+            setLoadingFlags(for: mode, isLoading: false)
+            isRequestInFlight = false
+            return false
         }
 
         setLoadingFlags(for: mode, isLoading: false)
         isRequestInFlight = false
+        return true
     }
 
     private func merge(page: CursorPage<OrderSummary>, mode: LoadingMode) {
@@ -315,6 +321,43 @@ final class OrderPresenter: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+    }
+
+    private func bindOrderRefreshRequests() {
+        NotificationCenter.default.publisher(for: .pikkoOrdersShouldRefresh)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                guard let event = notification.userInfo?[OrderRefreshNotificationUserInfoKey.event] as? OrderRefreshNotification else {
+                    return
+                }
+
+                Task { @MainActor [weak self] in
+                    await self?.handle(refreshRequest: event)
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func handle(refreshRequest event: OrderRefreshNotification) async {
+        if let orderID = event.orderID {
+            viewState.highlightedOrderID = orderID
+            hasAutoNavigatedHighlightedOrder = false
+        }
+
+        guard hasLoaded else { return }
+
+        let refreshed = await loadOrders(mode: .refresh)
+        guard refreshed else { return }
+
+        let matchedOrder = allOrders.first { order in
+            event.orderID.map { $0 == order.id } == true
+                || event.orderCode.map { $0 == order.orderCode } == true
+        }
+        if matchedOrder == nil {
+            viewState.successMessage = event.message ?? "주문이 접수되었습니다. 목록 반영까지 잠시 걸릴 수 있습니다."
+        } else {
+            viewState.successMessage = "주문 내역을 최신 상태로 새로고침했어요."
+        }
     }
 
     private func apply(statusChange event: OrderStatusChangeNotification) {

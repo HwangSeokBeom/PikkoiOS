@@ -142,6 +142,7 @@ struct ChatRootView: View {
                 .padding(.top, PikkoSpacing.lg)
                 .padding(.bottom, PikkoSpacing.md)
             }
+            .scrollDismissesKeyboard(.interactively)
             .onChange(of: presenter.viewState.messages.last?.id) { _, id in
                 guard let id else { return }
                 withAnimation(.easeOut(duration: 0.2)) {

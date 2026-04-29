@@ -70,7 +70,7 @@ struct OrderView: View {
                 }
             }
         }
-        .alert("주문을 취소할까요?", isPresented: cancelConfirmationBinding) {
+        .alert("주문 취소 안내", isPresented: cancelConfirmationBinding) {
             Button("아니요", role: .cancel) {
                 cancelCandidate = nil
             }
@@ -80,7 +80,7 @@ struct OrderView: View {
                 Task { await presenter.send(.cancelConfirmed(orderID)) }
             }
         } message: {
-            Text("주문이 취소되면 다시 되돌릴 수 없어요.")
+            Text("결제 완료 주문 취소는 환불 처리가 필요합니다. 현재 앱에서는 지원 준비 중입니다.")
         }
     }
 

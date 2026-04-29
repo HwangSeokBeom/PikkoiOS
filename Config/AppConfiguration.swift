@@ -66,6 +66,8 @@ struct AppConfiguration: Sendable {
     private static let placeholderKakaoNativeAppKey = "REPLACE_WITH_KAKAO_NATIVE_APP_KEY"
     private static let placeholderGoogleClientID = "REPLACE_WITH_GOOGLE_IOS_CLIENT_ID"
     private static let placeholderGoogleReversedClientID = "REPLACE_WITH_GOOGLE_REVERSED_CLIENT_ID"
+    private static let placeholderPortOneUserCode = "REPLACE_WITH_PORTONE_USER_CODE"
+    private static let placeholderPortOnePgID = "REPLACE_WITH_PORTONE_PG_ID"
 
     enum BundleKey {
         static let environment = "PIKKO_APP_ENV"
@@ -81,6 +83,12 @@ struct AppConfiguration: Sendable {
         static let googleReversedClientIDAliases = [googleReversedClientID, "GoogleReversedClientID"]
         static let internalStubAuthEnabled = "PIKKO_INTERNAL_STUB_AUTH_ENABLED"
         static let chatSocketDebugEnabled = "PIKKO_CHAT_SOCKET_DEBUG_ENABLED"
+        static let portOneUserCode = "PORTONE_USER_CODE"
+        static let portOnePg = "PORTONE_PG"
+        static let portOnePgID = "PORTONE_PG_ID"
+        static let portOnePayMethod = "PORTONE_PAY_METHOD"
+        static let portOneAppScheme = "PORTONE_APP_SCHEME"
+        static let paymentTestMode = "PAYMENT_TEST_MODE"
     }
 
     let environment: AppEnvironment
@@ -94,6 +102,12 @@ struct AppConfiguration: Sendable {
     let googleReversedClientID: String?
     let isInternalStubAuthEnabled: Bool
     let isChatSocketDebugEnabled: Bool
+    let portOneUserCode: String?
+    let portOnePg: String
+    let portOnePgID: String?
+    let portOnePayMethod: String
+    let portOneAppScheme: String
+    let isPaymentTestMode: Bool
     let authorizationHeaderFormat: TokenHeaderFormat
 
     let defaultTimeout: TimeInterval
@@ -110,6 +124,12 @@ struct AppConfiguration: Sendable {
         googleReversedClientID: String? = nil,
         internalStubAuthEnabled: Bool? = nil,
         chatSocketDebugEnabled: Bool? = nil,
+        portOneUserCode: String? = nil,
+        portOnePg: String? = nil,
+        portOnePgID: String? = nil,
+        portOnePayMethod: String? = nil,
+        portOneAppScheme: String? = nil,
+        paymentTestMode: Bool? = nil,
         authorizationHeaderFormat: TokenHeaderFormat = .raw
     ) {
         let resolvedBaseURL = Self.resolveBaseURL(explicitBaseURL: baseURL, bundle: bundle)
@@ -131,9 +151,26 @@ struct AppConfiguration: Sendable {
             )
         self.isInternalStubAuthEnabled = internalStubAuthEnabled ?? Self.resolveInternalStubAuthEnabled(bundle: bundle)
         self.isChatSocketDebugEnabled = chatSocketDebugEnabled ?? Self.resolveChatSocketDebugEnabled(bundle: bundle)
+        self.portOneUserCode = portOneUserCode ?? Self.resolvePortOneUserCode(bundle: bundle)
+        self.portOnePg = portOnePg ?? Self.resolvePortOnePg(bundle: bundle)
+        self.portOnePgID = portOnePgID ?? Self.resolvePortOnePgID(bundle: bundle)
+        self.portOnePayMethod = portOnePayMethod ?? Self.resolvePortOnePayMethod(bundle: bundle)
+        self.portOneAppScheme = portOneAppScheme ?? Self.resolvePortOneAppScheme(bundle: bundle)
+        self.isPaymentTestMode = paymentTestMode ?? Self.resolvePaymentTestMode(bundle: bundle)
         self.defaultTimeout = URLSessionConfigurationFactory.defaultRequestTimeout
         self.uploadTimeout = URLSessionConfigurationFactory.uploadRequestTimeout
         self.paymentValidationTimeout = URLSessionConfigurationFactory.paymentValidationRequestTimeout
+
+        if environment == .production,
+           Self.isPotentiallyUnsafePaymentConfiguration(
+            isPaymentTestMode: self.isPaymentTestMode,
+            pgID: self.portOnePgID
+           ) {
+            AppConfigurationWarningLogger.shared.logOnce(
+                key: "PORTONE_PRODUCTION_TEST_CONFIGURATION",
+                message: "Production payment configuration points at a test PG. Real payment is blocked until PORTONE_PG_ID/PAYMENT_TEST_MODE are corrected."
+            )
+        }
     }
 
     private static func resolveBaseURL(
@@ -225,6 +262,47 @@ struct AppConfiguration: Sendable {
 
     private static func resolveChatSocketDebugEnabled(bundle: Bundle) -> Bool {
         configuredBool(for: BundleKey.chatSocketDebugEnabled, bundle: bundle)
+    }
+
+    private static func resolvePortOneUserCode(bundle: Bundle) -> String? {
+        configuredString(
+            forAnyOf: [BundleKey.portOneUserCode],
+            bundle: bundle,
+            placeholder: placeholderPortOneUserCode
+        )
+    }
+
+    private static func resolvePortOnePg(bundle: Bundle) -> String {
+        configuredString(
+            forAnyOf: [BundleKey.portOnePg],
+            bundle: bundle
+        ) ?? "html5_inicis"
+    }
+
+    private static func resolvePortOnePgID(bundle: Bundle) -> String? {
+        configuredString(
+            forAnyOf: [BundleKey.portOnePgID],
+            bundle: bundle,
+            placeholder: placeholderPortOnePgID
+        )
+    }
+
+    private static func resolvePortOnePayMethod(bundle: Bundle) -> String {
+        configuredString(
+            forAnyOf: [BundleKey.portOnePayMethod],
+            bundle: bundle
+        ) ?? "card"
+    }
+
+    private static func resolvePortOneAppScheme(bundle: Bundle) -> String {
+        configuredString(
+            forAnyOf: [BundleKey.portOneAppScheme],
+            bundle: bundle
+        ) ?? "pikko"
+    }
+
+    private static func resolvePaymentTestMode(bundle: Bundle) -> Bool {
+        configuredBool(for: BundleKey.paymentTestMode, bundle: bundle)
     }
 
     private static func configuredBool(for key: String, bundle: Bundle) -> Bool {
@@ -384,6 +462,38 @@ struct AppConfiguration: Sendable {
 
     var canAttemptRemoteAuth: Bool {
         hasValidBaseURL && hasValidSeSACKey
+    }
+
+    var shouldShowPaymentWarning: Bool {
+        isPaymentTestMode || Self.isPotentiallyUnsafePaymentConfiguration(
+            isPaymentTestMode: false,
+            pgID: portOnePgID
+        )
+    }
+
+    var portOnePgId: String? {
+        portOnePgID
+    }
+
+    var blocksProductionPayment: Bool {
+        environment == .production && Self.isPotentiallyUnsafePaymentConfiguration(
+            isPaymentTestMode: isPaymentTestMode,
+            pgID: portOnePgID
+        )
+    }
+
+    private static func isPotentiallyUnsafePaymentConfiguration(
+        isPaymentTestMode: Bool,
+        pgID: String?
+    ) -> Bool {
+        if isPaymentTestMode {
+            return true
+        }
+
+        guard let normalizedPGID = normalizedConfiguredValue(pgID) else {
+            return false
+        }
+        return normalizedPGID.range(of: "test", options: [.caseInsensitive]) != nil
     }
 
     static func reversedGoogleClientID(from clientID: String) -> String? {

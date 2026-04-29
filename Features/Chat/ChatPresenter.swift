@@ -42,7 +42,10 @@ final class ChatPresenter: ObservableObject {
     func send(_ action: ChatAction) async {
         switch action {
         case .onAppear:
-            guard !hasLoaded else { return }
+            guard !hasLoaded else {
+                await resumeRealtimeIfNeeded()
+                return
+            }
             hasLoaded = true
             viewState.isExternalDetailPresentation = interactor.target != nil
             switch interactor.target {
@@ -62,9 +65,7 @@ final class ChatPresenter: ObservableObject {
                 await loadRooms(isRefresh: true)
             }
         case .onDisappear:
-            if viewState.isExternalDetailPresentation {
-                interactor.stopRealtime()
-            }
+            handleDisappear()
         case .primaryButtonTapped:
             if viewState.requiresAuthentication {
                 router.routeToPrimaryDestination()
@@ -165,6 +166,7 @@ final class ChatPresenter: ObservableObject {
             roomID: roomID,
             opponentID: nil,
             storeID: nil,
+            storeName: nil,
             displayTitle: title,
             canUseStoreScopedTitle: false
         )
@@ -227,6 +229,28 @@ final class ChatPresenter: ObservableObject {
         } catch {
             Logger.shared.warning("[Chat] realtime connection failed: \(error.localizedDescription)")
         }
+    }
+
+    private func resumeRealtimeIfNeeded() async {
+        guard viewState.mode == .roomDetail,
+              let roomID = viewState.selectedRoomID,
+              realtimeRoomID == nil else {
+            return
+        }
+
+        Logger.shared.debug("[ChatViewModel] resumeRealtime roomId=\(roomID)")
+        await loadCachedMessagesAndStartLiveSync(roomID: roomID, isRefresh: false)
+    }
+
+    private func handleDisappear() {
+        guard viewState.mode == .roomDetail,
+              realtimeRoomID != nil else {
+            return
+        }
+
+        Logger.shared.debug("[ChatViewModel] disconnectSocket onDisappear roomId=\(realtimeRoomID ?? "-")")
+        realtimeRoomID = nil
+        interactor.stopRealtime()
     }
 
     private func synchronizeMessages(roomID: String, isRefresh: Bool) async {
@@ -442,11 +466,9 @@ final class ChatPresenter: ObservableObject {
     private func applyContext(_ context: ChatRoomContext) {
         currentContext = context
         viewState.title = context.displayTitle
-        if context.storeID != nil && !context.canUseStoreScopedTitle {
-            Logger.shared.debug(
-                "[ChatRoomContext] storeScopedTitle disabled roomId=\(context.roomID) storeId=\(context.storeID ?? "-") title=\(context.displayTitle)"
-            )
-        }
+        Logger.shared.debug(
+            "[ChatRoomContext] resolvedTitle=\(context.displayTitle) roomId=\(context.roomID) storeId=\(context.storeID ?? "-") storeName=\(context.storeName ?? "-") opponentId=\(context.opponentID ?? "-") canUseStoreScopedTitle=\(context.canUseStoreScopedTitle)"
+        )
     }
 
     private func deduplicatedRooms(_ rooms: [ChatRoom]) -> [ChatRoom] {

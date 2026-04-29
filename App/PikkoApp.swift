@@ -3,6 +3,7 @@ import FirebaseMessaging
 import SwiftUI
 import UIKit
 import UserNotifications
+import iamport_ios
 
 @main
 struct PikkoApp: App {
@@ -15,6 +16,8 @@ struct PikkoApp: App {
     @StateObject private var appState: AppState
 
     init() {
+        _ = PikkoAppDelegate.configureFirebaseIfNeeded(shouldLogConfigured: false)
+
         let container = AppDIContainer()
         let appState = container.makeAppState()
 
@@ -36,28 +39,60 @@ struct PikkoApp: App {
             .environmentObject(appState.sessionStore)
             .environmentObject(appState.cartStore)
             .onOpenURL { url in
+                // 결제 복귀 URL은 PortOne SDK가 먼저 처리한다.
+                if url.scheme == container.appConfiguration.portOneAppScheme {
+                    Iamport.shared.receivedURL(url)
+                    if Self.isPortOnePaymentReturnURL(url) {
+                        return
+                    }
+                }
+
+                // 소셜 로그인 URL은 기존 Kakao/Google 처리 흐름을 유지한다.
                 if !container.socialAuthService.handleOpenURL(url) {
+                    // 결제/소셜 외 URL은 앱 딥링크로 넘긴다.
                     appState.pendingDeepLink = url
                 }
             }
         }
     }
+
+    private static func isPortOnePaymentReturnURL(_ url: URL) -> Bool {
+        let searchableText = [
+            url.host,
+            url.path,
+            url.query,
+            url.fragment
+        ]
+        .compactMap { $0?.lowercased() }
+        .joined(separator: " ")
+
+        return searchableText.contains("imp_uid")
+            || searchableText.contains("imp_success")
+            || searchableText.contains("merchant_uid")
+            || searchableText.contains("error_msg")
+            || searchableText.contains("iamport")
+            || searchableText.contains("payment")
+            || searchableText.contains("payments")
+    }
 }
 
 final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
+    private static var hasConfiguredFirebase = false
+
     private var isFirebaseConfigured = false
 
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        isFirebaseConfigured = configureFirebaseIfNeeded()
-
-        UNUserNotificationCenter.current().delegate = self
-        requestNotificationPermission(application: application)
+        isFirebaseConfigured = Self.configureFirebaseIfNeeded(shouldLogConfigured: true)
 
         if isFirebaseConfigured {
+            UNUserNotificationCenter.current().delegate = self
             Messaging.messaging().delegate = self
+            requestNotificationPermission(application: application)
+        } else {
+            print("DEBUG [FCM] notification setup skipped because Firebase is not configured")
         }
 
         return true
@@ -95,17 +130,25 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         [.banner, .list, .sound, .badge]
     }
 
-    private func configureFirebaseIfNeeded() -> Bool {
-        if FirebaseApp.app() == nil {
+    static func configureFirebaseIfNeeded(shouldLogConfigured: Bool) -> Bool {
+        if !hasConfiguredFirebase {
             guard Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil else {
                 print("DEBUG [FCM] Firebase configure skipped missing GoogleService-Info.plist")
                 return false
             }
 
             FirebaseApp.configure()
+            hasConfiguredFirebase = FirebaseApp.app() != nil
         }
 
-        print("DEBUG [FCM] Firebase configured")
+        guard hasConfiguredFirebase, FirebaseApp.app() != nil else {
+            print("DEBUG [FCM] Firebase configure failed app=nil")
+            return false
+        }
+
+        if shouldLogConfigured {
+            print("DEBUG [FCM] Firebase configured")
+        }
         return true
     }
 

@@ -231,7 +231,8 @@ private struct StubOrderRepository: OrderRepository {
         throw NetworkError.invalidRequest
     }
 
-    func validatePayment(impUID: String) async throws -> ValidatedPaymentReceipt {
+    func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt {
+        _ = request
         throw NetworkError.invalidRequest
     }
 
