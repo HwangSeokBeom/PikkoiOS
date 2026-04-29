@@ -316,19 +316,38 @@ final class ChatPresenter: ObservableObject {
 
         viewState.isSending = true
         viewState.errorMessage = nil
-        Logger.shared.debug("[ChatViewModel] sendMessage contentLength=\(content.count) fileCount=\(files.count)")
+        defer { viewState.isSending = false }
         var pendingMessageID: String?
 
         do {
             let pendingMessage = try interactor.makePendingMessage(roomID: roomID, content: content, files: files)
-            pendingMessageID = pendingMessage.id
+            let localTemporaryID = pendingMessage.effectiveLocalTemporaryID ?? pendingMessage.id
+            pendingMessageID = localTemporaryID
+            Logger.shared.debug("[ChatSend] start roomId=\(roomID) localTemporaryId=\(localTemporaryID) contentLength=\(content.count)")
             let scope = currentScope(roomID: roomID)
+
+            if !messages.contains(where: { $0.effectiveLocalTemporaryID == localTemporaryID }) {
+                messages = ChatMessageMergePolicy.merged(
+                    existing: messages,
+                    incoming: pendingMessage,
+                    currentUserID: interactor.currentUserID,
+                    source: "send"
+                )
+            }
             messages = try await interactor.savePendingMessage(pendingMessage, scope: scope)
             viewState.messageText = ""
             viewState.attachedFilePaths = []
+            Logger.shared.debug("[ChatSend] optimisticAppend localTemporaryId=\(localTemporaryID) messageCount=\(messages.count)")
             applyMessages()
             let message = try await interactor.sendMessage(scope: scope, content: content, files: files)
-            messages = try await interactor.replacePendingMessage(localID: pendingMessage.id, with: message, scope: scope)
+            let serverChatID = message.effectiveServerChatID ?? message.id
+            Logger.shared.debug("[ChatSend] postSuccess localTemporaryId=\(localTemporaryID) serverChatId=\(serverChatID)")
+            if messages.contains(where: { $0.effectiveServerChatID == serverChatID }) {
+                Logger.shared.debug("[ChatMerge] skipDuplicate serverChatId=\(serverChatID) source=post")
+            } else {
+                Logger.shared.debug("[ChatMerge] replaceOptimistic localTemporaryId=\(localTemporaryID) serverChatId=\(serverChatID) source=post")
+            }
+            messages = try await interactor.replacePendingMessage(localID: localTemporaryID, with: message, scope: scope)
             updateRoomList(with: message)
             applyMessages()
         } catch {
@@ -338,8 +357,6 @@ final class ChatPresenter: ObservableObject {
             }
             viewState.errorMessage = transientErrorMessage(from: error)
         }
-
-        viewState.isSending = false
     }
 
     private func upload(_ files: [ChatUploadFile]) async {
@@ -360,16 +377,12 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func merge(_ message: ChatMessage) {
-        if messages.contains(where: { $0.id == message.id }) {
-            Logger.shared.debug("[ChatSocket] duplicate ignored chatId=\(message.id)")
-            return
-        }
-
-        messages.removeAll { $0.id == message.id }
-        messages.append(message)
-        messages.sort {
-            ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast)
-        }
+        messages = ChatMessageMergePolicy.merged(
+            existing: messages,
+            incoming: message,
+            currentUserID: interactor.currentUserID,
+            source: "socket"
+        )
     }
 
     private func throwCancellationDebugLog() {
@@ -395,6 +408,9 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func applyMessages() {
+        let countBefore = messages.count
+        messages = ChatMessageMergePolicy.deduplicated(messages, currentUserID: interactor.currentUserID)
+        Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(messages.count)")
         viewState.rooms = []
         viewState.messages = makeMessageRows(messages)
         viewState.emptyTitle = viewState.messages.isEmpty ? "아직 대화가 없어요" : nil
@@ -469,7 +485,7 @@ final class ChatPresenter: ObservableObject {
 
     private func makeMessageRow(_ message: ChatMessage, dateText: String?) -> ChatMessageRowViewState {
         ChatMessageRowViewState(
-            id: message.id,
+            id: message.renderID,
             dateText: dateText,
             content: message.content,
             filePaths: message.filePaths,

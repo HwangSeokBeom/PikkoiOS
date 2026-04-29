@@ -15,6 +15,8 @@ enum ChatSendStatus: String, Codable, Equatable, Sendable {
 
 struct ChatMessage: Equatable, Sendable, Identifiable {
     let id: String
+    let localTemporaryID: String?
+    let serverChatID: String?
     let roomID: String
     let content: String
     let createdAt: Date?
@@ -25,6 +27,8 @@ struct ChatMessage: Equatable, Sendable, Identifiable {
 
     init(
         id: String,
+        localTemporaryID: String? = nil,
+        serverChatID: String? = nil,
         roomID: String,
         content: String,
         createdAt: Date?,
@@ -34,6 +38,8 @@ struct ChatMessage: Equatable, Sendable, Identifiable {
         sendStatus: ChatSendStatus = .sent
     ) {
         self.id = id
+        self.localTemporaryID = localTemporaryID
+        self.serverChatID = serverChatID
         self.roomID = roomID
         self.content = content
         self.createdAt = createdAt
@@ -41,6 +47,166 @@ struct ChatMessage: Equatable, Sendable, Identifiable {
         self.sender = sender
         self.filePaths = filePaths
         self.sendStatus = sendStatus
+    }
+
+    var effectiveServerChatID: String? {
+        serverChatID ?? (id.hasPrefix("local-") ? nil : id)
+    }
+
+    var effectiveLocalTemporaryID: String? {
+        localTemporaryID ?? (id.hasPrefix("local-") ? id : nil)
+    }
+
+    var renderID: String {
+        effectiveLocalTemporaryID ?? effectiveServerChatID ?? id
+    }
+
+    func replacingIdentity(
+        id: String? = nil,
+        localTemporaryID: String? = nil,
+        serverChatID: String? = nil,
+        sendStatus: ChatSendStatus? = nil
+    ) -> ChatMessage {
+        ChatMessage(
+            id: id ?? self.id,
+            localTemporaryID: localTemporaryID ?? self.localTemporaryID,
+            serverChatID: serverChatID ?? self.serverChatID,
+            roomID: roomID,
+            content: content,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            sender: sender,
+            filePaths: filePaths,
+            sendStatus: sendStatus ?? self.sendStatus
+        )
+    }
+}
+
+enum ChatMessageMergePolicy {
+    static let optimisticMatchInterval: TimeInterval = 10
+
+    static func merged(
+        existing messages: [ChatMessage],
+        incoming message: ChatMessage,
+        currentUserID: String?,
+        source: String
+    ) -> [ChatMessage] {
+        let countBefore = messages.count
+        var result = messages
+
+        if let serverID = message.effectiveServerChatID,
+           let index = result.firstIndex(where: { $0.effectiveServerChatID == serverID }) {
+            Logger.shared.debug("[ChatMerge] skipDuplicate serverChatId=\(serverID) source=\(source)")
+            result[index] = mergeServerMessage(message, into: result[index])
+            let deduped = deduplicated(result, currentUserID: currentUserID)
+            Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+            return deduped
+        }
+
+        if let serverID = message.effectiveServerChatID,
+           let index = result.firstIndex(where: { isOptimistic($0, matching: message, currentUserID: currentUserID) }) {
+            let localID = result[index].effectiveLocalTemporaryID ?? message.effectiveLocalTemporaryID ?? "-"
+            Logger.shared.debug("[ChatMerge] replaceOptimistic localTemporaryId=\(localID) serverChatId=\(serverID) source=\(source)")
+            result[index] = mergeServerMessage(message, into: result[index])
+            let deduped = deduplicated(result, currentUserID: currentUserID)
+            Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+            return deduped
+        }
+
+        if let localID = message.effectiveLocalTemporaryID,
+           result.contains(where: { $0.effectiveLocalTemporaryID == localID }) {
+            let deduped = deduplicated(result, currentUserID: currentUserID)
+            Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+            return deduped
+        }
+
+        result.append(message)
+        let deduped = deduplicated(result, currentUserID: currentUserID)
+        Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+        return deduped
+    }
+
+    static func deduplicated(_ messages: [ChatMessage], currentUserID: String?) -> [ChatMessage] {
+        var result: [ChatMessage] = []
+
+        for message in sorted(messages) {
+            if let serverID = message.effectiveServerChatID {
+                if let index = result.firstIndex(where: { $0.effectiveServerChatID == serverID }) {
+                    result[index] = mergeServerMessage(message, into: result[index])
+                } else {
+                    result.removeAll { existing in
+                        existing.effectiveServerChatID == nil
+                            && isOptimistic(existing, matching: message, currentUserID: currentUserID)
+                    }
+                    result.append(message)
+                }
+                continue
+            }
+
+            if let localID = message.effectiveLocalTemporaryID,
+               result.contains(where: { $0.effectiveLocalTemporaryID == localID }) {
+                continue
+            }
+
+            if result.contains(where: { server in
+                server.effectiveServerChatID != nil
+                    && isOptimistic(message, matching: server, currentUserID: currentUserID)
+            }) {
+                continue
+            }
+
+            result.append(message)
+        }
+
+        return sorted(result)
+    }
+
+    private static func mergeServerMessage(_ serverMessage: ChatMessage, into existing: ChatMessage) -> ChatMessage {
+        guard let serverID = serverMessage.effectiveServerChatID else {
+            return serverMessage
+        }
+        return ChatMessage(
+            id: serverID,
+            localTemporaryID: existing.effectiveLocalTemporaryID ?? serverMessage.effectiveLocalTemporaryID,
+            serverChatID: serverID,
+            roomID: serverMessage.roomID,
+            content: serverMessage.content,
+            createdAt: serverMessage.createdAt,
+            updatedAt: serverMessage.updatedAt,
+            sender: serverMessage.sender,
+            filePaths: serverMessage.filePaths,
+            sendStatus: .sent
+        )
+    }
+
+    private static func isOptimistic(_ optimistic: ChatMessage, matching serverMessage: ChatMessage, currentUserID: String?) -> Bool {
+        guard optimistic.effectiveServerChatID == nil,
+              optimistic.sendStatus == .sending,
+              optimistic.sender.id == serverMessage.sender.id,
+              optimistic.content == serverMessage.content,
+              optimistic.filePaths == serverMessage.filePaths else {
+            return false
+        }
+        if let currentUserID, optimistic.sender.id != currentUserID {
+            return false
+        }
+        let optimisticDate = optimistic.createdAt ?? optimistic.updatedAt
+        let serverDate = serverMessage.createdAt ?? serverMessage.updatedAt
+        guard let optimisticDate, let serverDate else {
+            return true
+        }
+        return abs(optimisticDate.timeIntervalSince(serverDate)) <= optimisticMatchInterval
+    }
+
+    private static func sorted(_ messages: [ChatMessage]) -> [ChatMessage] {
+        messages.sorted {
+            let lhsDate = $0.createdAt ?? .distantPast
+            let rhsDate = $1.createdAt ?? .distantPast
+            if lhsDate == rhsDate {
+                return $0.renderID < $1.renderID
+            }
+            return lhsDate < rhsDate
+        }
     }
 }
 
@@ -561,6 +727,7 @@ struct ChatMapper: Sendable {
     func mapMessage(_ dto: ChatMessageDTO) -> ChatMessage {
         ChatMessage(
             id: dto.chatID,
+            serverChatID: dto.chatID,
             roomID: dto.roomID,
             content: dto.content,
             createdAt: dto.createdAt.flatMap(dateParser.parseISO8601),
@@ -742,6 +909,8 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
     private enum Field {
         static let entity = "ChatMessageRecord"
         static let chatID = "chatID"
+        static let localTemporaryID = "localTemporaryID"
+        static let serverChatID = "serverChatID"
         static let roomID = "roomID"
         static let content = "content"
         static let createdAt = "createdAt"
@@ -766,6 +935,8 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         entity.managedObjectClassName = NSStringFromClass(NSManagedObject.self)
         entity.properties = [
             Self.attribute(Field.chatID, .stringAttributeType, optional: false),
+            Self.attribute(Field.localTemporaryID, .stringAttributeType, optional: true),
+            Self.attribute(Field.serverChatID, .stringAttributeType, optional: true),
             Self.attribute(Field.roomID, .stringAttributeType, optional: false),
             Self.attribute(Field.content, .stringAttributeType, optional: false),
             Self.attribute(Field.createdAt, .dateAttributeType, optional: true),
@@ -814,14 +985,14 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         let context = persistentContainer.viewContext
         let scopedMessages = try context.fetch(fetchRequest(scope: scope)).compactMap(mapRecord)
         guard scopedMessages.isEmpty, !scope.isStoreInquiry else {
-            return scopedMessages
+            return deduplicated(scopedMessages)
         }
-        return try context.fetch(legacyFetchRequest(roomID: scope.roomID)).compactMap(mapRecord)
+        return deduplicated(try context.fetch(legacyFetchRequest(roomID: scope.roomID)).compactMap(mapRecord))
     }
 
     func latestServerMessageDate(scope: ChatRoomScope) async throws -> Date? {
         try await fetchMessages(scope: scope)
-            .filter { !$0.id.hasPrefix("local-") && $0.sendStatus == .sent }
+            .filter { $0.effectiveServerChatID != nil && $0.sendStatus == .sent }
             .compactMap(\.createdAt)
             .max()
     }
@@ -854,11 +1025,7 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
     func upsert(messages: [ChatMessage], scope: ChatRoomScope) async throws -> [ChatMessage] {
         let context = persistentContainer.viewContext
         for message in messages {
-            let record = try fetchRecord(messageID: message.id, scope: scope, context: context) ?? NSManagedObject(
-                entity: entityDescription(in: context),
-                insertInto: context
-            )
-            try apply(message: message, scope: scope, to: record)
+            try upsert(message: message, scope: scope, context: context)
         }
         if context.hasChanges {
             try context.save()
@@ -874,14 +1041,32 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
     @discardableResult
     func replacePendingMessage(localID: String, with message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage] {
         let context = persistentContainer.viewContext
-        if let pending = try fetchRecord(messageID: localID, scope: scope, context: context) {
-            context.delete(pending)
+        let serverID = message.effectiveServerChatID
+        let pending = try fetchLocalTemporaryRecord(localID: localID, scope: scope, context: context)
+            ?? fetchRecord(messageID: localID, scope: scope, context: context)
+        let serverRecord = try serverID.flatMap {
+            try fetchServerRecord(serverChatID: $0, scope: scope, context: context)
         }
-        let record = try fetchRecord(messageID: message.id, scope: scope, context: context) ?? NSManagedObject(
-            entity: entityDescription(in: context),
-            insertInto: context
+
+        let record: NSManagedObject
+        if let serverRecord {
+            record = serverRecord
+            if let pending, pending != serverRecord {
+                context.delete(pending)
+            }
+        } else if let pending {
+            record = pending
+        } else {
+            record = NSManagedObject(entity: entityDescription(in: context), insertInto: context)
+        }
+
+        let mergedMessage = message.replacingIdentity(
+            id: serverID ?? message.id,
+            localTemporaryID: localID,
+            serverChatID: serverID,
+            sendStatus: .sent
         )
-        try apply(message: message, scope: scope, to: record)
+        try apply(message: mergedMessage, scope: scope, to: record)
         if context.hasChanges {
             try context.save()
         }
@@ -891,7 +1076,8 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
     @discardableResult
     func updateSendStatus(messageID: String, status: ChatSendStatus, scope: ChatRoomScope) async throws -> [ChatMessage] {
         let context = persistentContainer.viewContext
-        guard let record = try fetchRecord(messageID: messageID, scope: scope, context: context) else {
+        guard let record = try fetchRecord(messageID: messageID, scope: scope, context: context)
+            ?? fetchLocalTemporaryRecord(localID: messageID, scope: scope, context: context) else {
             return []
         }
         record.setValue(status.rawValue, forKey: Field.sendStatus)
@@ -961,12 +1147,120 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         return try context.fetch(request).first
     }
 
+    private func fetchLocalTemporaryRecord(localID: String, scope: ChatRoomScope, context: NSManagedObjectContext) throws -> NSManagedObject? {
+        let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
+        request.predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            Field.localTemporaryID,
+            localID,
+            Field.localCacheKey,
+            scope.localCacheKey
+        )
+        request.fetchLimit = 1
+        return try context.fetch(request).first
+    }
+
+    private func fetchServerRecord(serverChatID: String, scope: ChatRoomScope, context: NSManagedObjectContext) throws -> NSManagedObject? {
+        let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
+        request.predicate = NSPredicate(
+            format: "(%K == %@ OR %K == %@) AND %K == %@",
+            Field.serverChatID,
+            serverChatID,
+            Field.chatID,
+            serverChatID,
+            Field.localCacheKey,
+            scope.localCacheKey
+        )
+        request.fetchLimit = 1
+        return try context.fetch(request).first
+    }
+
+    private func fetchMatchingPendingRecord(for message: ChatMessage, scope: ChatRoomScope, context: NSManagedObjectContext) throws -> NSManagedObject? {
+        let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
+        request.predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@ AND %K == %@ AND %K == %@ AND %K == %@",
+            Field.roomID,
+            scope.roomID,
+            Field.localCacheKey,
+            scope.localCacheKey,
+            Field.senderUserID,
+            message.sender.id,
+            Field.content,
+            message.content,
+            Field.sendStatus,
+            ChatSendStatus.sending.rawValue
+        )
+        request.sortDescriptors = [
+            NSSortDescriptor(key: Field.createdAt, ascending: false),
+            NSSortDescriptor(key: Field.localCreatedAt, ascending: false)
+        ]
+        let candidates = try context.fetch(request)
+        return candidates.first { record in
+            guard let pending = mapRecord(record),
+                  pending.effectiveServerChatID == nil,
+                  pending.filePaths == message.filePaths else {
+                return false
+            }
+            let pendingDate = pending.createdAt ?? pending.updatedAt
+            let serverDate = message.createdAt ?? message.updatedAt
+            guard let pendingDate, let serverDate else {
+                return true
+            }
+            return abs(pendingDate.timeIntervalSince(serverDate)) <= 10
+        }
+    }
+
+    private func upsert(message: ChatMessage, scope: ChatRoomScope, context: NSManagedObjectContext) throws {
+        let serverID = message.effectiveServerChatID
+        let localID = message.effectiveLocalTemporaryID
+        let serverRecord = try serverID.flatMap {
+            try fetchServerRecord(serverChatID: $0, scope: scope, context: context)
+        }
+        let localRecord = try localID.flatMap {
+            try fetchLocalTemporaryRecord(localID: $0, scope: scope, context: context)
+        } ?? fetchRecord(messageID: message.id, scope: scope, context: context)
+        let pendingMatch = try (serverID != nil)
+            ? fetchMatchingPendingRecord(for: message, scope: scope, context: context)
+            : nil
+
+        let record: NSManagedObject
+        if let serverRecord {
+            record = serverRecord
+            if let localRecord, localRecord != serverRecord {
+                context.delete(localRecord)
+            }
+            if let pendingMatch, pendingMatch != serverRecord {
+                context.delete(pendingMatch)
+            }
+        } else if let localRecord {
+            record = localRecord
+        } else if let pendingMatch {
+            record = pendingMatch
+        } else {
+            record = NSManagedObject(entity: entityDescription(in: context), insertInto: context)
+        }
+
+        let existingLocalID = (record.value(forKey: Field.localTemporaryID) as? String)?.nilIfEmpty
+            ?? (record.value(forKey: Field.chatID) as? String).flatMap { $0.hasPrefix("local-") ? $0 : nil }
+        let mergedMessage = serverID == nil
+            ? message
+            : message.replacingIdentity(
+                id: serverID,
+                localTemporaryID: localID ?? existingLocalID,
+                serverChatID: serverID,
+                sendStatus: .sent
+            )
+        try apply(message: mergedMessage, scope: scope, to: record)
+    }
+
     private func entityDescription(in context: NSManagedObjectContext) -> NSEntityDescription {
         NSEntityDescription.entity(forEntityName: Field.entity, in: context)!
     }
 
     private func apply(message: ChatMessage, scope: ChatRoomScope, to record: NSManagedObject) throws {
         record.setValue(message.id, forKey: Field.chatID)
+        record.setValue(message.effectiveLocalTemporaryID, forKey: Field.localTemporaryID)
+        record.setValue(message.effectiveServerChatID, forKey: Field.serverChatID)
         record.setValue(message.roomID, forKey: Field.roomID)
         record.setValue(scope.localCacheKey, forKey: Field.localCacheKey)
         record.setValue(message.content, forKey: Field.content)
@@ -995,6 +1289,10 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         let files = (try? jsonDecoder.decode([String].self, from: filesData)) ?? []
         return ChatMessage(
             id: id,
+            localTemporaryID: (record.value(forKey: Field.localTemporaryID) as? String)?.nilIfEmpty
+                ?? (id.hasPrefix("local-") ? id : nil),
+            serverChatID: (record.value(forKey: Field.serverChatID) as? String)?.nilIfEmpty
+                ?? (id.hasPrefix("local-") ? nil : id),
             roomID: roomID,
             content: content,
             createdAt: record.value(forKey: Field.createdAt) as? Date,
@@ -1008,11 +1306,15 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
             sendStatus: ChatSendStatus(rawValue: statusRawValue) ?? .sent
         )
     }
+
+    private func deduplicated(_ messages: [ChatMessage]) -> [ChatMessage] {
+        ChatMessageMergePolicy.deduplicated(messages, currentUserID: nil)
+    }
 }
 
 @MainActor
 protocol ChatRealtimeServiceProtocol: AnyObject {
-    func connect(roomID: String, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws
+    func connect(roomID: String, currentUserID: String?, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws
     func disconnect()
 }
 
@@ -1282,6 +1584,20 @@ struct ChatInteractor: ChatInteracting {
             guard !messages.isEmpty else {
                 return try await localDataSource.fetchMessages(scope: scope)
             }
+            let existingMessages = (try? await localDataSource.fetchMessages(scope: scope)) ?? []
+            for message in messages {
+                if let serverID = message.effectiveServerChatID,
+                   existingMessages.contains(where: { $0.effectiveServerChatID == serverID }) {
+                    Logger.shared.debug("[ChatMerge] skipDuplicate serverChatId=\(serverID) source=sync")
+                } else if let serverID = message.effectiveServerChatID,
+                          let pending = existingMessages.first(where: {
+                              ChatMessageMergePolicy.deduplicated([$0, message], currentUserID: sessionStore.currentUserID).count == 1
+                                  && $0.effectiveServerChatID == nil
+                                  && $0.sendStatus == .sending
+                          }) {
+                    Logger.shared.debug("[ChatMerge] replaceOptimistic localTemporaryId=\(pending.effectiveLocalTemporaryID ?? pending.id) serverChatId=\(serverID) source=sync")
+                }
+            }
             return try await localDataSource.upsert(messages: messages, scope: scope)
         } catch is CancellationError {
             throw CancellationError()
@@ -1304,8 +1620,20 @@ struct ChatInteractor: ChatInteracting {
                 "[ChatSocket] namespace remains roomId-scoped despite store collision roomId=\(scope.roomID) currentStoreId=\(scope.storeID ?? "-") mappedStoreIds=\(mappedStoreIDs.joined(separator: ","))"
             )
         }
-        try await realtimeService.connect(roomID: scope.roomID) { [localDataSource] message in
+        try await realtimeService.connect(roomID: scope.roomID, currentUserID: sessionStore.currentUserID) { [localDataSource] message in
             do {
+                let existingMessages = (try? await localDataSource.fetchMessages(scope: scope)) ?? []
+                if let serverID = message.effectiveServerChatID,
+                   existingMessages.contains(where: { $0.effectiveServerChatID == serverID }) {
+                    Logger.shared.debug("[ChatMerge] skipDuplicate serverChatId=\(serverID) source=socket")
+                } else if let serverID = message.effectiveServerChatID,
+                          let pending = existingMessages.first(where: {
+                              ChatMessageMergePolicy.deduplicated([$0, message], currentUserID: sessionStore.currentUserID).count == 1
+                                  && $0.effectiveServerChatID == nil
+                                  && $0.sendStatus == .sending
+                          }) {
+                    Logger.shared.debug("[ChatMerge] replaceOptimistic localTemporaryId=\(pending.effectiveLocalTemporaryID ?? pending.id) serverChatId=\(serverID) source=socket")
+                }
                 let messages = try await localDataSource.upsert(messages: [message], scope: scope)
                 touchStoreConversation(scope: scope, latestActivityDate: message.createdAt ?? message.updatedAt ?? Date())
                 if let stored = messages.first(where: { $0.id == message.id }) {
@@ -1330,8 +1658,10 @@ struct ChatInteractor: ChatInteracting {
             throw ChatFeatureError.authenticationRequired
         }
 
+        let localID = "local-\(UUID().uuidString)"
         return ChatMessage(
-            id: "local-\(UUID().uuidString)",
+            id: localID,
+            localTemporaryID: localID,
             roomID: roomID,
             content: content,
             createdAt: Date(),
@@ -1389,7 +1719,6 @@ struct ChatInteractor: ChatInteracting {
 
         do {
             let sentMessage = try await chatRepository.sendMessage(roomID: scope.roomID, content: trimmed, files: files)
-            _ = try await localDataSource.upsert(messages: [sentMessage], scope: scope)
             touchStoreConversation(scope: scope, latestActivityDate: sentMessage.createdAt ?? sentMessage.updatedAt ?? Date())
             NotificationCenter.default.postChatRoomDidUpdate(message: sentMessage)
             return sentMessage

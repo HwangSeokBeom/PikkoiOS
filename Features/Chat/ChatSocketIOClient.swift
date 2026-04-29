@@ -31,7 +31,7 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         )
     }
 
-    func connect(roomID: String, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
+    func connect(roomID: String, currentUserID: String?, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
         if activeRoomID == roomID {
             let status = socket?.status
             if status == .connected || status == .connecting {
@@ -80,7 +80,7 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         let manager = SocketManager(socketURL: originURL, config: socketConfig)
         let socket = manager.socket(forNamespace: namespace)
 
-        registerHandlers(socket: socket, roomID: roomID, namespace: namespace, onMessage: onMessage)
+        registerHandlers(socket: socket, roomID: roomID, namespace: namespace, currentUserID: currentUserID, onMessage: onMessage)
 
         self.manager = manager
         self.socket = socket
@@ -120,6 +120,7 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         socket: SocketIOClient,
         roomID: String,
         namespace: String,
+        currentUserID: String?,
         onMessage: @escaping @MainActor (ChatMessage) async -> Void
     ) {
         socket.on(clientEvent: .connect) { _, _ in
@@ -148,7 +149,9 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
                 }
 
                 for message in messages where message.roomID == roomID {
-                    Logger.shared.debug("[ChatSocket] chat received roomId=\(roomID) chatId=\(message.id)")
+                    let chatID = message.effectiveServerChatID ?? message.id
+                    let isMine = currentUserID != nil && message.sender.id == currentUserID
+                    Logger.shared.debug("[ChatSocket] received roomId=\(roomID) chatId=\(chatID) senderId=\(message.sender.id) isMine=\(isMine)")
                     await onMessage(message)
                 }
             }
