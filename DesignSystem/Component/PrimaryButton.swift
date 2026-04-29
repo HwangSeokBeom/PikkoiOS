@@ -39,7 +39,7 @@ struct PrimaryButton: View {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .frame(height: size.height)
-            .background(isEnabled ? PikkoColor.accent : PikkoColor.gray300)
+            .background(isEnabled ? PikkoColor.accent : PikkoColor.gray500)
             .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
         }
         .buttonStyle(.plain)

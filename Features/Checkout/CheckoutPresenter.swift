@@ -32,6 +32,11 @@ final class CheckoutPresenter: ObservableObject {
                 viewState.errorMessage = nil
             }
         case .primaryButtonTapped:
+            if viewState.isPaymentConfigurationBlocked {
+                showPaymentConfigurationGuide()
+                return
+            }
+
             if viewState.canRouteToOrderHistoryFromPrimary {
                 router.routeToOrderHistory(orderID: viewState.createdOrderID)
                 return
@@ -164,6 +169,7 @@ final class CheckoutPresenter: ObservableObject {
                 stage: .presentingPayment
             )
             viewState.successMessage = "결제 창이 열리면 결제를 완료해 주세요."
+            Logger.shared.debug("[PortOne] presentPayment started")
         } catch let error as CheckoutFeatureError {
             apply(featureError: error)
         } catch {
@@ -258,8 +264,21 @@ final class CheckoutPresenter: ObservableObject {
             router.routeToAuth()
         case .configurationRequired:
             viewState.primaryActionTitle = "결제 설정 확인하기"
-            viewState.errorMessage = "PORTONE_USER_CODE 설정이 필요해요. Config/Secrets.xcconfig에 실제 PortOne 가맹점 식별코드를 넣고 다시 빌드해 주세요. 장바구니는 유지되며 설정 전에는 주문을 생성하지 않아요."
+            viewState.isPaymentConfigurationBlocked = true
+            viewState.isPrimaryEnabled = !viewState.isEmpty
+            viewState.errorMessage = viewState.paymentConfigurationDiagnosticMessage
+                ?? "PORTONE_USER_CODE 설정이 필요해요. Config/Secrets.xcconfig에 실제 PortOne 가맹점 식별코드를 넣고 Clean Build 해 주세요. 장바구니는 유지되며 설정 전에는 주문을 생성하지 않아요."
         }
+    }
+
+    private func showPaymentConfigurationGuide() {
+        Logger.shared.debug("[Checkout] paymentButtonState=blockedMissingConfig")
+        Logger.shared.error("[Checkout] orderCreationBlocked reason=missingPortOneUserCode")
+        viewState.errorMessage = viewState.paymentConfigurationDiagnosticMessage
+            ?? "Config/Secrets.xcconfig에 PORTONE_USER_CODE를 실제 PortOne 가맹점 식별코드로 설정한 뒤 Clean Build 하세요."
+        viewState.successMessage = nil
+        viewState.primaryActionTitle = "결제 설정 확인하기"
+        viewState.isPrimaryEnabled = !viewState.isEmpty
     }
 
     private func handlePaymentBridge(_ result: CheckoutPaymentBridgeResult) async {

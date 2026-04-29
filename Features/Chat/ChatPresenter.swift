@@ -11,7 +11,9 @@ final class ChatPresenter: ObservableObject {
     private let timeFormatter: DateFormatter
     private let dateFormatter: DateFormatter
     private var hasLoaded = false
-    private var rooms: [ChatRoom] = []
+    private var serverRooms: [ChatRoom] = []
+    private var localConversationSummaries: [ChatLocalConversationSummary] = []
+    private var listEntries: [ChatListEntry] = []
     private var messages: [ChatMessage] = []
     private var selectedRoom: ChatRoom?
     private var roomListRequestID = 0
@@ -64,7 +66,7 @@ final class ChatPresenter: ObservableObject {
             }
         case .refreshRequested:
             if viewState.mode == .roomDetail, let roomID = viewState.selectedRoomID {
-                await synchronizeMessages(roomID: roomID, isRefresh: true)
+                await synchronizeMessages(scope: currentScope(roomID: roomID), isRefresh: true)
             } else {
                 await loadRooms(isRefresh: true)
             }
@@ -77,9 +79,15 @@ final class ChatPresenter: ObservableObject {
                 await send(.refreshRequested)
             }
         case .roomTapped(let roomID):
-            guard let room = rooms.first(where: { $0.id == roomID }) else { return }
-            selectedRoom = room
-            await showRoom(room)
+            guard let entry = listEntries.first(where: { $0.id == roomID }) else { return }
+            switch entry {
+            case .storeScoped(let summary):
+                selectedRoom = nil
+                await showLocalConversation(summary)
+            case .server(let room):
+                selectedRoom = room
+                await showRoom(room)
+            }
         case .backToRoomsTapped:
             guard interactor.target == nil else { return }
             selectedRoom = nil
@@ -113,8 +121,10 @@ final class ChatPresenter: ObservableObject {
 
         do {
             let loadedRooms = try await interactor.loadInitialRoomList()
+            let loadedLocalConversationSummaries = try await interactor.loadLocalConversationSummaries()
             guard requestID == roomListRequestID else { return }
-            rooms = deduplicatedRooms(loadedRooms)
+            serverRooms = deduplicatedRooms(loadedRooms)
+            localConversationSummaries = loadedLocalConversationSummaries
             applyRooms()
             viewState.errorMessage = nil
         } catch is CancellationError {
@@ -135,7 +145,7 @@ final class ChatPresenter: ObservableObject {
             selectedRoom = room
             viewState.selectedRoomID = room.id
             applyContext(interactor.makeContext(for: room, entryPoint: .storeDetail))
-            await loadCachedMessagesAndStartLiveSync(roomID: room.id, isRefresh: false)
+            await loadCachedMessagesAndStartLiveSync(scope: currentScope(roomID: room.id), isRefresh: false)
         } catch {
             apply(error: error, emptyTitle: "채팅을 시작하지 못했어요", isRefresh: false)
         }
@@ -153,7 +163,7 @@ final class ChatPresenter: ObservableObject {
             selectedRoom = room
             viewState.selectedRoomID = room.id
             applyContext(interactor.makeContext(for: room, entryPoint: .userProfile))
-            await loadCachedMessagesAndStartLiveSync(roomID: room.id, isRefresh: false)
+            await loadCachedMessagesAndStartLiveSync(scope: currentScope(roomID: room.id), isRefresh: false)
         } catch {
             apply(error: error, emptyTitle: "채팅을 시작하지 못했어요", isRefresh: false)
         }
@@ -175,19 +185,28 @@ final class ChatPresenter: ObservableObject {
             storeID: cachedContext?.storeID.nilIfEmpty,
             storeName: cachedContext?.storeName.nilIfEmpty,
             displayTitle: displayTitle,
-            canUseStoreScopedTitle: cachedContext?.storeName.nilIfEmpty != nil
+            canUseStoreScopedTitle: cachedContext?.storeName.nilIfEmpty != nil,
+            hasRoomIDCollision: false,
+            collidingStoreIDs: []
         ))
-        await loadCachedMessagesAndStartLiveSync(roomID: roomID, isRefresh: false)
+        await loadCachedMessagesAndStartLiveSync(scope: currentScope(roomID: roomID), isRefresh: false)
     }
 
     private func showRoom(_ room: ChatRoom) async {
         viewState.mode = .roomDetail
         viewState.selectedRoomID = room.id
         applyContext(interactor.makeContext(for: room, entryPoint: .chatList))
-        await loadCachedMessagesAndStartLiveSync(roomID: room.id, isRefresh: false)
+        await loadCachedMessagesAndStartLiveSync(scope: currentScope(roomID: room.id), isRefresh: false)
     }
 
-    private func loadCachedMessagesAndStartLiveSync(roomID: String, isRefresh: Bool) async {
+    private func showLocalConversation(_ summary: ChatLocalConversationSummary) async {
+        viewState.mode = .roomDetail
+        viewState.selectedRoomID = summary.serverRoomID
+        applyContext(interactor.makeContext(for: summary))
+        await loadCachedMessagesAndStartLiveSync(scope: summary.scope, isRefresh: false)
+    }
+
+    private func loadCachedMessagesAndStartLiveSync(scope: ChatRoomScope, isRefresh: Bool) async {
         messageRequestID += 1
         let requestID = messageRequestID
         setLoading(isRefresh: isRefresh)
@@ -198,9 +217,9 @@ final class ChatPresenter: ObservableObject {
         }
 
         do {
-            let cachedMessages = try await interactor.loadCachedMessages(roomID: roomID)
+            let cachedMessages = try await interactor.loadCachedMessages(scope: scope)
             guard requestID == messageRequestID else { return }
-            Logger.shared.debug("[ChatViewModel] loadLocalMessages count=\(cachedMessages.count)")
+            Logger.shared.debug("[ChatViewModel] loadLocalMessages count=\(cachedMessages.count) scope=\(scope.localCacheKey)")
             messages = cachedMessages
             applyMessages()
         } catch {
@@ -208,11 +227,13 @@ final class ChatPresenter: ObservableObject {
         }
 
         do {
-            let loadedMessages = try await interactor.synchronizeMessages(roomID: roomID)
+            let loadedMessages = try await interactor.synchronizeMessages(scope: scope)
             guard requestID == messageRequestID else { return }
             messages = loadedMessages
             applyMessages()
-            viewState.errorMessage = nil
+            if currentContext?.hasRoomIDCollision != true {
+                viewState.errorMessage = nil
+            }
         } catch is CancellationError {
             guard requestID == messageRequestID else { return }
             throwCancellationDebugLog()
@@ -223,11 +244,11 @@ final class ChatPresenter: ObservableObject {
             return
         }
 
-        guard realtimeRoomID != roomID else { return }
-        realtimeRoomID = roomID
-        Logger.shared.debug("[ChatViewModel] connectSocket afterSync=true")
+        guard realtimeRoomID != scope.roomID else { return }
+        realtimeRoomID = scope.roomID
+        Logger.shared.debug("[ChatViewModel] connectSocket afterSync=true scope=\(scope.localCacheKey)")
         do {
-            try await interactor.startRealtime(roomID: roomID) { [weak self] message in
+            try await interactor.startRealtime(scope: scope) { [weak self] message in
                 guard let self, self.viewState.selectedRoomID == message.roomID else { return }
                 self.merge(message)
                 self.updateRoomList(with: message)
@@ -246,7 +267,7 @@ final class ChatPresenter: ObservableObject {
         }
 
         Logger.shared.debug("[ChatViewModel] resumeRealtime roomId=\(roomID)")
-        await loadCachedMessagesAndStartLiveSync(roomID: roomID, isRefresh: false)
+        await loadCachedMessagesAndStartLiveSync(scope: currentScope(roomID: roomID), isRefresh: false)
     }
 
     private func handleDisappear() {
@@ -260,7 +281,7 @@ final class ChatPresenter: ObservableObject {
         interactor.stopRealtime()
     }
 
-    private func synchronizeMessages(roomID: String, isRefresh: Bool) async {
+    private func synchronizeMessages(scope: ChatRoomScope, isRefresh: Bool) async {
         messageRequestID += 1
         let requestID = messageRequestID
         setLoading(isRefresh: isRefresh)
@@ -271,11 +292,13 @@ final class ChatPresenter: ObservableObject {
         }
 
         do {
-            let loadedMessages = try await interactor.synchronizeMessages(roomID: roomID)
+            let loadedMessages = try await interactor.synchronizeMessages(scope: scope)
             guard requestID == messageRequestID else { return }
             messages = loadedMessages
             applyMessages()
-            viewState.errorMessage = nil
+            if currentContext?.hasRoomIDCollision != true {
+                viewState.errorMessage = nil
+            }
         } catch is CancellationError {
             guard requestID == messageRequestID else { return }
         } catch {
@@ -299,17 +322,18 @@ final class ChatPresenter: ObservableObject {
         do {
             let pendingMessage = try interactor.makePendingMessage(roomID: roomID, content: content, files: files)
             pendingMessageID = pendingMessage.id
-            messages = try await interactor.savePendingMessage(pendingMessage)
+            let scope = currentScope(roomID: roomID)
+            messages = try await interactor.savePendingMessage(pendingMessage, scope: scope)
             viewState.messageText = ""
             viewState.attachedFilePaths = []
             applyMessages()
-            let message = try await interactor.sendMessage(roomID: roomID, content: content, files: files)
-            messages = try await interactor.replacePendingMessage(localID: pendingMessage.id, with: message)
+            let message = try await interactor.sendMessage(scope: scope, content: content, files: files)
+            messages = try await interactor.replacePendingMessage(localID: pendingMessage.id, with: message, scope: scope)
             updateRoomList(with: message)
             applyMessages()
         } catch {
             if let pendingMessageID {
-                messages = (try? await interactor.markMessageFailed(messageID: pendingMessageID)) ?? messages
+                messages = (try? await interactor.markMessageFailed(messageID: pendingMessageID, scope: currentScope(roomID: roomID))) ?? messages
                 applyMessages()
             }
             viewState.errorMessage = transientErrorMessage(from: error)
@@ -355,8 +379,12 @@ final class ChatPresenter: ObservableObject {
     private func applyRooms() {
         viewState.mode = .roomList
         viewState.title = "채팅"
-        rooms = deduplicatedRooms(rooms)
-        viewState.rooms = rooms.map(makeRoomRow)
+        serverRooms = deduplicatedRooms(serverRooms)
+        listEntries = makeListEntries(
+            localConversationSummaries: localConversationSummaries,
+            serverRooms: serverRooms
+        )
+        viewState.rooms = listEntries.map(makeRoomRow)
         viewState.messages = []
         viewState.selectedRoomID = nil
         currentContext = nil
@@ -403,16 +431,29 @@ final class ChatPresenter: ObservableObject {
         viewState.isRefreshing = false
     }
 
-    private func makeRoomRow(_ room: ChatRoom) -> ChatRoomRowViewState {
-        let participant = displayParticipant(for: room)
-        let context = interactor.makeContext(for: room, entryPoint: .chatList)
-        return ChatRoomRowViewState(
-            id: room.id,
-            title: context.displayTitle,
-            subtitle: room.lastMessage?.content.nilIfEmpty ?? "대화를 시작해 보세요.",
-            timeText: relativeTime(from: room.lastMessage?.createdAt ?? room.updatedAt),
-            avatarPath: participant?.profileImagePath
-        )
+    private func makeRoomRow(_ entry: ChatListEntry) -> ChatRoomRowViewState {
+        switch entry {
+        case .storeScoped(let summary):
+            return ChatRoomRowViewState(
+                id: summary.id,
+                title: summary.storeName,
+                subtitle: summary.lastLocalMessage?.content.nilIfEmpty ?? "아직 대화가 없어요",
+                timeText: relativeTime(from: summary.lastLocalMessage?.createdAt ?? summary.updatedAt),
+                avatarPath: nil,
+                section: .storeInquiry
+            )
+        case .server(let room):
+            let participant = displayParticipant(for: room)
+            let context = interactor.makeContext(for: room, entryPoint: .chatList)
+            return ChatRoomRowViewState(
+                id: "server:\(room.id)",
+                title: context.displayTitle,
+                subtitle: room.lastMessage?.content.nilIfEmpty ?? "일반 문의 대화를 시작해 보세요.",
+                timeText: relativeTime(from: room.lastMessage?.createdAt ?? room.updatedAt),
+                avatarPath: participant?.profileImagePath,
+                section: .general
+            )
+        }
     }
 
     private func makeMessageRows(_ messages: [ChatMessage]) -> [ChatMessageRowViewState] {
@@ -457,18 +498,20 @@ final class ChatPresenter: ObservableObject {
                 }
                 self.updateRoomList(with: message)
                 if self.viewState.mode == .roomList {
-                    self.applyRooms()
+                    Task {
+                        await self.refreshLocalConversationSummariesForVisibleList()
+                    }
                 }
             }
             .store(in: &cancellables)
     }
 
     private func updateRoomList(with message: ChatMessage) {
-        guard let index = rooms.firstIndex(where: { $0.id == message.roomID }) else {
+        guard let index = serverRooms.firstIndex(where: { $0.id == message.roomID }) else {
             return
         }
-        rooms[index] = rooms[index].updating(lastMessage: message)
-        rooms = deduplicatedRooms(rooms)
+        serverRooms[index] = serverRooms[index].updating(lastMessage: message)
+        serverRooms = deduplicatedRooms(serverRooms)
     }
 
     private func applyContext(_ context: ChatRoomContext) {
@@ -480,6 +523,18 @@ final class ChatPresenter: ObservableObject {
         Logger.shared.debug(
             "[ChatRoomContext] resolvedTitle=\(context.displayTitle) roomId=\(context.roomID) storeId=\(context.storeID ?? "-") storeName=\(context.storeName ?? "-") opponentId=\(context.opponentID ?? "-") canUseStoreScopedTitle=\(context.canUseStoreScopedTitle)"
         )
+        if context.hasRoomIDCollision {
+            Logger.shared.info(
+                "[ChatRoomContext] collision active localCacheKey=\(context.localCacheScope.localCacheKey) roomId=\(context.roomID) currentStoreId=\(context.storeID ?? "-") mappedStoreIds=\(context.collidingStoreIDs.joined(separator: ","))"
+            )
+        }
+    }
+
+    private func currentScope(roomID: String) -> ChatRoomScope {
+        if let currentContext, currentContext.roomID == roomID {
+            return currentContext.localCacheScope
+        }
+        return ChatRoomScope(roomID: roomID, storeID: nil, opponentID: nil)
     }
 
     private func deduplicatedRooms(_ rooms: [ChatRoom]) -> [ChatRoom] {
@@ -494,6 +549,23 @@ final class ChatPresenter: ObservableObject {
         return byID.values.sorted { lhs, rhs in
             latestActivityDate(lhs) > latestActivityDate(rhs)
         }
+    }
+
+    private func makeListEntries(
+        localConversationSummaries: [ChatLocalConversationSummary],
+        serverRooms: [ChatRoom]
+    ) -> [ChatListEntry] {
+        let storeScopedEntries = localConversationSummaries.map(ChatListEntry.storeScoped)
+        let serverEntries = serverRooms.map(ChatListEntry.server)
+        Logger.shared.debug(
+            "[ChatList] merge storeScopedCount=\(storeScopedEntries.count) serverRoomCount=\(serverEntries.count) policy=sectioned"
+        )
+        return storeScopedEntries + serverEntries
+    }
+
+    private func refreshLocalConversationSummariesForVisibleList() async {
+        localConversationSummaries = (try? await interactor.loadLocalConversationSummaries()) ?? localConversationSummaries
+        applyRooms()
     }
 
     private func preferredRoom(_ lhs: ChatRoom, _ rhs: ChatRoom) -> ChatRoom {
@@ -539,6 +611,20 @@ final class ChatPresenter: ObservableObject {
     }
 }
 
+private enum ChatListEntry: Equatable, Identifiable {
+    case storeScoped(ChatLocalConversationSummary)
+    case server(ChatRoom)
+
+    var id: String {
+        switch self {
+        case .storeScoped(let summary):
+            return summary.id
+        case .server(let room):
+            return "server:\(room.id)"
+        }
+    }
+}
+
 private extension String {
     var nilIfEmpty: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
@@ -551,6 +637,8 @@ private extension ChatRoomEntryPoint {
         switch self {
         case .storeDetail:
             return "storeDetail"
+        case .storeScopedChatList:
+            return "storeScopedChatList"
         case .chatList:
             return "chatList"
         case .userProfile:

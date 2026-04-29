@@ -4,11 +4,28 @@ import UIKit
 import UniformTypeIdentifiers
 
 struct ChatRootView: View {
+    private enum Layout {
+        static let estimatedComposerHeight: CGFloat = 76
+        static let composerBottomPadding: CGFloat = PikkoSpacing.sm
+        static let messageListBottomGap: CGFloat = PikkoSpacing.lg
+        static let inputFrameTolerance: CGFloat = 1
+    }
+
+    private enum CoordinateSpaceName {
+        static let roomDetailRoot = "ChatRoomDetailRoot"
+    }
+
     @StateObject private var presenter: ChatPresenter
+    @StateObject private var keyboardObserver = ChatKeyboardObserver()
     private let imageLoader: any AuthorizedImageLoading
     @FocusState private var isComposerFocused: Bool
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isFileImporterPresented = false
+    @State private var hasLoggedComposerInstall = false
+    @State private var isDetailEmptyStateVisible = false
+    @State private var chatViewInstanceID = UUID().uuidString
+    @State private var isRoomDetailVisible = false
+    @State private var measuredComposerHeight = Layout.estimatedComposerHeight
 
     init(
         presenter: ChatPresenter,
@@ -86,20 +103,38 @@ struct ChatRootView: View {
     }
 
     private var roomListView: some View {
-        ScrollView(showsIndicators: false) {
-            LazyVStack(spacing: PikkoSpacing.sm) {
+        let storeInquiryRooms = presenter.viewState.rooms.filter { $0.section == .storeInquiry }
+        let generalRooms = presenter.viewState.rooms.filter { $0.section == .general }
+        return ScrollView(showsIndicators: false) {
+            LazyVStack(alignment: .leading, spacing: PikkoSpacing.sm) {
                 if let errorMessage = presenter.viewState.errorMessage {
                     ToastView(message: errorMessage, tone: .warning)
                         .padding(.bottom, PikkoSpacing.sm)
                 }
 
-                ForEach(presenter.viewState.rooms) { room in
-                    Button {
-                        Task { await presenter.send(.roomTapped(room.id)) }
-                    } label: {
-                        ChatRoomRow(room: room, imageLoader: imageLoader)
+                if !storeInquiryRooms.isEmpty {
+                    chatListSectionTitle("가게 문의")
+                    ForEach(storeInquiryRooms) { room in
+                        Button {
+                            Task { await presenter.send(.roomTapped(room.id)) }
+                        } label: {
+                            ChatRoomRow(room: room, imageLoader: imageLoader)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                }
+
+                if !generalRooms.isEmpty {
+                    chatListSectionTitle("일반 채팅")
+                        .padding(.top, storeInquiryRooms.isEmpty ? 0 : PikkoSpacing.md)
+                    ForEach(generalRooms) { room in
+                        Button {
+                            Task { await presenter.send(.roomTapped(room.id)) }
+                        } label: {
+                            ChatRoomRow(room: room, imageLoader: imageLoader)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
             .padding(.horizontal, PikkoSpacing.xl)
@@ -112,6 +147,24 @@ struct ChatRootView: View {
     }
 
     private var roomDetailView: some View {
+        GeometryReader { rootProxy in
+            roomDetailContent(containerWidth: rootProxy.size.width)
+                .coordinateSpace(name: CoordinateSpaceName.roomDetailRoot)
+                .onAppear {
+                    isRoomDetailVisible = true
+                    Logger.shared.debug("[ChatVC] viewWillAppear id=\(chatViewInstanceID)")
+                    Logger.shared.debug("[ChatVC] viewDidAppear id=\(chatViewInstanceID)")
+                }
+                .onDisappear {
+                    isRoomDetailVisible = false
+                    isComposerFocused = false
+                    Logger.shared.debug("[ChatVC] viewWillDisappear id=\(chatViewInstanceID)")
+                    Logger.shared.debug("[ChatInput] observerRemoved=true")
+                }
+        }
+    }
+
+    private func roomDetailContent(containerWidth: CGFloat) -> some View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: PikkoSpacing.sm) {
@@ -130,7 +183,17 @@ struct ChatRootView: View {
                             message: presenter.viewState.emptyMessage ?? "첫 메시지를 보내보세요.",
                             systemImage: "bubble.left.and.bubble.right"
                         )
+                        .frame(maxWidth: .infinity)
                         .padding(.top, PikkoSpacing.xxl)
+                        .zIndex(0)
+                        .onAppear {
+                            isDetailEmptyStateVisible = true
+                            Logger.shared.debug("[ChatEmptyState] visible=true inputVisible=\(presenter.viewState.selectedRoomID != nil)")
+                        }
+                        .onDisappear {
+                            isDetailEmptyStateVisible = false
+                            Logger.shared.debug("[ChatEmptyState] visible=false inputVisible=\(presenter.viewState.selectedRoomID != nil)")
+                        }
                     } else {
                         ForEach(presenter.viewState.messages) { message in
                             ChatMessageBubble(message: message, imageLoader: imageLoader)
@@ -140,9 +203,19 @@ struct ChatRootView: View {
                 }
                 .padding(.horizontal, PikkoSpacing.xl)
                 .padding(.top, PikkoSpacing.lg)
-                .padding(.bottom, PikkoSpacing.md)
+                .padding(.bottom, messageListBottomInset)
             }
             .scrollDismissesKeyboard(.interactively)
+            .contentMargins(.bottom, messageListBottomInset, for: .scrollIndicators)
+            .onAppear {
+                updateMessageListInsets()
+            }
+            .onChange(of: measuredComposerHeight) { _, _ in
+                updateMessageListInsets()
+            }
+            .onChange(of: keyboardObserver.keyboardHeight) { _, _ in
+                updateMessageListInsets()
+            }
             .onChange(of: presenter.viewState.messages.last?.id) { _, id in
                 guard let id else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -151,82 +224,36 @@ struct ChatRootView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if presenter.viewState.selectedRoomID != nil {
-                messageComposer
+            if presenter.viewState.mode == .roomDetail {
+                messageComposer(containerWidth: containerWidth)
+                    .zIndex(10)
             }
         }
+        .animation(.easeOut(duration: keyboardObserver.animationDuration), value: keyboardObserver.keyboardHeight)
         .refreshable {
             await presenter.send(.refreshRequested)
         }
     }
 
-    private var messageComposer: some View {
+    private var messageListBottomInset: CGFloat {
+        measuredComposerHeight
+            + Layout.messageListBottomGap
+            + composerBottomPadding
+    }
+
+    private var composerBottomPadding: CGFloat {
+        Layout.composerBottomPadding
+            + (keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)
+    }
+
+    private var customTabBarAvoidanceHeight: CGFloat {
+        RootTabBarMetrics.contentHeight + RootTabBarMetrics.floatingCenterOverlap
+    }
+
+    private func messageComposer(containerWidth: CGFloat) -> some View {
         let isUploadingFiles = presenter.viewState.isUploadingFiles
-        return HStack(alignment: .bottom, spacing: PikkoSpacing.sm) {
-            PhotosPicker(
-                selection: $selectedPhotoItems,
-                maxSelectionCount: 5,
-                matching: .images,
-                preferredItemEncoding: .automatic
-            ) {
-                Image(systemName: isUploadingFiles ? "hourglass" : "paperclip")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(PikkoColor.accentStrong)
-                    .frame(width: 44, height: 44)
-                    .background(PikkoColor.surface)
-                    .clipShape(Circle())
-            }
-            .disabled(presenter.viewState.selectedRoomID == nil || isUploadingFiles || presenter.viewState.isSending)
-
-            Button {
-                isFileImporterPresented = true
-            } label: {
-                Image(systemName: isUploadingFiles ? "hourglass" : "doc.badge.plus")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(PikkoColor.accentStrong)
-                    .frame(width: 44, height: 44)
-                    .background(PikkoColor.surface)
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(presenter.viewState.selectedRoomID == nil || isUploadingFiles || presenter.viewState.isSending)
-
-            TextField(
-                "메시지 입력",
-                text: messageTextBinding,
-                prompt: Text("메시지 입력")
-                    .foregroundStyle(PikkoColor.gray500),
-                axis: .vertical
-            )
-            .lineLimit(1...3)
-            .font(PikkoTypography.body)
-            .foregroundStyle(PikkoColor.primaryText)
-            .tint(PikkoColor.accentStrong)
-            .padding(.horizontal, PikkoSpacing.md)
-            .padding(.vertical, PikkoSpacing.sm + 2)
-            .frame(minHeight: 48)
-            .background(PikkoColor.surface)
-            .overlay {
-                RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                    .stroke(PikkoColor.line.opacity(0.8), lineWidth: 1)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
-            .focused($isComposerFocused)
-
-            Button {
-                Task { await presenter.send(.sendMessageTapped) }
-            } label: {
-                Image(systemName: presenter.viewState.isSending ? "hourglass" : "paperplane.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .background(presenter.viewState.canSend ? PikkoColor.accent : PikkoColor.gray400)
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!presenter.viewState.canSend)
-        }
-        .overlay(alignment: .topLeading) {
+        let resolvedContainerWidth = max(containerWidth, 0)
+        return VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
             if !presenter.viewState.attachedFilePaths.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: PikkoSpacing.xs) {
@@ -236,25 +263,128 @@ struct ChatRootView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, PikkoSpacing.lg)
-                    .padding(.bottom, PikkoSpacing.xs)
-                    .offset(y: -40)
                 }
+            }
+
+            HStack(alignment: .bottom, spacing: PikkoSpacing.sm) {
+                PhotosPicker(
+                    selection: $selectedPhotoItems,
+                    maxSelectionCount: 5,
+                    matching: .images,
+                    preferredItemEncoding: .automatic
+                ) {
+                    Image(systemName: isUploadingFiles ? "hourglass" : "paperclip")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(PikkoColor.accentStrong)
+                        .frame(width: 44, height: 44)
+                        .background(PikkoColor.surface)
+                        .clipShape(Circle())
+                }
+                .disabled(presenter.viewState.selectedRoomID == nil || isUploadingFiles || presenter.viewState.isSending)
+
+                Button {
+                    isFileImporterPresented = true
+                } label: {
+                    Image(systemName: isUploadingFiles ? "hourglass" : "doc.badge.plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(PikkoColor.accentStrong)
+                        .frame(width: 44, height: 44)
+                        .background(PikkoColor.surface)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(presenter.viewState.selectedRoomID == nil || isUploadingFiles || presenter.viewState.isSending)
+
+                TextField(
+                    "메시지 입력",
+                    text: messageTextBinding,
+                    prompt: Text("메시지 입력")
+                        .foregroundStyle(PikkoColor.gray500),
+                    axis: .vertical
+                )
+                .lineLimit(1...3)
+                .font(PikkoTypography.body)
+                .foregroundStyle(PikkoColor.primaryText)
+                .tint(PikkoColor.accentStrong)
+                .padding(.horizontal, PikkoSpacing.md)
+                .padding(.vertical, PikkoSpacing.sm + 2)
+                .frame(minHeight: 48)
+                .background(PikkoColor.surface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                        .stroke(PikkoColor.line.opacity(0.8), lineWidth: 1)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                .focused($isComposerFocused)
+
+                Button {
+                    Task {
+                        await presenter.send(.sendMessageTapped)
+                        await MainActor.run {
+                            isComposerFocused = true
+                        }
+                    }
+                } label: {
+                    Image(systemName: presenter.viewState.isSending ? "hourglass" : "paperplane.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(presenter.viewState.canSend ? PikkoColor.accent : PikkoColor.gray400)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!presenter.viewState.canSend)
             }
         }
         .padding(.horizontal, PikkoSpacing.lg)
         .padding(.top, PikkoSpacing.sm)
-        .padding(.bottom, PikkoSpacing.sm + (isComposerFocused ? 0 : RootTabBarMetrics.contentHeight))
-        .background(PikkoColor.background.opacity(0.96))
-        .onAppear {
-            Logger.shared.debug(
-                "[ChatInput] inputContainerAdded=true inputBottomConstraintTarget=\(isComposerFocused ? "keyboardLayoutGuide" : "tabBarTop") isHidden=false"
-            )
+        .frame(width: resolvedContainerWidth, alignment: .center)
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .preference(key: ChatComposerHeightPreferenceKey.self, value: proxy.size.height)
+            }
+        )
+        .padding(.bottom, composerBottomPadding)
+        .transformEffect(.identity)
+        .background {
+            GeometryReader { proxy in
+                PikkoColor.background.opacity(0.96)
+                    .onAppear {
+                        installInputContainerIfNeeded()
+                        logChatInputLayout(
+                            proxy: proxy,
+                            containerWidth: resolvedContainerWidth,
+                            reason: "onAppear",
+                            keyboardVisible: keyboardObserver.isKeyboardVisible
+                        )
+                    }
+                    .onChange(of: proxy.frame(in: .named(CoordinateSpaceName.roomDetailRoot))) { _, _ in
+                        logChatInputLayout(
+                            proxy: proxy,
+                            containerWidth: resolvedContainerWidth,
+                            reason: "frameChanged",
+                            keyboardVisible: keyboardObserver.isKeyboardVisible
+                        )
+                    }
+            }
+        }
+        .onPreferenceChange(ChatComposerHeightPreferenceKey.self) { height in
+            updateMeasuredComposerHeight(height)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            isComposerFocused = true
         }
         .onChange(of: isComposerFocused) { _, focused in
-            Logger.shared.debug(
-                "[ChatInput] inputContainerAdded=true inputBottomConstraintTarget=\(focused ? "keyboardLayoutGuide" : "tabBarTop") isHidden=false"
-            )
+            updateInputBottomConstraint(target: keyboardObserver.isKeyboardVisible ? "keyboard" : "tabBarTop")
+            Logger.shared.debug("[ChatInput] keyboardVisible=\(focused)")
+        }
+        .onChange(of: keyboardObserver.keyboardHeight) { _, _ in
+            logComposerKeyboardState()
+        }
+        .onChange(of: keyboardObserver.isKeyboardVisible) { _, _ in
+            logComposerKeyboardState()
         }
         .onChange(of: selectedPhotoItems) { _, items in
             Task { await handleImageSelection(items) }
@@ -315,6 +445,136 @@ struct ChatRootView: View {
             )
         }
         await presenter.send(.filesSelected(files))
+    }
+
+    private func installInputContainerIfNeeded() {
+        if hasLoggedComposerInstall {
+            Logger.shared.debug("[ChatInput] install skipped if already added")
+        } else {
+            hasLoggedComposerInstall = true
+            Logger.shared.debug("[ChatInput] installInputContainerIfNeeded added=true")
+        }
+    }
+
+    private func updateInputBottomConstraint(target: String) {
+        Logger.shared.debug("[ChatInput] bottomTarget=\(target)")
+    }
+
+    private func updateMeasuredComposerHeight(_ height: CGFloat) {
+        guard height.isFinite, height > 0 else { return }
+        guard abs(measuredComposerHeight - height) > Layout.inputFrameTolerance else { return }
+        measuredComposerHeight = height
+        Logger.shared.debug("[ChatComposer] measuredHeight=\(height)")
+    }
+
+    private func logComposerKeyboardState() {
+        Logger.shared.debug(
+            "[ChatComposer] keyboardHeight=\(keyboardObserver.keyboardHeight) isKeyboardVisible=\(keyboardObserver.isKeyboardVisible)"
+        )
+        Logger.shared.debug(
+            "[ChatComposer] bottomPadding=\(composerBottomPadding) customTabBarHeight=\(keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)"
+        )
+        Logger.shared.debug("[ChatComposer] visible=true")
+    }
+
+    private func logChatInputLayout(
+        proxy: GeometryProxy,
+        containerWidth: CGFloat,
+        reason: String,
+        keyboardVisible: Bool
+    ) {
+        guard isRoomDetailVisible else { return }
+
+        let localFrame = proxy.frame(in: .named(CoordinateSpaceName.roomDetailRoot))
+        let globalFrame = proxy.frame(in: .global)
+        let expectedWidth = containerWidth
+        let bottomTarget = keyboardVisible ? "keyboard" : "tabBarTop"
+        updateInputBottomConstraint(target: bottomTarget)
+        Logger.shared.debug("[ChatInput] inputFrame=\(localFrame.debugDescription)")
+        Logger.shared.debug("[ChatInput] globalFrame=\(globalFrame.debugDescription)")
+        Logger.shared.debug("[ChatInput] isHidden=false alpha=1 frame=\(localFrame.debugDescription)")
+        Logger.shared.debug("[ChatInput] superviewExists=true")
+        Logger.shared.debug("[ChatInput] coveredByEmptyState=false")
+        Logger.shared.debug("[ChatInput] viewSafeAreaInsets=\(String(describing: proxy.safeAreaInsets))")
+        Logger.shared.debug("[ChatInput] tabBarFrame=custom(height:\(RootTabBarMetrics.contentHeight))")
+        Logger.shared.debug("[ChatInput] keyboardVisible=\(keyboardVisible)")
+        Logger.shared.debug(
+            "[ChatComposer] keyboardHeight=\(keyboardObserver.keyboardHeight) isKeyboardVisible=\(keyboardObserver.isKeyboardVisible)"
+        )
+        Logger.shared.debug(
+            "[ChatComposer] bottomPadding=\(composerBottomPadding) customTabBarHeight=\(keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)"
+        )
+        Logger.shared.debug("[ChatComposer] visible=true")
+
+        validateComposerVisibility(globalFrame: globalFrame)
+
+        validateInputHorizontalFrame(
+            frame: localFrame,
+            expectedWidth: expectedWidth,
+            bottomTarget: bottomTarget,
+            reason: reason
+        )
+    }
+
+    private func validateComposerVisibility(globalFrame: CGRect) {
+        let screenBounds = UIScreen.main.bounds
+        let hasVisibleHeight = globalFrame.height > 0
+            && globalFrame.maxY > screenBounds.minY
+            && globalFrame.minY < screenBounds.maxY
+
+        if hasVisibleHeight {
+            return
+        }
+
+        let reason: String
+        if globalFrame.height <= 0 {
+            reason = "zeroHeight"
+        } else if globalFrame.minY >= screenBounds.maxY {
+            reason = "belowScreen"
+        } else {
+            reason = "aboveScreen"
+        }
+
+        Logger.shared.error(
+            "[ChatComposer] composerNotVisible reason=\(reason) globalFrame=\(globalFrame.debugDescription) screenBounds=\(screenBounds.debugDescription)"
+        )
+    }
+
+    private func validateInputHorizontalFrame(
+        frame: CGRect,
+        expectedWidth: CGFloat,
+        bottomTarget: String,
+        reason: String
+    ) {
+        guard expectedWidth > 0 else { return }
+
+        let hasInvalidMinX = abs(frame.minX) > Layout.inputFrameTolerance
+        let hasInvalidWidth = abs(frame.width - expectedWidth) > Layout.inputFrameTolerance
+        guard hasInvalidMinX || hasInvalidWidth else {
+            Logger.shared.debug(
+                "[ChatInput] layoutValid minX=\(frame.minX) width=\(frame.width) targetWidth=\(expectedWidth) bottomTarget=\(bottomTarget)"
+            )
+            return
+        }
+
+        Logger.shared.error(
+            "[ChatInput] invalidHorizontalFrame minX=\(frame.minX) expected=0 width=\(frame.width) expectedWidth=\(expectedWidth) reason=\(reason)"
+        )
+    }
+
+    private func updateMessageListInsets() {
+        Logger.shared.debug(
+            "[ChatInput] messageListBottomInset=\(messageListBottomInset) composerMeasuredHeight=\(measuredComposerHeight) keyboardVisible=\(keyboardObserver.isKeyboardVisible)"
+        )
+    }
+
+    private func chatListSectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(PikkoTypography.captionStrong)
+            .foregroundStyle(PikkoColor.secondaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, PikkoSpacing.xs)
+            .padding(.bottom, PikkoSpacing.xs)
     }
 }
 
@@ -497,5 +757,77 @@ private struct ChatAttachmentToken: View {
         .frame(height: 32)
         .background(PikkoColor.surfaceElevated)
         .clipShape(Capsule())
+    }
+}
+
+private struct ChatComposerHeightPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+@MainActor
+private final class ChatKeyboardObserver: ObservableObject {
+    @Published private(set) var keyboardHeight: CGFloat = 0
+    @Published private(set) var isKeyboardVisible = false
+    @Published private(set) var animationDuration: Double = 0.25
+    @Published private(set) var animationCurve: UInt = 0
+
+    init() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardWillChangeFrame(_:)),
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardWillHide(_:)),
+            name: UIResponder.keyboardWillHideNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleKeyboardWillChangeFrame(_ notification: Notification) {
+        keyboardHeight = keyboardOverlapHeight(from: notification)
+        isKeyboardVisible = keyboardHeight > 0
+        animationDuration = keyboardAnimationDuration(from: notification)
+        animationCurve = keyboardAnimationCurve(from: notification)
+        Logger.shared.debug("[ChatKeyboard] willChangeFrame height=\(keyboardHeight)")
+    }
+
+    @objc private func handleKeyboardWillHide(_ notification: Notification) {
+        keyboardHeight = 0
+        isKeyboardVisible = false
+        animationDuration = keyboardAnimationDuration(from: notification)
+        animationCurve = keyboardAnimationCurve(from: notification)
+        Logger.shared.debug("[ChatKeyboard] willHide")
+    }
+
+    private func keyboardOverlapHeight(from notification: Notification) -> CGFloat {
+        guard let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            return 0
+        }
+
+        let windowBounds = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }?
+            .bounds ?? UIScreen.main.bounds
+        return max(0, windowBounds.maxY - endFrame.minY)
+    }
+
+    private func keyboardAnimationDuration(from notification: Notification) -> Double {
+        notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+    }
+
+    private func keyboardAnimationCurve(from notification: Notification) -> UInt {
+        notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 0
     }
 }

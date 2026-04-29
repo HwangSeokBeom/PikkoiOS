@@ -8,7 +8,12 @@ Do not commit real secrets unless the team explicitly decides they are safe to p
 1. Copy `Config/AuthSecrets.example.xcconfig` to one of these local files:
    - `Config/AuthSecrets.xcconfig`
    - `Config/LocalSecrets.xcconfig`
-2. Copy `Config/Secrets.xcconfig.sample` to `Config/Secrets.xcconfig` if the build uses `Secrets.xcconfig`.
+2. Copy `Config/Secrets.xcconfig.sample` to `Config/Secrets.xcconfig`.
+
+```sh
+cp Config/Secrets.xcconfig.sample Config/Secrets.xcconfig
+```
+
 3. Fill in these values locally:
    - `KAKAO_NATIVE_APP_KEY`
    - `GOOGLE_IOS_CLIENT_ID`
@@ -36,15 +41,33 @@ The current payment bridge uses the `iamport_ios` SDK. This SDK requires `PORTON
 
 Debug and Release xcconfigs provide placeholders first, then optionally include local secret files. After the includes, `PIKKO_APP_ENV`, `APS_ENVIRONMENT`, and `PAYMENT_TEST_MODE` are set again so a shared local secrets file cannot accidentally switch the build environment.
 
+Create the local file and replace the placeholder with the real merchant identifier from the PortOne console:
+
+```sh
+cp Config/Secrets.xcconfig.sample Config/Secrets.xcconfig
+```
+
+Then open `Config/Secrets.xcconfig` and edit:
+
+```xcconfig
+PORTONE_USER_CODE = imp실제값
+```
+
 Expected local payment keys:
 
 ```xcconfig
 PORTONE_USER_CODE = impXXXXXXXX
-PORTONE_PG = html5_inicis
-PORTONE_PG_ID = INIpayTest
-PORTONE_PAY_METHOD = card
 PORTONE_APP_SCHEME = pikko
+PORTONE_PG = html5_inicis
+PORTONE_PG_ID =
+PORTONE_PAY_METHOD = card
 ```
+
+After changing `Config/Secrets.xcconfig` in Xcode:
+
+1. Run `Product > Clean Build Folder`.
+2. Rebuild and launch the app.
+3. Confirm the console log shows `userCodeState=valid`.
 
 For Release, use production PortOne values and keep `PAYMENT_TEST_MODE = NO` from `Config/Release.xcconfig`.
 

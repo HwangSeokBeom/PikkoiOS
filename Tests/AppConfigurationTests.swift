@@ -93,7 +93,7 @@ final class AppConfigurationTests: XCTestCase {
             environment: .production,
             baseURL: URL(string: "http://pickup.sesac.kr:42678/"),
             seSACKey: "test-sesac-key",
-            portOneUserCode: "imp_test",
+            portOneUserCode: "imp12345678",
             portOnePg: "html5_inicis",
             portOnePgID: "INIpayTest",
             portOnePayMethod: "card",
@@ -110,7 +110,7 @@ final class AppConfigurationTests: XCTestCase {
             environment: .production,
             baseURL: URL(string: "http://pickup.sesac.kr:42678/"),
             seSACKey: "test-sesac-key",
-            portOneUserCode: "imp_live",
+            portOneUserCode: "imp87654321",
             portOnePg: "html5_inicis",
             portOnePgID: "production-pg",
             portOnePayMethod: "card",
@@ -120,6 +120,55 @@ final class AppConfigurationTests: XCTestCase {
 
         XCTAssertTrue(configuration.blocksProductionPayment)
         XCTAssertTrue(configuration.shouldShowPaymentWarning)
+    }
+
+    func testPortOneUserCodeDiagnosticMarksKnownPlaceholdersInvalid() {
+        let placeholderValues = [
+            "",
+            "placeholder",
+            "YOUR_PORTONE_USER_CODE",
+            "PORTONE_USER_CODE",
+            "$(PORTONE_USER_CODE)",
+            "imp00000000",
+            "replace_me",
+            "missing_or_placeholder",
+            "REPLACE_WITH_PORTONE_USER_CODE"
+        ]
+
+        for placeholderValue in placeholderValues {
+            let configuration = AppConfiguration(
+                environment: .development,
+                baseURL: URL(string: "http://pickup.sesac.kr:42678/"),
+                seSACKey: "test-sesac-key",
+                portOneUserCode: placeholderValue,
+                portOnePg: "html5_inicis",
+                portOnePgID: "INIpayTest",
+                portOnePayMethod: "card",
+                portOneAppScheme: "pikko",
+                paymentTestMode: true
+            )
+
+            XCTAssertNil(configuration.portOneUserCode, placeholderValue)
+            XCTAssertNotEqual(configuration.portOneUserCodeDiagnostic.state, "valid", placeholderValue)
+        }
+    }
+
+    func testPortOneUserCodeDiagnosticMarksRealisticUserCodeValid() {
+        let configuration = AppConfiguration(
+            environment: .development,
+            baseURL: URL(string: "http://pickup.sesac.kr:42678/"),
+            seSACKey: "test-sesac-key",
+            portOneUserCode: "imp12345678",
+            portOnePg: "html5_inicis",
+            portOnePgID: "INIpayTest",
+            portOnePayMethod: "card",
+            portOneAppScheme: "pikko",
+            paymentTestMode: true
+        )
+
+        XCTAssertEqual(configuration.portOneUserCode, "imp12345678")
+        XCTAssertEqual(configuration.portOneUserCodeDiagnostic.state, "valid")
+        XCTAssertEqual(configuration.portOneUserCodeDiagnostic.source, "AppConfiguration.explicit.PORTONE_USER_CODE")
     }
 }
 

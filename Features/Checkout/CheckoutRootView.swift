@@ -246,6 +246,7 @@ private final class PortOnePaymentViewController: UIViewController {
         super.viewDidAppear(animated)
         guard !didStartPayment else { return }
         didStartPayment = true
+        Logger.shared.debug("[PortOne] present payment started")
 
         paymentGateway.requestPayment(
             on: webView,

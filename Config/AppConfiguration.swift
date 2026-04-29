@@ -68,6 +68,16 @@ struct AppConfiguration: Sendable {
     private static let placeholderGoogleReversedClientID = "REPLACE_WITH_GOOGLE_REVERSED_CLIENT_ID"
     private static let placeholderPortOneUserCode = "REPLACE_WITH_PORTONE_USER_CODE"
     private static let placeholderPortOnePgID = "REPLACE_WITH_PORTONE_PG_ID"
+    private static let knownPlaceholderValues: Set<String> = [
+        "placeholder",
+        "your_portone_user_code",
+        "portone_user_code",
+        "$(portone_user_code)",
+        "imp00000000",
+        "replace_me",
+        "replace_with_portone_user_code",
+        "missing_or_placeholder"
+    ]
 
     enum BundleKey {
         static let environment = "PIKKO_APP_ENV"
@@ -95,9 +105,10 @@ struct AppConfiguration: Sendable {
         let key: String
         let source: String
         let state: String
+        let rawMasked: String
 
         var logStatus: String {
-            "\(state):source=\(source)"
+            "\(state):source=\(source):rawMasked=\(rawMasked)"
         }
     }
 
@@ -117,6 +128,11 @@ struct AppConfiguration: Sendable {
     let portOnePgID: String?
     let portOnePayMethod: String
     let portOneAppScheme: String
+    let portOneUserCodeDiagnostic: ConfiguredValueDiagnostic
+    let portOnePgDiagnostic: ConfiguredValueDiagnostic
+    let portOnePgIDDiagnostic: ConfiguredValueDiagnostic
+    let portOnePayMethodDiagnostic: ConfiguredValueDiagnostic
+    let portOneAppSchemeDiagnostic: ConfiguredValueDiagnostic
     let isPaymentTestMode: Bool
     let authorizationHeaderFormat: TokenHeaderFormat
 
@@ -145,6 +161,36 @@ struct AppConfiguration: Sendable {
         let resolvedBaseURL = Self.resolveBaseURL(explicitBaseURL: baseURL, bundle: bundle)
         let resolvedSeSACKey = Self.resolveSeSACKey(explicitSeSACKey: seSACKey, bundle: bundle)
         let resolvedGoogleIOSClientID = googleIOSClientID ?? Self.resolveGoogleIOSClientID(bundle: bundle)
+        let resolvedPortOneUserCode = Self.resolveConfiguredValue(
+            explicitValue: portOneUserCode,
+            key: BundleKey.portOneUserCode,
+            bundle: bundle,
+            placeholder: Self.placeholderPortOneUserCode
+        )
+        let resolvedPortOnePg = Self.resolveConfiguredValue(
+            explicitValue: portOnePg,
+            key: BundleKey.portOnePg,
+            bundle: bundle,
+            defaultValue: "html5_inicis"
+        )
+        let resolvedPortOnePgID = Self.resolveConfiguredValue(
+            explicitValue: portOnePgID,
+            key: BundleKey.portOnePgID,
+            bundle: bundle,
+            placeholder: Self.placeholderPortOnePgID
+        )
+        let resolvedPortOnePayMethod = Self.resolveConfiguredValue(
+            explicitValue: portOnePayMethod,
+            key: BundleKey.portOnePayMethod,
+            bundle: bundle,
+            defaultValue: "card"
+        )
+        let resolvedPortOneAppScheme = Self.resolveConfiguredValue(
+            explicitValue: portOneAppScheme,
+            key: BundleKey.portOneAppScheme,
+            bundle: bundle,
+            defaultValue: "pikko"
+        )
         self.environment = environment
         self.authorizationHeaderFormat = authorizationHeaderFormat
         self.baseURL = resolvedBaseURL.url
@@ -161,11 +207,16 @@ struct AppConfiguration: Sendable {
             )
         self.isInternalStubAuthEnabled = internalStubAuthEnabled ?? Self.resolveInternalStubAuthEnabled(bundle: bundle)
         self.isChatSocketDebugEnabled = chatSocketDebugEnabled ?? Self.resolveChatSocketDebugEnabled(bundle: bundle)
-        self.portOneUserCode = portOneUserCode ?? Self.resolvePortOneUserCode(bundle: bundle)
-        self.portOnePg = portOnePg ?? Self.resolvePortOnePg(bundle: bundle)
-        self.portOnePgID = portOnePgID ?? Self.resolvePortOnePgID(bundle: bundle)
-        self.portOnePayMethod = portOnePayMethod ?? Self.resolvePortOnePayMethod(bundle: bundle)
-        self.portOneAppScheme = portOneAppScheme ?? Self.resolvePortOneAppScheme(bundle: bundle)
+        self.portOneUserCode = resolvedPortOneUserCode.value
+        self.portOnePg = resolvedPortOnePg.value ?? "html5_inicis"
+        self.portOnePgID = resolvedPortOnePgID.value
+        self.portOnePayMethod = resolvedPortOnePayMethod.value ?? "card"
+        self.portOneAppScheme = resolvedPortOneAppScheme.value ?? "pikko"
+        self.portOneUserCodeDiagnostic = resolvedPortOneUserCode.diagnostic
+        self.portOnePgDiagnostic = resolvedPortOnePg.diagnostic
+        self.portOnePgIDDiagnostic = resolvedPortOnePgID.diagnostic
+        self.portOnePayMethodDiagnostic = resolvedPortOnePayMethod.diagnostic
+        self.portOneAppSchemeDiagnostic = resolvedPortOneAppScheme.diagnostic
         self.isPaymentTestMode = paymentTestMode ?? Self.resolvePaymentTestMode(bundle: bundle)
         self.defaultTimeout = URLSessionConfigurationFactory.defaultRequestTimeout
         self.uploadTimeout = URLSessionConfigurationFactory.uploadRequestTimeout
@@ -274,43 +325,6 @@ struct AppConfiguration: Sendable {
         configuredBool(for: BundleKey.chatSocketDebugEnabled, bundle: bundle)
     }
 
-    private static func resolvePortOneUserCode(bundle: Bundle) -> String? {
-        configuredString(
-            forAnyOf: [BundleKey.portOneUserCode],
-            bundle: bundle,
-            placeholder: placeholderPortOneUserCode
-        )
-    }
-
-    private static func resolvePortOnePg(bundle: Bundle) -> String {
-        configuredString(
-            forAnyOf: [BundleKey.portOnePg],
-            bundle: bundle
-        ) ?? "html5_inicis"
-    }
-
-    private static func resolvePortOnePgID(bundle: Bundle) -> String? {
-        configuredString(
-            forAnyOf: [BundleKey.portOnePgID],
-            bundle: bundle,
-            placeholder: placeholderPortOnePgID
-        )
-    }
-
-    private static func resolvePortOnePayMethod(bundle: Bundle) -> String {
-        configuredString(
-            forAnyOf: [BundleKey.portOnePayMethod],
-            bundle: bundle
-        ) ?? "card"
-    }
-
-    private static func resolvePortOneAppScheme(bundle: Bundle) -> String {
-        configuredString(
-            forAnyOf: [BundleKey.portOneAppScheme],
-            bundle: bundle
-        ) ?? "pikko"
-    }
-
     private static func resolvePaymentTestMode(bundle: Bundle) -> Bool {
         configuredBool(for: BundleKey.paymentTestMode, bundle: bundle)
     }
@@ -396,6 +410,45 @@ struct AppConfiguration: Sendable {
         configuredRawStringWithSource(forAnyOf: keys, bundle: bundle)?.value
     }
 
+    private static func resolveConfiguredValue(
+        explicitValue: String?,
+        key: String,
+        bundle: Bundle,
+        defaultValue: String? = nil,
+        placeholder: String? = nil
+    ) -> (value: String?, diagnostic: ConfiguredValueDiagnostic) {
+        let rawValue: String?
+        let source: String
+
+        if let explicitValue {
+            rawValue = explicitValue
+            source = "AppConfiguration.explicit.\(key)"
+        } else if let configured = configuredRawStringWithSource(forAnyOf: [key], bundle: bundle) {
+            rawValue = configured.value
+            source = configured.source
+        } else if let defaultValue {
+            rawValue = defaultValue
+            source = "default.\(key)"
+        } else {
+            rawValue = nil
+            source = "missing:expected_xcconfig=Config/Secrets.xcconfig"
+        }
+
+        let diagnostic = configuredValueDiagnostic(
+            key: key,
+            rawValue: rawValue,
+            source: source,
+            placeholder: placeholder
+        )
+
+        guard diagnostic.state == "valid",
+              let normalizedValue = normalizedConfiguredValue(rawValue) else {
+            return (nil, diagnostic)
+        }
+
+        return (normalizedValue, diagnostic)
+    }
+
     private static func configuredRawStringWithSource(
         forAnyOf keys: [String],
         bundle: Bundle
@@ -440,23 +493,47 @@ struct AppConfiguration: Sendable {
             return ConfiguredValueDiagnostic(
                 key: key,
                 source: "missing:expected_xcconfig=Config/Secrets.xcconfig|Config/AuthSecrets.xcconfig|Config/LocalSecrets.xcconfig",
-                state: "missing"
+                state: "missing",
+                rawMasked: "-"
             )
         }
 
-        guard let normalized = normalizedConfiguredValue(raw.value) else {
-            return ConfiguredValueDiagnostic(key: key, source: raw.source, state: "empty")
+        return configuredValueDiagnostic(
+            key: key,
+            rawValue: raw.value,
+            source: raw.source,
+            placeholder: placeholder
+        )
+    }
+
+    private static func configuredValueDiagnostic(
+        key: String,
+        rawValue: String?,
+        source: String,
+        placeholder: String? = nil
+    ) -> ConfiguredValueDiagnostic {
+        guard let rawValue else {
+            return ConfiguredValueDiagnostic(key: key, source: source, state: "missing", rawMasked: "-")
+        }
+
+        guard let normalized = normalizedConfiguredValue(rawValue) else {
+            return ConfiguredValueDiagnostic(key: key, source: source, state: "empty", rawMasked: "-")
         }
 
         if isPlaceholderValue(normalized, placeholder: placeholder) {
-            return ConfiguredValueDiagnostic(key: key, source: raw.source, state: "placeholder")
+            return ConfiguredValueDiagnostic(key: key, source: source, state: "placeholder", rawMasked: maskedConfiguredValue(normalized))
         }
 
         if isUnresolvedBuildSettingReference(normalized) {
-            return ConfiguredValueDiagnostic(key: key, source: raw.source, state: "unresolved_build_setting")
+            return ConfiguredValueDiagnostic(key: key, source: source, state: "placeholder", rawMasked: maskedConfiguredValue(normalized))
         }
 
-        return ConfiguredValueDiagnostic(key: key, source: raw.source, state: "set")
+        if key == BundleKey.portOneUserCode,
+           !isValidPortOneUserCode(normalized) {
+            return ConfiguredValueDiagnostic(key: key, source: source, state: "invalid", rawMasked: maskedConfiguredValue(normalized))
+        }
+
+        return ConfiguredValueDiagnostic(key: key, source: source, state: "valid", rawMasked: maskedConfiguredValue(normalized))
     }
 
     static func isValidSeSACKey(_ key: String) -> Bool {
@@ -490,7 +567,35 @@ struct AppConfiguration: Sendable {
             return true
         }
 
-        return value.hasPrefix("<") && value.hasSuffix(">")
+        let normalizedLowercasedValue = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return knownPlaceholderValues.contains(normalizedLowercasedValue)
+            || value.hasPrefix("<") && value.hasSuffix(">")
+            || value.hasPrefix("REPLACE_WITH_")
+    }
+
+    private static func isValidPortOneUserCode(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("imp") else {
+            return false
+        }
+
+        let containsWhitespace = trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
+        return trimmed.count >= 8 && !containsWhitespace
+    }
+
+    private static func maskedConfiguredValue(_ value: String) -> String {
+        let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedValue.hasPrefix("imp"), normalizedValue.count > 3 {
+            return "imp…****"
+        }
+
+        guard normalizedValue.count > 6 else {
+            return normalizedValue.isEmpty ? "-" : "***"
+        }
+
+        let prefix = normalizedValue.prefix(4)
+        let suffix = normalizedValue.suffix(2)
+        return "\(prefix)…\(suffix)"
     }
 
     var hasValidBaseURL: Bool {

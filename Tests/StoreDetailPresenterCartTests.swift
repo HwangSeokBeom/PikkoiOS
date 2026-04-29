@@ -108,14 +108,20 @@ final class StoreDetailPresenterCartTests: XCTestCase {
         XCTAssertEqual(target.preferredTitle, "새싹 카페")
     }
 
-    func testCreateChatRoomRequestDTOEncodesOpponentIDForStoreScopedRoom() throws {
+    func testCreateChatRoomRequestDTOEncodesOpponentAndStoreIDForStoreScopedRoom() throws {
         let data = try NetworkCoding.makeJSONEncoder().encode(
-            CreateChatRoomRequestDTO(opponentID: "owner-1")
+            CreateChatRoomRequestDTO(
+                mode: .storeInquiry(
+                    storeID: "store-1",
+                    opponentID: "owner-1",
+                    storeName: "새싹 카페"
+                )
+            )
         )
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
 
         XCTAssertEqual(object["opponent_id"], "owner-1")
-        XCTAssertNil(object["store_id"])
+        XCTAssertEqual(object["store_id"], "store-1")
     }
 
     func testCreateChatRoomRequestDTOEncodesOpponentIDOnlyForUserChat() throws {
@@ -151,6 +157,32 @@ final class StoreDetailPresenterCartTests: XCTestCase {
 
         XCTAssertEqual(room.storeID, "store-1")
         XCTAssertEqual(room.storeName, "새싹 카페")
+    }
+
+    func testChatRoomDTOMapsStoreInquiryContextFromTopLevelResponse() throws {
+        let data = Data(
+            """
+            {
+              "room_id": "room-1",
+              "opponent_id": "owner-1",
+              "opponent_name": "점주",
+              "store_id": "store-1",
+              "store_name": "새싹 카페",
+              "room_type": "store_inquiry",
+              "last_message": null,
+              "updatedAt": "2026-04-29T00:00:00Z"
+            }
+            """.utf8
+        )
+
+        let dto = try NetworkCoding.makeJSONDecoder().decode(ChatRoomDTO.self, from: data)
+        let room = ChatMapper(fileURLResolver: PassthroughAuthorizedFileURLResolver()).mapRoom(dto)
+
+        XCTAssertEqual(room.storeID, "store-1")
+        XCTAssertEqual(room.storeName, "새싹 카페")
+        XCTAssertEqual(room.opponentID, "owner-1")
+        XCTAssertEqual(room.opponentName, "점주")
+        XCTAssertEqual(room.roomType, "store_inquiry")
     }
 
     func testReviewWriteUnavailableShowsEligibilityBannerState() async {

@@ -122,6 +122,32 @@ final class CheckoutFeatureTests: XCTestCase {
         XCTAssertEqual(paymentRequest.appScheme, "pikko")
     }
 
+    func testCheckoutInitialStateShowsDeveloperWarningWhenPortOneUserCodeIsMissing() async {
+        let interactor = CheckoutInteractor(
+            draft: makeDraft(),
+            orderRepository: SpyOrderRepository(validationResult: .valid),
+            appConfiguration: AppConfiguration(
+                environment: .development,
+                baseURL: URL(string: "http://pickup.sesac.kr:42678"),
+                seSACKey: "test-sesac-key",
+                portOneUserCode: "missing_or_placeholder",
+                portOnePg: "html5_inicis",
+                portOnePgID: "INIpayTest",
+                portOnePayMethod: "card",
+                portOneAppScheme: "pikko",
+                paymentTestMode: true
+            )
+        )
+
+        let state = await interactor.loadInitialState()
+
+        XCTAssertEqual(state.primaryActionTitle, "결제 설정 확인하기")
+        XCTAssertTrue(state.isPrimaryEnabled)
+        XCTAssertTrue(state.isPaymentConfigurationBlocked)
+        XCTAssertTrue(state.paymentWarningMessage?.contains("PORTONE_USER_CODE") == true)
+        XCTAssertTrue(state.paymentConfigurationDiagnosticMessage?.contains("Config/Secrets.xcconfig") == true)
+    }
+
     func testCheckoutPresenterCreatesOrderAfterValidationSuccess() async {
         let cartStore = makeFilledCartStore()
         let interactor = SpyCheckoutInteractor(
@@ -235,7 +261,44 @@ final class CheckoutFeatureTests: XCTestCase {
         XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .validatePaymentConfiguration])
         XCTAssertNil(presenter.viewState.createdOrderID)
         XCTAssertEqual(presenter.viewState.primaryActionTitle, "결제 설정 확인하기")
+        XCTAssertTrue(presenter.viewState.isPaymentConfigurationBlocked)
         XCTAssertEqual(presenter.viewState.paymentStage, .idle)
+        XCTAssertEqual(cartStore.summary.itemCount, 2)
+    }
+
+    func testCheckoutPresenterShowsConfigurationGuideWithoutOrderCreationWhenBlockedInitially() async {
+        let cartStore = makeFilledCartStore()
+        var initialState = makeLoadedViewState()
+        initialState.primaryActionTitle = "결제 설정 확인하기"
+        initialState.isPaymentConfigurationBlocked = true
+        initialState.paymentConfigurationDiagnosticMessage = "Config/Secrets.xcconfig에 PORTONE_USER_CODE를 실제 PortOne 가맹점 식별코드로 설정한 뒤 Clean Build 하세요."
+        let interactor = SpyCheckoutInteractor(
+            initialState: initialState,
+            validationResult: .success(.valid),
+            createResult: .success(
+                CreatedOrder(
+                    id: "order-1",
+                    orderCode: "D123456",
+                    totalPriceAmount: 4_500,
+                    createdAt: Date(),
+                    updatedAt: Date(),
+                    paymentBridgePayload: nil
+                )
+            )
+        )
+        let presenter = CheckoutPresenter(
+            interactor: interactor,
+            router: CheckoutRouter(),
+            cartStore: cartStore
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.primaryButtonTapped)
+
+        let recordedEvents = await interactor.recordedEvents()
+        XCTAssertEqual(recordedEvents, [.loadInitialState])
+        XCTAssertNil(presenter.viewState.createdOrderID)
+        XCTAssertEqual(presenter.viewState.errorMessage, initialState.paymentConfigurationDiagnosticMessage)
         XCTAssertEqual(cartStore.summary.itemCount, 2)
     }
 
@@ -654,7 +717,7 @@ final class CheckoutFeatureTests: XCTestCase {
             environment: environment,
             baseURL: URL(string: "http://pickup.sesac.kr:42678"),
             seSACKey: "test-sesac-key",
-            portOneUserCode: "imp_test",
+            portOneUserCode: "imp12345678",
             portOnePg: "html5_inicis",
             portOnePgID: "INIpayTest",
             portOnePayMethod: "card",

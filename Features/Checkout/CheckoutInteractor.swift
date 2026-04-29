@@ -39,7 +39,11 @@ struct CheckoutInteractor: CheckoutInteracting {
 
         let priceValidationRequest = draft.priceValidationRequest
 
-        return CheckoutViewState(
+        let paymentConfigurationWarningMessage = paymentConfigurationWarningMessage()
+        let blocksPaymentConfiguration = blocksPaymentForMissingConfiguration()
+        logPaymentConfigurationState(blocksPaymentConfiguration: blocksPaymentConfiguration)
+
+        let viewState = CheckoutViewState(
             storeName: draft.storeName,
             summaryText: "총 \(draft.itemCount)개 메뉴를 확인했고, 주문 생성 전 \(priceValidationRequest.items.count)개 항목의 가격 검증을 먼저 진행해요.",
             addressSummaryText: placeholderAddress.summaryText,
@@ -63,19 +67,27 @@ struct CheckoutInteractor: CheckoutInteracting {
             isPaymentInProgress: false,
             isVerifyingPayment: false,
             totalPriceText: draft.subtotalText,
-            primaryActionTitle: "주문 생성하기",
+            primaryActionTitle: blocksPaymentConfiguration ? "결제 설정 확인하기" : "결제하기",
             isPrimaryEnabled: !draft.isEmpty,
-            paymentWarningMessage: appConfiguration.shouldShowPaymentWarning
-                ? "테스트 결제에서도 실제 금액이 결제될 수 있으며, PG 정책에 따라 자동 환불될 수 있습니다."
-                : nil,
+            isPaymentConfigurationBlocked: blocksPaymentConfiguration,
+            paymentConfigurationDiagnosticMessage: blocksPaymentConfiguration ? paymentConfigurationGuideMessage() : nil,
+            paymentConfigurationDiagnostic: paymentConfigurationDiagnosticViewState(),
+            paymentWarningMessage: paymentConfigurationWarningMessage
+                ?? (
+                    appConfiguration.shouldShowPaymentWarning
+                        ? "테스트 결제에서도 실제 금액이 결제될 수 있으며, PG 정책에 따라 자동 환불될 수 있습니다."
+                        : nil
+                ),
             isEmpty: false
         )
+        return viewState
     }
 
     func validatePrice(input: CheckoutSubmissionInput) async throws -> CheckoutPriceValidationResult {
         guard !draft.isEmpty else {
             throw CheckoutFeatureError.validation(message: "장바구니가 비어 있어 주문을 생성할 수 없어요.")
         }
+        Logger.shared.debug("[Checkout] validatePrice started")
 
         let request = CheckoutPriceValidationRequest(
             storeID: draft.storeID,
@@ -119,7 +131,7 @@ struct CheckoutInteractor: CheckoutInteracting {
         guard blockingIssues.isEmpty else {
             let missingOrInvalidKeys = blockingIssues.map(\.key).joined(separator: ",")
             Logger.shared.error(
-                "PortOne payment preparation blocked before order creation missingOrInvalidKeys=\(missingOrInvalidKeys) environment=\(appConfiguration.environment.rawValue)"
+                "[Checkout] orderCreationBlocked reason=missingPortOneUserCode missingOrInvalidKeys=\(missingOrInvalidKeys) environment=\(appConfiguration.environment.rawValue)"
             )
             throw CheckoutFeatureError.configurationRequired
         }
@@ -129,6 +141,7 @@ struct CheckoutInteractor: CheckoutInteracting {
         guard !draft.isEmpty else {
             throw CheckoutFeatureError.validation(message: "장바구니가 비어 있어 주문을 생성할 수 없어요.")
         }
+        Logger.shared.debug("[Checkout] createOrder started")
 
         let submission = CheckoutOrderSubmission(
             draft: draft,
@@ -248,12 +261,43 @@ struct CheckoutInteractor: CheckoutInteracting {
         return "Pikko 고객"
     }
 
+    private func paymentConfigurationWarningMessage() -> String? {
+        guard appConfiguration.portOneUserCode?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty == nil else {
+            return nil
+        }
+
+#if DEBUG
+        let diagnostic = appConfiguration.portOneUserCodeDiagnostic
+        return "개발 결제 설정 필요: PORTONE_USER_CODE가 \(diagnostic.state) 상태입니다. Config/Secrets.xcconfig에 실제 PortOne 가맹점 식별코드를 설정하기 전에는 주문을 생성하지 않아요."
+#else
+        return "결제 설정을 확인해 주세요. 현재 환경에서는 결제를 시작할 수 없습니다."
+#endif
+    }
+
+    private func blocksPaymentForMissingConfiguration() -> Bool {
+        appConfiguration.portOneUserCode?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty == nil
+    }
+
+    private func paymentConfigurationGuideMessage() -> String {
+        let diagnostic = appConfiguration.portOneUserCodeDiagnostic
+        return "Config/Secrets.xcconfig에 PORTONE_USER_CODE를 실제 PortOne 가맹점 식별코드로 설정한 뒤 Clean Build 하세요. 현재 source=\(diagnostic.source), state=\(diagnostic.state), rawMasked=\(diagnostic.rawMasked) 입니다."
+    }
+
+    private func paymentConfigurationDiagnosticViewState() -> CheckoutPaymentConfigurationDiagnosticViewState {
+        let diagnostic = appConfiguration.portOneUserCodeDiagnostic
+        return CheckoutPaymentConfigurationDiagnosticViewState(
+            source: diagnostic.source,
+            state: diagnostic.state,
+            rawMasked: diagnostic.rawMasked
+        )
+    }
+
     private func makePaymentPreparationDiagnostics(
         createdOrder: CreatedOrder?,
         merchantUID: String?,
         amount: Decimal
     ) -> [PaymentPreparationDiagnostic] {
-        let portOneUserCodeDiagnostic = AppConfiguration.portOneUserCodeDiagnostic()
+        let portOneUserCodeDiagnostic = appConfiguration.portOneUserCodeDiagnostic
         let portOneUserCode = appConfiguration.portOneUserCode?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         return [
             PaymentPreparationDiagnostic(
@@ -285,23 +329,25 @@ struct CheckoutInteractor: CheckoutInteracting {
             ),
             PaymentPreparationDiagnostic(
                 key: "PORTONE_APP_SCHEME",
-                status: appConfiguration.portOneAppScheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "missing" : "ok",
-                blocksPayment: appConfiguration.portOneAppScheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                status: appConfiguration.portOneAppSchemeDiagnostic.logStatus,
+                blocksPayment: appConfiguration.portOneAppSchemeDiagnostic.state != "valid"
             ),
             PaymentPreparationDiagnostic(
                 key: "PORTONE_PG",
-                status: appConfiguration.portOnePg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "missing" : "ok",
-                blocksPayment: appConfiguration.portOnePg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                status: appConfiguration.portOnePgDiagnostic.logStatus,
+                blocksPayment: appConfiguration.portOnePgDiagnostic.state != "valid"
             ),
             PaymentPreparationDiagnostic(
                 key: "PORTONE_PG_ID",
-                status: appConfiguration.portOnePgID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty == nil ? "missing_optional" : "ok",
+                status: isOptionalPortOnePgIDState(appConfiguration.portOnePgIDDiagnostic.state)
+                    ? "missing_optional"
+                    : appConfiguration.portOnePgIDDiagnostic.logStatus,
                 blocksPayment: false
             ),
             PaymentPreparationDiagnostic(
                 key: "PORTONE_PAY_METHOD",
-                status: appConfiguration.portOnePayMethod.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "missing" : "ok",
-                blocksPayment: appConfiguration.portOnePayMethod.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                status: appConfiguration.portOnePayMethodDiagnostic.logStatus,
+                blocksPayment: appConfiguration.portOnePayMethodDiagnostic.state != "valid"
             ),
             PaymentPreparationDiagnostic(
                 key: "amount",
@@ -321,8 +367,29 @@ struct CheckoutInteractor: CheckoutInteracting {
             .map { "\($0.key)=\($0.status)" }
             .joined(separator: " ")
         Logger.shared.debug(
-            "PortOne payment configuration validation environment=\(appConfiguration.environment.rawValue) \(details)"
+            "[PaymentConfig] validation environment=\(appConfiguration.environment.rawValue) \(details)"
         )
+    }
+
+    private func isOptionalPortOnePgIDState(_ state: String) -> Bool {
+        state == "missing" || state == "empty" || state == "placeholder"
+    }
+
+    private func logPaymentConfigurationState(blocksPaymentConfiguration: Bool) {
+        Logger.shared.debug(
+            "[PaymentConfig] userCodeState=\(appConfiguration.portOneUserCodeDiagnostic.state) source=\(appConfiguration.portOneUserCodeDiagnostic.source) rawMasked=\(appConfiguration.portOneUserCodeDiagnostic.rawMasked)"
+        )
+        Logger.shared.debug(
+            "[PaymentConfig] environment=\(appConfiguration.environment.rawValue) userCodeState=\(appConfiguration.portOneUserCodeDiagnostic.state)"
+        )
+        Logger.shared.debug(
+            "[PaymentConfig] source=\(appConfiguration.portOneUserCodeDiagnostic.source) rawMasked=\(appConfiguration.portOneUserCodeDiagnostic.rawMasked)"
+        )
+        Logger.shared.debug("[PaymentConfig] appSchemeState=\(appConfiguration.portOneAppSchemeDiagnostic.state)")
+        Logger.shared.debug("[PaymentConfig] pgState=\(appConfiguration.portOnePgDiagnostic.state)")
+        Logger.shared.debug("[PaymentConfig] pgIdState=\(appConfiguration.portOnePgIDDiagnostic.state)")
+        Logger.shared.debug("[PaymentConfig] payMethodState=\(appConfiguration.portOnePayMethodDiagnostic.state)")
+        Logger.shared.debug("[Checkout] paymentButtonState=\(blocksPaymentConfiguration ? "blockedMissingConfig" : "ready")")
     }
 
     private func map(error: NetworkError) -> CheckoutFeatureError {

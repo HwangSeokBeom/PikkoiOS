@@ -2,12 +2,14 @@ import SwiftUI
 
 struct CheckoutView: View {
     private enum Layout {
-        static let estimatedBottomActionBarHeight: CGFloat = 172
-        static let scrollBottomInset: CGFloat = estimatedBottomActionBarHeight + RootTabBarMetrics.scrollContentBottomInset
-        static let ctaBottomInset: CGFloat = PikkoSpacing.sm + RootTabBarMetrics.contentHeight
+        static let estimatedBottomActionBarHeight: CGFloat = 260
+        static let bottomContentGap: CGFloat = PikkoSpacing.xl
     }
 
     @ObservedObject var presenter: CheckoutPresenter
+    @State private var bottomActionBarHeight = Layout.estimatedBottomActionBarHeight
+    @State private var isPaymentConfigurationGuidePresented = false
+    @FocusState private var isPickupMemoFocused: Bool
 
     var body: some View {
         ZStack {
@@ -45,7 +47,9 @@ struct CheckoutView: View {
                                 subtitle: presenter.viewState.createdOrderCode.map { "order_code \($0)" }
                             )
 
-                            if let paymentWarningMessage = presenter.viewState.paymentWarningMessage {
+                            if presenter.viewState.isPaymentConfigurationBlocked {
+                                paymentConfigurationWarningCard
+                            } else if let paymentWarningMessage = presenter.viewState.paymentWarningMessage {
                                 Text(paymentWarningMessage)
                                     .font(PikkoTypography.captionStrong)
                                     .foregroundStyle(PikkoColor.danger)
@@ -147,10 +151,10 @@ struct CheckoutView: View {
                     }
                     .padding(.horizontal, PikkoSpacing.xl)
                     .padding(.top, PikkoSpacing.xl)
-                    .padding(.bottom, Layout.scrollBottomInset)
+                    .padding(.bottom, scrollBottomInset)
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .contentMargins(.bottom, Layout.scrollBottomInset, for: .scrollIndicators)
+                .contentMargins(.bottom, scrollBottomInset, for: .scrollIndicators)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -171,17 +175,31 @@ struct CheckoutView: View {
 
                 PrimaryButton(
                     title: presenter.viewState.primaryActionTitle,
-                    systemImage: "lock.shield",
+                    systemImage: primaryActionSystemImage,
                     isLoading: presenter.viewState.isPrimaryLoading,
                     isEnabled: presenter.viewState.isPrimaryEnabled
                 ) {
+                    if presenter.viewState.isPaymentConfigurationBlocked {
+                        isPaymentConfigurationGuidePresented = true
+                    }
                     Task { await presenter.send(.primaryButtonTapped) }
                 }
             }
             .padding(.horizontal, PikkoSpacing.xl)
             .padding(.top, PikkoSpacing.md)
-            .padding(.bottom, Layout.ctaBottomInset)
+            .padding(.bottom, bottomActionBarBottomPadding)
             .background(PikkoColor.surfaceElevated)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear {
+                            updateBottomActionBarHeight(proxy.size.height)
+                        }
+                        .onChange(of: proxy.size.height) { _, height in
+                            updateBottomActionBarHeight(height)
+                        }
+                }
+            }
             .overlay(alignment: .top) {
                 Rectangle()
                     .fill(PikkoColor.divider)
@@ -189,9 +207,29 @@ struct CheckoutView: View {
             }
         }
         .pikkoScreen(title: presenter.viewState.title)
+        .alert("결제 설정 확인하기", isPresented: $isPaymentConfigurationGuidePresented) {
+            Button("확인", role: .cancel) {}
+        } message: {
+            Text(paymentConfigurationGuideText)
+        }
+    }
+
+    private var scrollBottomInset: CGFloat {
+        bottomActionBarHeight
+            + (isPickupMemoFocused ? 0 : RootTabBarMetrics.scrollContentBottomInset)
+            + Layout.bottomContentGap
+    }
+
+    private var bottomActionBarBottomPadding: CGFloat {
+        PikkoSpacing.sm + (isPickupMemoFocused ? 0 : RootTabBarMetrics.contentHeight)
     }
 
     private var helperMessage: String {
+        if presenter.viewState.isPaymentConfigurationBlocked {
+            return presenter.viewState.paymentConfigurationDiagnosticMessage
+                ?? "Config/Secrets.xcconfig에 실제 PortOne 가맹점 식별코드를 설정한 뒤 Clean Build 하세요."
+        }
+
         if presenter.viewState.paymentBridgeContext != nil {
             return "결제 창을 통해 결제를 완료한 뒤 서버 검증을 이어서 진행합니다."
         }
@@ -215,6 +253,57 @@ struct CheckoutView: View {
         return "가격 검증을 먼저 수행한 뒤 주문을 생성하고, 결제 성공 시 서버 검증까지 이어집니다."
     }
 
+    private var primaryActionSystemImage: String {
+        presenter.viewState.isPaymentConfigurationBlocked ? "gearshape.fill" : "creditcard.fill"
+    }
+
+    private var paymentConfigurationWarningCard: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+            Text("Config/Secrets.xcconfig에 PORTONE_USER_CODE를 실제 PortOne 가맹점 식별코드로 설정한 뒤 Clean Build 하세요.")
+                .font(PikkoTypography.captionStrong)
+                .foregroundStyle(PikkoColor.danger)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let diagnostic = presenter.viewState.paymentConfigurationDiagnostic {
+                VStack(alignment: .leading, spacing: 4) {
+                    diagnosticText("source", diagnostic.source)
+                    diagnosticText("state", diagnostic.state)
+                    diagnosticText("rawMasked", diagnostic.rawMasked)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(PikkoSpacing.md)
+        .background(PikkoColor.point.opacity(0.14))
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+    }
+
+    private func diagnosticText(_ title: String, _ value: String) -> some View {
+        Text("\(title)=\(value)")
+            .font(PikkoTypography.caption)
+            .foregroundStyle(PikkoColor.secondaryText)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var paymentConfigurationGuideText: String {
+        """
+        1. 터미널에서:
+        cp Config/Secrets.xcconfig.sample Config/Secrets.xcconfig
+        2. Config/Secrets.xcconfig 열기
+        3. PORTONE_USER_CODE = imp실제값 으로 변경
+        4. Xcode Product > Clean Build Folder
+        5. 다시 실행 후 로그에서 userCodeState=valid 확인
+        """
+    }
+
+    private func updateBottomActionBarHeight(_ height: CGFloat) {
+        guard height.isFinite, height > 0 else { return }
+        guard abs(bottomActionBarHeight - height) > 1 else { return }
+        bottomActionBarHeight = height
+        Logger.shared.debug("[Checkout] bottomPaymentBarHeight=\(height) scrollBottomInset=\(scrollBottomInset)")
+    }
+
     private var pickupMemoBinding: Binding<String> {
         Binding(
             get: { presenter.viewState.pickupMemo },
@@ -234,6 +323,7 @@ struct CheckoutView: View {
                 .padding(.horizontal, PikkoSpacing.md)
                 .padding(.vertical, PikkoSpacing.sm)
                 .frame(height: 104)
+                .focused($isPickupMemoFocused)
 
             if presenter.viewState.pickupMemo.isEmpty {
                 Text("가게에 전달할 요청사항이 있으면 입력해 주세요")

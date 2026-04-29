@@ -58,6 +58,9 @@ struct ChatRoom: Equatable, Sendable, Identifiable {
     let lastMessage: ChatMessage?
     let storeID: String?
     let storeName: String?
+    let opponentID: String?
+    let opponentName: String?
+    let roomType: String?
 
     func updating(lastMessage: ChatMessage) -> ChatRoom {
         ChatRoom(
@@ -67,7 +70,10 @@ struct ChatRoom: Equatable, Sendable, Identifiable {
             participants: participants,
             lastMessage: lastMessage,
             storeID: storeID,
-            storeName: storeName
+            storeName: storeName,
+            opponentID: opponentID,
+            opponentName: opponentName,
+            roomType: roomType
         )
     }
 
@@ -79,7 +85,10 @@ struct ChatRoom: Equatable, Sendable, Identifiable {
             participants: participants,
             lastMessage: lastMessage,
             storeID: storeID ?? self.storeID,
-            storeName: storeName ?? self.storeName
+            storeName: storeName ?? self.storeName,
+            opponentID: opponentID,
+            opponentName: opponentName,
+            roomType: roomType
         )
     }
 }
@@ -129,6 +138,7 @@ enum ChatTarget: Equatable, Sendable {
 
 enum ChatRoomEntryPoint: Equatable, Sendable {
     case storeDetail
+    case storeScopedChatList
     case chatList
     case userProfile
 }
@@ -141,21 +151,71 @@ struct ChatRoomContext: Equatable, Sendable {
     let storeName: String?
     let displayTitle: String
     let canUseStoreScopedTitle: Bool
+    let hasRoomIDCollision: Bool
+    let collidingStoreIDs: [String]
+
+    var localCacheScope: ChatRoomScope {
+        ChatRoomScope(roomID: roomID, storeID: storeID, opponentID: opponentID)
+    }
+}
+
+struct ChatRoomScope: Equatable, Sendable {
+    let roomID: String
+    let storeID: String?
+    let opponentID: String?
+
+    var localCacheKey: String {
+        [
+            "room:\(roomID)",
+            "store:\(storeID ?? "-")",
+            "opponent:\(opponentID ?? "-")"
+        ].joined(separator: "|")
+    }
+
+    var isStoreInquiry: Bool {
+        storeID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty != nil
+    }
+}
+
+struct ChatLocalConversationSummary: Equatable, Sendable, Identifiable {
+    let id: String
+    let serverRoomID: String
+    let localCacheKey: String
+    let storeID: String
+    let storeName: String
+    let opponentID: String
+    let lastLocalMessage: ChatMessage?
+    let updatedAt: Date
+
+    var scope: ChatRoomScope {
+        ChatRoomScope(roomID: serverRoomID, storeID: storeID, opponentID: opponentID)
+    }
 }
 
 enum ChatRoomContextPolicy {
-    static let supportsStoreScopedRoomCreation = false
+    static let sendsStoreIDInCreateRoomRequest = true
 }
 
 struct CreateChatRoomRequestDTO: Encodable, Sendable {
     let opponentID: String
+    let storeID: String?
 
     private enum CodingKeys: String, CodingKey {
         case opponentID = "opponent_id"
+        case storeID = "store_id"
+    }
+
+    init(opponentID: String, storeID: String?) {
+        self.opponentID = opponentID
+        self.storeID = storeID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 
     init(opponentID: String) {
-        self.opponentID = opponentID
+        self.init(opponentID: opponentID, storeID: nil)
+    }
+
+    init(mode: ChatRoomCreationMode) {
+        self.init(opponentID: mode.opponentID, storeID: mode.storeID)
     }
 }
 
@@ -177,7 +237,12 @@ enum ChatRoomCreationMode: Equatable, Sendable {
     }
 
     var requestBodyKeys: [String] {
-        ["opponent_id"]
+        switch self {
+        case .storeInquiry:
+            return ["opponent_id", "store_id"]
+        case .user:
+            return ["opponent_id"]
+        }
     }
 
     var opponentID: String {
@@ -243,6 +308,9 @@ struct ChatRoomDTO: Decodable, Sendable {
     let lastChat: ChatMessageDTO?
     let storeID: String?
     let storeName: String?
+    let opponentID: String?
+    let opponentName: String?
+    let roomType: String?
     let store: ChatRoomStoreDTO?
 
     private enum CodingKeys: String, CodingKey {
@@ -251,9 +319,29 @@ struct ChatRoomDTO: Decodable, Sendable {
         case updatedAt
         case participants
         case lastChat
+        case lastMessage = "last_message"
         case storeID = "store_id"
         case storeName = "store_name"
+        case opponentID = "opponent_id"
+        case opponentName = "opponent_name"
+        case roomType = "room_type"
         case store
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        roomID = try container.decode(String.self, forKey: .roomID)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        participants = try container.decodeIfPresent([UserInfoResponseDTO].self, forKey: .participants) ?? []
+        lastChat = try container.decodeIfPresent(ChatMessageDTO.self, forKey: .lastChat)
+            ?? container.decodeIfPresent(ChatMessageDTO.self, forKey: .lastMessage)
+        storeID = try container.decodeIfPresent(String.self, forKey: .storeID)
+        storeName = try container.decodeIfPresent(String.self, forKey: .storeName)
+        opponentID = try container.decodeIfPresent(String.self, forKey: .opponentID)
+        opponentName = try container.decodeIfPresent(String.self, forKey: .opponentName)
+        roomType = try container.decodeIfPresent(String.self, forKey: .roomType)
+        store = try container.decodeIfPresent(ChatRoomStoreDTO.self, forKey: .store)
     }
 }
 
@@ -314,7 +402,7 @@ struct ChatRemoteDataSource: ChatRemoteDataSourceProtocol {
     }
 
     func createOrFetchChatRoom(mode: ChatRoomCreationMode) async throws -> ChatRoomDTO {
-        let requestDTO = CreateChatRoomRequestDTO(opponentID: mode.opponentID)
+        let requestDTO = CreateChatRoomRequestDTO(mode: mode)
         let body = RequestBody.json(
             try NetworkCoding.makeJSONEncoder().encode(
                 requestDTO
@@ -335,7 +423,7 @@ struct ChatRemoteDataSource: ChatRemoteDataSourceProtocol {
             return response
         } catch {
             Logger.shared.warning(
-                "[ChatRepository] createOrFetchRoom failed \(mode.debugDescription) requestBodyValueExists={opponent_id:\(!mode.opponentID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)} error=\(error.localizedDescription)"
+                "[ChatRepository] createOrFetchRoom failed \(mode.debugDescription) requestBodyValueExists={opponent_id:\(!mode.opponentID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),store_id:\(mode.storeID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty != nil)} error=\(error.localizedDescription)"
             )
             throw error
         }
@@ -445,14 +533,28 @@ struct ChatMapper: Sendable {
     func mapRoom(_ dto: ChatRoomDTO) -> ChatRoom {
         let storeID = dto.store?.storeID?.nilIfEmpty ?? dto.storeID?.nilIfEmpty
         let storeName = dto.store?.name?.nilIfEmpty ?? dto.storeName?.nilIfEmpty
+        let opponentID = dto.opponentID?.nilIfEmpty
+        let opponentName = dto.opponentName?.nilIfEmpty
+        let participants = dto.participants.isEmpty && (opponentID != nil || opponentName != nil)
+            ? [
+                ChatParticipant(
+                    id: opponentID ?? "opponent",
+                    nick: opponentName ?? "채팅",
+                    profileImagePath: nil
+                )
+            ]
+            : dto.participants.map(mapParticipant)
         return ChatRoom(
             id: dto.roomID,
             createdAt: dto.createdAt.flatMap(dateParser.parseISO8601),
             updatedAt: dto.updatedAt.flatMap(dateParser.parseISO8601),
-            participants: dto.participants.map(mapParticipant),
+            participants: participants,
             lastMessage: dto.lastChat.map(mapMessage),
             storeID: storeID,
-            storeName: storeName
+            storeName: storeName,
+            opponentID: opponentID,
+            opponentName: opponentName,
+            roomType: dto.roomType?.nilIfEmpty
         )
     }
 
@@ -495,6 +597,8 @@ struct ChatRoomStoreContext: Codable, Equatable, Sendable {
 protocol ChatRoomStoreContextCaching: Sendable {
     func context(for roomID: String) -> ChatRoomStoreContext?
     func context(forStoreID storeID: String) -> ChatRoomStoreContext?
+    func contexts(for roomID: String) -> [ChatRoomStoreContext]
+    func allContexts() -> [ChatRoomStoreContext]
     @discardableResult
     func save(_ context: ChatRoomStoreContext) -> Bool
 }
@@ -512,10 +616,9 @@ final class UserDefaultsChatRoomStoreContextCache: ChatRoomStoreContextCaching, 
         let matches = loadContexts().values.filter { $0.roomID == roomID }
         guard matches.count == 1 else {
             if matches.count > 1 {
-                Logger.shared.warning(
-                    "[ChatRoomContext] roomId collision in cache roomId=\(roomID) mappedStoreIds=\(matches.map(\.storeID).joined(separator: ","))"
+                Logger.shared.info(
+                    "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(roomID) storeCount=\(matches.count) storeIds=\(matches.map(\.storeID).joined(separator: ","))"
                 )
-                removeContexts(roomID: roomID)
             }
             return nil
         }
@@ -525,6 +628,21 @@ final class UserDefaultsChatRoomStoreContextCache: ChatRoomStoreContextCaching, 
 
     func context(forStoreID storeID: String) -> ChatRoomStoreContext? {
         loadContexts()[storeID]
+    }
+
+    func contexts(for roomID: String) -> [ChatRoomStoreContext] {
+        loadContexts().values
+            .filter { $0.roomID == roomID }
+            .sorted { $0.storeID < $1.storeID }
+    }
+
+    func allContexts() -> [ChatRoomStoreContext] {
+        loadContexts().values.sorted {
+            if $0.updatedAt == $1.updatedAt {
+                return $0.storeID < $1.storeID
+            }
+            return $0.updatedAt > $1.updatedAt
+        }
     }
 
     @discardableResult
@@ -537,13 +655,13 @@ final class UserDefaultsChatRoomStoreContextCache: ChatRoomStoreContextCaching, 
             )
         }
 
-        if let conflicting = contexts.values.first(where: { $0.roomID == context.roomID && $0.storeID != context.storeID }) {
-            Logger.shared.warning(
-                "[ChatRoomContext] roomId collision for different storeId oldStoreId=\(conflicting.storeID) newStoreId=\(context.storeID) roomId=\(context.roomID)"
+        if contexts.values.contains(where: { $0.roomID == context.roomID && $0.storeID != context.storeID }) {
+            let mappedStoreIDs = (contexts.values.filter { $0.roomID == context.roomID }.map(\.storeID) + [context.storeID])
+                .removingDuplicates()
+                .joined(separator: ",")
+            Logger.shared.info(
+                "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(context.roomID) storeCount=\(mappedStoreIDs.split(separator: ",").count) storeIds=\(mappedStoreIDs)"
             )
-            contexts = contexts.filter { $0.value.roomID != context.roomID }
-            saveContexts(contexts)
-            return false
         }
 
         contexts[context.storeID] = context
@@ -557,23 +675,21 @@ final class UserDefaultsChatRoomStoreContextCache: ChatRoomStoreContextCaching, 
             return migrateLegacyContextsIfNeeded()
         }
 
-        let groupedByRoomID = Dictionary(grouping: contexts.values, by: \.roomID)
-        let collidedRoomIDs = groupedByRoomID.filter { $0.value.count > 1 }.map(\.key)
-        guard !collidedRoomIDs.isEmpty else {
-            return contexts
-        }
-
-        Logger.shared.warning(
-            "[ChatRoomContext] removing corrupted room context cache collidedRoomIds=\(collidedRoomIDs.joined(separator: ","))"
-        )
-        let cleaned = contexts.filter { !collidedRoomIDs.contains($0.value.roomID) }
-        saveContexts(cleaned)
-        return cleaned
+        return contexts
     }
 
     private func migrateLegacyContextsIfNeeded() -> [String: ChatRoomStoreContext] {
         let legacyPrefix = "chatRoomStoreContext."
         var contexts: [String: ChatRoomStoreContext] = [:]
+
+        for legacyIndexKey in legacyIndexKeys {
+            guard let data = userDefaults.data(forKey: legacyIndexKey),
+                  let indexedContexts = try? JSONDecoder().decode([String: ChatRoomStoreContext].self, from: data) else {
+                continue
+            }
+            contexts.merge(indexedContexts) { _, new in new }
+            userDefaults.removeObject(forKey: legacyIndexKey)
+        }
 
         for key in userDefaults.dictionaryRepresentation().keys where key.hasPrefix(legacyPrefix) {
             guard let data = userDefaults.data(forKey: key),
@@ -604,18 +720,22 @@ final class UserDefaultsChatRoomStoreContextCache: ChatRoomStoreContextCaching, 
     }
 
     private var indexKey: String {
-        "chatRoomStoreContext.index.v2"
+        "chatRoomStoreContext.index.v3"
+    }
+
+    private var legacyIndexKeys: [String] {
+        ["chatRoomStoreContext.index.v2"]
     }
 }
 
 protocol ChatLocalDataSourceProtocol: Sendable {
-    func fetchMessages(roomID: String) async throws -> [ChatMessage]
-    func latestServerMessageDate(roomID: String) async throws -> Date?
-    func latestMessagesByRoomID() async throws -> [String: ChatMessage]
-    func upsert(messages: [ChatMessage]) async throws -> [ChatMessage]
-    func savePending(message: ChatMessage) async throws -> [ChatMessage]
-    func replacePendingMessage(localID: String, with message: ChatMessage) async throws -> [ChatMessage]
-    func updateSendStatus(messageID: String, status: ChatSendStatus) async throws -> [ChatMessage]
+    func fetchMessages(scope: ChatRoomScope) async throws -> [ChatMessage]
+    func latestServerMessageDate(scope: ChatRoomScope) async throws -> Date?
+    func latestMessage(scope: ChatRoomScope) async throws -> ChatMessage?
+    func upsert(messages: [ChatMessage], scope: ChatRoomScope) async throws -> [ChatMessage]
+    func savePending(message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage]
+    func replacePendingMessage(localID: String, with message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage]
+    func updateSendStatus(messageID: String, status: ChatSendStatus, scope: ChatRoomScope) async throws -> [ChatMessage]
 }
 
 actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
@@ -632,6 +752,7 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         static let filesData = "filesData"
         static let sendStatus = "sendStatus"
         static let localCreatedAt = "localCreatedAt"
+        static let localCacheKey = "localCacheKey"
     }
 
     private let persistentContainer: NSPersistentContainer
@@ -654,9 +775,10 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
             Self.attribute(Field.senderProfileImage, .stringAttributeType, optional: true),
             Self.attribute(Field.filesData, .binaryDataAttributeType, optional: false),
             Self.attribute(Field.sendStatus, .stringAttributeType, optional: false),
-            Self.attribute(Field.localCreatedAt, .dateAttributeType, optional: false)
+            Self.attribute(Field.localCreatedAt, .dateAttributeType, optional: false),
+            Self.attribute(Field.localCacheKey, .stringAttributeType, optional: true)
         ]
-        entity.uniquenessConstraints = [[Field.chatID]]
+        entity.uniquenessConstraints = [[Field.chatID, Field.localCacheKey]]
         model.entities = [entity]
 
         persistentContainer = NSPersistentContainer(name: "PikkoChat", managedObjectModel: model)
@@ -688,87 +810,95 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         )
     }
 
-    func fetchMessages(roomID: String) async throws -> [ChatMessage] {
+    func fetchMessages(scope: ChatRoomScope) async throws -> [ChatMessage] {
         let context = persistentContainer.viewContext
-        let request = fetchRequest(roomID: roomID)
-        return try context.fetch(request).compactMap(mapRecord)
+        let scopedMessages = try context.fetch(fetchRequest(scope: scope)).compactMap(mapRecord)
+        guard scopedMessages.isEmpty, !scope.isStoreInquiry else {
+            return scopedMessages
+        }
+        return try context.fetch(legacyFetchRequest(roomID: scope.roomID)).compactMap(mapRecord)
     }
 
-    func latestServerMessageDate(roomID: String) async throws -> Date? {
-        try await fetchMessages(roomID: roomID)
+    func latestServerMessageDate(scope: ChatRoomScope) async throws -> Date? {
+        try await fetchMessages(scope: scope)
             .filter { !$0.id.hasPrefix("local-") && $0.sendStatus == .sent }
             .compactMap(\.createdAt)
             .max()
     }
 
-    func latestMessagesByRoomID() async throws -> [String: ChatMessage] {
+    func latestMessage(scope: ChatRoomScope) async throws -> ChatMessage? {
         let context = persistentContainer.viewContext
         let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
+        request.predicate = scopedPredicate(scope: scope)
         request.sortDescriptors = [
             NSSortDescriptor(key: Field.createdAt, ascending: false),
             NSSortDescriptor(key: Field.localCreatedAt, ascending: false)
         ]
+        request.fetchLimit = 1
 
-        var result: [String: ChatMessage] = [:]
-        for record in try context.fetch(request) {
-            guard let message = mapRecord(record), result[message.roomID] == nil else {
-                continue
-            }
-            result[message.roomID] = message
+        if let scopedMessage = try context.fetch(request).compactMap(mapRecord).first {
+            return scopedMessage
         }
-        return result
+
+        guard !scope.isStoreInquiry else {
+            return nil
+        }
+
+        let legacyRequest = legacyFetchRequest(roomID: scope.roomID)
+        legacyRequest.sortDescriptors = request.sortDescriptors
+        legacyRequest.fetchLimit = 1
+        return try context.fetch(legacyRequest).compactMap(mapRecord).first
     }
 
     @discardableResult
-    func upsert(messages: [ChatMessage]) async throws -> [ChatMessage] {
+    func upsert(messages: [ChatMessage], scope: ChatRoomScope) async throws -> [ChatMessage] {
         let context = persistentContainer.viewContext
         for message in messages {
-            let record = try fetchRecord(messageID: message.id, context: context) ?? NSManagedObject(
+            let record = try fetchRecord(messageID: message.id, scope: scope, context: context) ?? NSManagedObject(
                 entity: entityDescription(in: context),
                 insertInto: context
             )
-            try apply(message: message, to: record)
+            try apply(message: message, scope: scope, to: record)
         }
         if context.hasChanges {
             try context.save()
         }
-        return try await fetchMessages(roomID: messages.first?.roomID ?? "")
+        return try await fetchMessages(scope: scope)
     }
 
     @discardableResult
-    func savePending(message: ChatMessage) async throws -> [ChatMessage] {
-        try await upsert(messages: [message])
+    func savePending(message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage] {
+        try await upsert(messages: [message], scope: scope)
     }
 
     @discardableResult
-    func replacePendingMessage(localID: String, with message: ChatMessage) async throws -> [ChatMessage] {
+    func replacePendingMessage(localID: String, with message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage] {
         let context = persistentContainer.viewContext
-        if let pending = try fetchRecord(messageID: localID, context: context) {
+        if let pending = try fetchRecord(messageID: localID, scope: scope, context: context) {
             context.delete(pending)
         }
-        let record = try fetchRecord(messageID: message.id, context: context) ?? NSManagedObject(
+        let record = try fetchRecord(messageID: message.id, scope: scope, context: context) ?? NSManagedObject(
             entity: entityDescription(in: context),
             insertInto: context
         )
-        try apply(message: message, to: record)
+        try apply(message: message, scope: scope, to: record)
         if context.hasChanges {
             try context.save()
         }
-        return try await fetchMessages(roomID: message.roomID)
+        return try await fetchMessages(scope: scope)
     }
 
     @discardableResult
-    func updateSendStatus(messageID: String, status: ChatSendStatus) async throws -> [ChatMessage] {
+    func updateSendStatus(messageID: String, status: ChatSendStatus, scope: ChatRoomScope) async throws -> [ChatMessage] {
         let context = persistentContainer.viewContext
-        guard let record = try fetchRecord(messageID: messageID, context: context),
-              let roomID = record.value(forKey: Field.roomID) as? String else {
+        guard let record = try fetchRecord(messageID: messageID, scope: scope, context: context) else {
             return []
         }
         record.setValue(status.rawValue, forKey: Field.sendStatus)
         if context.hasChanges {
             try context.save()
         }
-        return try await fetchMessages(roomID: roomID)
+        return try await fetchMessages(scope: scope)
     }
 
     private static func attribute(
@@ -783,9 +913,9 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         return attribute
     }
 
-    private func fetchRequest(roomID: String) -> NSFetchRequest<NSManagedObject> {
+    private func fetchRequest(scope: ChatRoomScope) -> NSFetchRequest<NSManagedObject> {
         let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
-        request.predicate = NSPredicate(format: "%K == %@", Field.roomID, roomID)
+        request.predicate = scopedPredicate(scope: scope)
         request.sortDescriptors = [
             NSSortDescriptor(key: Field.createdAt, ascending: true),
             NSSortDescriptor(key: Field.localCreatedAt, ascending: true)
@@ -793,9 +923,40 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         return request
     }
 
-    private func fetchRecord(messageID: String, context: NSManagedObjectContext) throws -> NSManagedObject? {
+    private func legacyFetchRequest(roomID: String) -> NSFetchRequest<NSManagedObject> {
         let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
-        request.predicate = NSPredicate(format: "%K == %@", Field.chatID, messageID)
+        request.predicate = NSPredicate(
+            format: "%K == %@ AND %K == nil",
+            Field.roomID,
+            roomID,
+            Field.localCacheKey
+        )
+        request.sortDescriptors = [
+            NSSortDescriptor(key: Field.createdAt, ascending: true),
+            NSSortDescriptor(key: Field.localCreatedAt, ascending: true)
+        ]
+        return request
+    }
+
+    private func scopedPredicate(scope: ChatRoomScope) -> NSPredicate {
+        NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            Field.roomID,
+            scope.roomID,
+            Field.localCacheKey,
+            scope.localCacheKey
+        )
+    }
+
+    private func fetchRecord(messageID: String, scope: ChatRoomScope, context: NSManagedObjectContext) throws -> NSManagedObject? {
+        let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
+        request.predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            Field.chatID,
+            messageID,
+            Field.localCacheKey,
+            scope.localCacheKey
+        )
         request.fetchLimit = 1
         return try context.fetch(request).first
     }
@@ -804,9 +965,10 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         NSEntityDescription.entity(forEntityName: Field.entity, in: context)!
     }
 
-    private func apply(message: ChatMessage, to record: NSManagedObject) throws {
+    private func apply(message: ChatMessage, scope: ChatRoomScope, to record: NSManagedObject) throws {
         record.setValue(message.id, forKey: Field.chatID)
         record.setValue(message.roomID, forKey: Field.roomID)
+        record.setValue(scope.localCacheKey, forKey: Field.localCacheKey)
         record.setValue(message.content, forKey: Field.content)
         record.setValue(message.createdAt, forKey: Field.createdAt)
         record.setValue(message.updatedAt, forKey: Field.updatedAt)
@@ -879,20 +1041,22 @@ protocol ChatInteracting {
     var target: ChatTarget? { get }
 
     func loadInitialRoomList() async throws -> [ChatRoom]
+    func loadLocalConversationSummaries() async throws -> [ChatLocalConversationSummary]
     func createOrFetchStoreChatRoom() async throws -> ChatRoom
     func createOrFetchUserChatRoom() async throws -> ChatRoom
-    func loadCachedMessages(roomID: String) async throws -> [ChatMessage]
-    func synchronizeMessages(roomID: String) async throws -> [ChatMessage]
-    func startRealtime(roomID: String, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws
+    func loadCachedMessages(scope: ChatRoomScope) async throws -> [ChatMessage]
+    func synchronizeMessages(scope: ChatRoomScope) async throws -> [ChatMessage]
+    func startRealtime(scope: ChatRoomScope, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws
     func stopRealtime()
     func makePendingMessage(roomID: String, content: String, files: [String]) throws -> ChatMessage
-    func savePendingMessage(_ message: ChatMessage) async throws -> [ChatMessage]
-    func replacePendingMessage(localID: String, with message: ChatMessage) async throws -> [ChatMessage]
-    func markMessageFailed(messageID: String) async throws -> [ChatMessage]
+    func savePendingMessage(_ message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage]
+    func replacePendingMessage(localID: String, with message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage]
+    func markMessageFailed(messageID: String, scope: ChatRoomScope) async throws -> [ChatMessage]
     func loadMessages(roomID: String, after next: String?) async throws -> [ChatMessage]
-    func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessage
+    func sendMessage(scope: ChatRoomScope, content: String, files: [String]) async throws -> ChatMessage
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String]
     func makeContext(for room: ChatRoom, entryPoint: ChatRoomEntryPoint) -> ChatRoomContext
+    func makeContext(for summary: ChatLocalConversationSummary) -> ChatRoomContext
     func cachedStoreContext(roomID: String) -> ChatRoomStoreContext?
 }
 
@@ -934,20 +1098,63 @@ struct ChatInteractor: ChatInteracting {
 
         do {
             let remoteRooms = try await chatRepository.fetchChatRooms()
-            let latestLocalMessages = (try? await localDataSource.latestMessagesByRoomID()) ?? [:]
-            return remoteRooms.map { room in
-                let roomWithContext = roomWithCachedStoreContext(room)
-                guard room.lastMessage == nil,
-                      let localLastMessage = latestLocalMessages[room.id] else {
-                    return roomWithContext
+            var roomsWithLocalLastMessage: [ChatRoom] = []
+            for room in remoteRooms {
+                guard room.lastMessage == nil else {
+                    roomsWithLocalLastMessage.append(room)
+                    continue
                 }
-                return roomWithContext.updating(lastMessage: localLastMessage)
+                let context = makeContext(for: room, entryPoint: .chatList)
+                if context.hasRoomIDCollision {
+                    Logger.shared.info(
+                        "[ChatRoomContext] room list skips ambiguous local last message roomId=\(room.id) mappedStoreIds=\(context.collidingStoreIDs.joined(separator: ","))"
+                    )
+                    roomsWithLocalLastMessage.append(room)
+                    continue
+                }
+                if let localLastMessage = try? await localDataSource.latestMessage(scope: context.localCacheScope) {
+                    roomsWithLocalLastMessage.append(room.updating(lastMessage: localLastMessage))
+                } else {
+                    roomsWithLocalLastMessage.append(room)
+                }
             }
+            return roomsWithLocalLastMessage
         } catch is CancellationError {
             throw CancellationError()
         } catch {
             throw map(error)
         }
+    }
+
+    func loadLocalConversationSummaries() async throws -> [ChatLocalConversationSummary] {
+        guard sessionStore.isAuthenticated else {
+            throw ChatFeatureError.authenticationRequired
+        }
+
+        var summaries: [ChatLocalConversationSummary] = []
+        for context in storeContextCache.allContexts() {
+            let scope = ChatRoomScope(
+                roomID: context.roomID,
+                storeID: context.storeID,
+                opponentID: context.opponentID
+            )
+            let latestMessage = try? await localDataSource.latestMessage(scope: scope)
+            let updatedAt = latestMessage?.createdAt ?? latestMessage?.updatedAt ?? context.updatedAt
+            summaries.append(
+                ChatLocalConversationSummary(
+                    id: scope.localCacheKey,
+                    serverRoomID: context.roomID,
+                    localCacheKey: scope.localCacheKey,
+                    storeID: context.storeID,
+                    storeName: context.storeName,
+                    opponentID: context.opponentID,
+                    lastLocalMessage: latestMessage,
+                    updatedAt: updatedAt
+                )
+            )
+        }
+
+        return summaries.sorted { $0.updatedAt > $1.updatedAt }
     }
 
     func createOrFetchStoreChatRoom() async throws -> ChatRoom {
@@ -986,7 +1193,7 @@ struct ChatInteractor: ChatInteracting {
                 storeName: storeName
             )
             Logger.shared.debug(
-                "[ChatRepository] createOrFetchRoom storeIdCreationEnabled=\(ChatRoomContextPolicy.supportsStoreScopedRoomCreation) \(creationMode.debugDescription)"
+                "[ChatRepository] createOrFetchRoom sendsStoreIdInRequest=\(ChatRoomContextPolicy.sendsStoreIDInCreateRoomRequest) \(creationMode.debugDescription)"
             )
             let room = try await chatRepository.createOrFetchChatRoom(mode: creationMode)
             let normalizedStoreName = storeName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -1047,24 +1254,35 @@ struct ChatInteractor: ChatInteracting {
         }
     }
 
-    func loadCachedMessages(roomID: String) async throws -> [ChatMessage] {
-        try await localDataSource.fetchMessages(roomID: roomID)
+    func loadCachedMessages(scope: ChatRoomScope) async throws -> [ChatMessage] {
+        Logger.shared.debug(
+            "[ChatViewModel] loadLocalMessages scope=\(scope.localCacheKey)"
+        )
+        return try await localDataSource.fetchMessages(scope: scope)
     }
 
-    func synchronizeMessages(roomID: String) async throws -> [ChatMessage] {
+    func synchronizeMessages(scope: ChatRoomScope) async throws -> [ChatMessage] {
         guard sessionStore.isAuthenticated else {
             throw ChatFeatureError.authenticationRequired
         }
 
         do {
-            let next = try await localDataSource.latestServerMessageDate(roomID: roomID)
-                .map(Self.utcQueryString)
-            Logger.shared.debug("[ChatViewModel] syncLatestMessages since=\(next ?? "nil")")
-            let messages = try await chatRepository.fetchMessages(roomID: roomID, next: next)
-            guard !messages.isEmpty else {
-                return try await localDataSource.fetchMessages(roomID: roomID)
+            let mappedStoreIDs = storeContextCache.contexts(for: scope.roomID).map(\.storeID)
+            if scope.isStoreInquiry, mappedStoreIDs.count > 1 {
+                Logger.shared.info(
+                    "[ChatRoomContext] storeScopedServerHistoryMergeSkipped roomId=\(scope.roomID) currentStoreId=\(scope.storeID ?? "-") storeCount=\(mappedStoreIDs.count) storeIds=\(mappedStoreIDs.joined(separator: ","))"
+                )
+                return try await localDataSource.fetchMessages(scope: scope)
             }
-            return try await localDataSource.upsert(messages: messages)
+
+            let next = try await localDataSource.latestServerMessageDate(scope: scope)
+                .map(Self.utcQueryString)
+            Logger.shared.debug("[ChatViewModel] syncLatestMessages since=\(next ?? "nil") scope=\(scope.localCacheKey)")
+            let messages = try await chatRepository.fetchMessages(roomID: scope.roomID, next: next)
+            guard !messages.isEmpty else {
+                return try await localDataSource.fetchMessages(scope: scope)
+            }
+            return try await localDataSource.upsert(messages: messages, scope: scope)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -1072,18 +1290,24 @@ struct ChatInteractor: ChatInteracting {
         }
     }
 
-    func startRealtime(roomID: String, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
+    func startRealtime(scope: ChatRoomScope, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
         guard sessionStore.isAuthenticated else {
             throw ChatFeatureError.authenticationRequired
         }
 
-        let context = storeContextCache.context(for: roomID)
+        let mappedStoreIDs = storeContextCache.contexts(for: scope.roomID).map(\.storeID)
         Logger.shared.debug(
-            "[ChatSocket] connect context roomId=\(roomID) storeId=\(context?.storeID ?? "-") namespace=/chats-\(roomID)"
+            "[ChatSocket] connect context roomId=\(scope.roomID) storeId=\(scope.storeID ?? "-") opponentId=\(scope.opponentID ?? "-") localCacheKey=\(scope.localCacheKey) namespace=/chats-\(scope.roomID)"
         )
-        try await realtimeService.connect(roomID: roomID) { [localDataSource] message in
+        if scope.isStoreInquiry, mappedStoreIDs.count > 1 {
+            Logger.shared.debug(
+                "[ChatSocket] namespace remains roomId-scoped despite store collision roomId=\(scope.roomID) currentStoreId=\(scope.storeID ?? "-") mappedStoreIds=\(mappedStoreIDs.joined(separator: ","))"
+            )
+        }
+        try await realtimeService.connect(roomID: scope.roomID) { [localDataSource] message in
             do {
-                let messages = try await localDataSource.upsert(messages: [message])
+                let messages = try await localDataSource.upsert(messages: [message], scope: scope)
+                touchStoreConversation(scope: scope, latestActivityDate: message.createdAt ?? message.updatedAt ?? Date())
                 if let stored = messages.first(where: { $0.id == message.id }) {
                     await onMessage(stored)
                 } else {
@@ -1122,16 +1346,22 @@ struct ChatInteractor: ChatInteracting {
         )
     }
 
-    func savePendingMessage(_ message: ChatMessage) async throws -> [ChatMessage] {
-        try await localDataSource.savePending(message: message)
+    func savePendingMessage(_ message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage] {
+        let messages = try await localDataSource.savePending(message: message, scope: scope)
+        touchStoreConversation(scope: scope, latestActivityDate: message.createdAt ?? Date())
+        return messages
     }
 
-    func replacePendingMessage(localID: String, with message: ChatMessage) async throws -> [ChatMessage] {
-        try await localDataSource.replacePendingMessage(localID: localID, with: message)
+    func replacePendingMessage(localID: String, with message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage] {
+        let messages = try await localDataSource.replacePendingMessage(localID: localID, with: message, scope: scope)
+        touchStoreConversation(scope: scope, latestActivityDate: message.createdAt ?? message.updatedAt ?? Date())
+        return messages
     }
 
-    func markMessageFailed(messageID: String) async throws -> [ChatMessage] {
-        try await localDataSource.updateSendStatus(messageID: messageID, status: .failed)
+    func markMessageFailed(messageID: String, scope: ChatRoomScope) async throws -> [ChatMessage] {
+        let messages = try await localDataSource.updateSendStatus(messageID: messageID, status: .failed, scope: scope)
+        touchStoreConversation(scope: scope, latestActivityDate: Date())
+        return messages
     }
 
     func loadMessages(roomID: String, after next: String? = nil) async throws -> [ChatMessage] {
@@ -1148,7 +1378,7 @@ struct ChatInteractor: ChatInteracting {
         }
     }
 
-    func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessage {
+    func sendMessage(scope: ChatRoomScope, content: String, files: [String]) async throws -> ChatMessage {
         guard sessionStore.isAuthenticated else {
             throw ChatFeatureError.authenticationRequired
         }
@@ -1158,8 +1388,9 @@ struct ChatInteractor: ChatInteracting {
         }
 
         do {
-            let sentMessage = try await chatRepository.sendMessage(roomID: roomID, content: trimmed, files: files)
-            _ = try await localDataSource.upsert(messages: [sentMessage])
+            let sentMessage = try await chatRepository.sendMessage(roomID: scope.roomID, content: trimmed, files: files)
+            _ = try await localDataSource.upsert(messages: [sentMessage], scope: scope)
+            touchStoreConversation(scope: scope, latestActivityDate: sentMessage.createdAt ?? sentMessage.updatedAt ?? Date())
             NotificationCenter.default.postChatRoomDidUpdate(message: sentMessage)
             return sentMessage
         } catch is CancellationError {
@@ -1240,7 +1471,16 @@ struct ChatInteractor: ChatInteracting {
             explicitStoreID = nil
             explicitStoreName = nil
         }
-        let cachedContext = storeContextCache.context(for: room.id)
+        let cachedContext: ChatRoomStoreContext?
+        switch entryPoint {
+        case .storeDetail:
+            cachedContext = explicitStoreID.flatMap { storeContextCache.context(forStoreID: $0) }
+                ?? storeContextCache.context(for: room.id)
+        case .storeScopedChatList:
+            cachedContext = storeContextCache.context(for: room.id)
+        case .chatList, .userProfile:
+            cachedContext = nil
+        }
         let serverStoreID = room.storeID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let serverStoreName = room.storeName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let cachedStoreID: String?
@@ -1262,6 +1502,7 @@ struct ChatInteractor: ChatInteracting {
             explicitContextIsValid =
                 storeContextCache.context(forStoreID: explicitStoreID)?.roomID == room.id
                 || serverStoreID == explicitStoreID
+                || serverStoreID == nil
         } else {
             explicitContextIsValid = false
         }
@@ -1269,25 +1510,54 @@ struct ChatInteractor: ChatInteracting {
         if let explicitStoreID,
            let cachedStoreID,
            explicitStoreID != cachedStoreID {
-            Logger.shared.warning(
-                "[ChatRoomContext] roomId collision for different storeId oldStoreId=\(cachedStoreID) newStoreId=\(explicitStoreID) roomId=\(room.id)"
+            Logger.shared.info(
+                "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(room.id) oldStoreId=\(cachedStoreID) newStoreId=\(explicitStoreID)"
             )
         }
 
         let resolvedStoreID = explicitContextIsValid ? explicitStoreID : (cachedStoreID ?? serverStoreID)
-        let resolvedStoreName = explicitContextIsValid ? explicitStoreName : (cachedStoreName ?? serverStoreName)
-        let displayTitle = resolvedStoreName
+        let resolvedStoreName = explicitContextIsValid ? (explicitStoreName ?? cachedStoreName ?? serverStoreName) : (cachedStoreName ?? serverStoreName)
+        let collidingStoreIDs = storeContextCache.contexts(for: room.id).map(\.storeID)
+        let hasRoomIDCollision = collidingStoreIDs.count > 1
+        if hasRoomIDCollision {
+            Logger.shared.info(
+                "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(room.id) currentStoreId=\(explicitStoreID ?? resolvedStoreID ?? "-") storeCount=\(collidingStoreIDs.count) storeIds=\(collidingStoreIDs.joined(separator: ","))"
+            )
+        }
+
+        let resolvedOpponentID = cachedContext?.opponentID.nilIfEmpty
+            ?? room.opponentID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            ?? opponent?.id
+        let resolvedOpponentName = room.opponentName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
             ?? opponent?.nick.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let displayTitle = resolvedStoreName
+            ?? resolvedOpponentName
             ?? "채팅"
 
         return ChatRoomContext(
             entryPoint: entryPoint,
             roomID: room.id,
-            opponentID: cachedContext?.opponentID.nilIfEmpty ?? opponent?.id,
+            opponentID: resolvedOpponentID,
             storeID: resolvedStoreID,
             storeName: resolvedStoreName,
             displayTitle: displayTitle,
-            canUseStoreScopedTitle: resolvedStoreName != nil
+            canUseStoreScopedTitle: resolvedStoreID != nil && resolvedStoreName != nil,
+            hasRoomIDCollision: hasRoomIDCollision,
+            collidingStoreIDs: collidingStoreIDs
+        )
+    }
+
+    func makeContext(for summary: ChatLocalConversationSummary) -> ChatRoomContext {
+        ChatRoomContext(
+            entryPoint: .storeScopedChatList,
+            roomID: summary.serverRoomID,
+            opponentID: summary.opponentID,
+            storeID: summary.storeID,
+            storeName: summary.storeName,
+            displayTitle: summary.storeName,
+            canUseStoreScopedTitle: true,
+            hasRoomIDCollision: storeContextCache.contexts(for: summary.serverRoomID).count > 1,
+            collidingStoreIDs: storeContextCache.contexts(for: summary.serverRoomID).map(\.storeID)
         )
     }
 
@@ -1295,21 +1565,29 @@ struct ChatInteractor: ChatInteracting {
         storeContextCache.context(for: roomID)
     }
 
-    private func roomWithCachedStoreContext(_ room: ChatRoom) -> ChatRoom {
-        guard let context = storeContextCache.context(for: room.id) else {
-            return room
+}
+
+private extension ChatInteractor {
+    func touchStoreConversation(scope: ChatRoomScope, latestActivityDate: Date) {
+        guard let storeID = scope.storeID?.nilIfEmpty,
+              let opponentID = scope.opponentID?.nilIfEmpty,
+              let existingContext = storeContextCache.context(forStoreID: storeID) else {
+            if scope.isStoreInquiry {
+                Logger.shared.warning(
+                    "[ChatRoomContext] store-scoped activity could not update summary roomId=\(scope.roomID) storeId=\(scope.storeID ?? "-") opponentId=\(scope.opponentID ?? "-")"
+                )
+            }
+            return
         }
-        if let serverStoreID = room.storeID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-           serverStoreID != context.storeID {
-            Logger.shared.warning(
-                "[ChatRoomContext] roomListCachedStoreContext ignored roomId=\(room.id) cachedStoreId=\(context.storeID) serverStoreId=\(serverStoreID)"
-            )
-            return room
-        }
-        Logger.shared.debug(
-            "[ChatRoomContext] roomListCachedStoreContext roomId=\(room.id) storeId=\(context.storeID) storeName=\(context.storeName) opponentId=\(context.opponentID) serverStoreName=\(room.storeName ?? "-")"
+
+        let context = ChatRoomStoreContext(
+            roomID: scope.roomID,
+            storeID: storeID,
+            storeName: existingContext.storeName,
+            opponentID: opponentID,
+            updatedAt: latestActivityDate
         )
-        return room.applyingStoreContext(storeID: context.storeID, storeName: context.storeName)
+        _ = storeContextCache.save(context)
     }
 }
 
@@ -1339,5 +1617,12 @@ private extension String {
     var nilIfEmpty: String? {
         let value = trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? nil : value
+    }
+}
+
+private extension Array where Element: Hashable {
+    func removingDuplicates() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
     }
 }

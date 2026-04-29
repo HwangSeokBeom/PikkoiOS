@@ -5,12 +5,18 @@ enum ChatScreenMode: Equatable {
     case roomDetail
 }
 
+enum ChatRoomRowSection: Equatable {
+    case storeInquiry
+    case general
+}
+
 struct ChatRoomRowViewState: Equatable, Identifiable {
     let id: String
     let title: String
     let subtitle: String
     let timeText: String
     let avatarPath: String?
+    let section: ChatRoomRowSection
 }
 
 struct ChatMessageRowViewState: Equatable, Identifiable {

@@ -52,6 +52,12 @@ enum CheckoutPaymentBridgeResult: Equatable, Sendable {
     case missingImpUID
 }
 
+struct CheckoutPaymentConfigurationDiagnosticViewState: Equatable, Sendable {
+    let source: String
+    let state: String
+    let rawMasked: String
+}
+
 struct CheckoutViewState: Equatable {
     var title = "Checkout"
     var storeName = ""
@@ -70,6 +76,9 @@ struct CheckoutViewState: Equatable {
     var paymentStage: CheckoutPaymentStage = .idle
     var primaryActionTitle = "주문 생성하기"
     var isPrimaryEnabled = false
+    var isPaymentConfigurationBlocked = false
+    var paymentConfigurationDiagnosticMessage: String?
+    var paymentConfigurationDiagnostic: CheckoutPaymentConfigurationDiagnosticViewState?
     var isPrimaryLoading = false
     var canRouteToOrderHistoryFromPrimary = false
     var createdOrderID: String?
@@ -83,6 +92,70 @@ struct CheckoutViewState: Equatable {
 
     var showsCompletionView: Bool {
         completionState != .none && createdOrderID != nil
+    }
+
+    init(
+        title: String = "Checkout",
+        storeName: String = "",
+        summaryText: String = "",
+        addressSummaryText: String = "",
+        paymentMethodSummaryText: String = "",
+        couponSummaryText: String = "",
+        pickupMemo: String = "",
+        items: [CheckoutItemViewState] = [],
+        validationIssues: [CheckoutValidationIssueViewState] = [],
+        isValidatingPrice: Bool = false,
+        isSubmittingOrder: Bool = false,
+        isPaymentInProgress: Bool = false,
+        isVerifyingPayment: Bool = false,
+        totalPriceText: String = "0원",
+        paymentStage: CheckoutPaymentStage = .idle,
+        primaryActionTitle: String = "주문 생성하기",
+        isPrimaryEnabled: Bool = false,
+        isPaymentConfigurationBlocked: Bool = false,
+        paymentConfigurationDiagnosticMessage: String? = nil,
+        paymentConfigurationDiagnostic: CheckoutPaymentConfigurationDiagnosticViewState? = nil,
+        isPrimaryLoading: Bool = false,
+        canRouteToOrderHistoryFromPrimary: Bool = false,
+        createdOrderID: String? = nil,
+        createdOrderCode: String? = nil,
+        completionState: CheckoutCompletionState = .none,
+        paymentBridgeContext: CheckoutPaymentBridgeContext? = nil,
+        errorMessage: String? = nil,
+        successMessage: String? = nil,
+        paymentWarningMessage: String? = nil,
+        isEmpty: Bool = true
+    ) {
+        self.title = title
+        self.storeName = storeName
+        self.summaryText = summaryText
+        self.addressSummaryText = addressSummaryText
+        self.paymentMethodSummaryText = paymentMethodSummaryText
+        self.couponSummaryText = couponSummaryText
+        self.pickupMemo = pickupMemo
+        self.items = items
+        self.validationIssues = validationIssues
+        self.isValidatingPrice = isValidatingPrice
+        self.isSubmittingOrder = isSubmittingOrder
+        self.isPaymentInProgress = isPaymentInProgress
+        self.isVerifyingPayment = isVerifyingPayment
+        self.totalPriceText = totalPriceText
+        self.paymentStage = paymentStage
+        self.primaryActionTitle = primaryActionTitle
+        self.isPrimaryEnabled = isPrimaryEnabled
+        self.isPaymentConfigurationBlocked = isPaymentConfigurationBlocked
+        self.paymentConfigurationDiagnosticMessage = paymentConfigurationDiagnosticMessage
+        self.paymentConfigurationDiagnostic = paymentConfigurationDiagnostic
+        self.isPrimaryLoading = isPrimaryLoading
+        self.canRouteToOrderHistoryFromPrimary = canRouteToOrderHistoryFromPrimary
+        self.createdOrderID = createdOrderID
+        self.createdOrderCode = createdOrderCode
+        self.completionState = completionState
+        self.paymentBridgeContext = paymentBridgeContext
+        self.errorMessage = errorMessage
+        self.successMessage = successMessage
+        self.paymentWarningMessage = paymentWarningMessage
+        self.isEmpty = isEmpty
     }
 }
 
