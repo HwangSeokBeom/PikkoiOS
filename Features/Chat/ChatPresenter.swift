@@ -39,6 +39,10 @@ final class ChatPresenter: ObservableObject {
         bindRoomUpdates()
     }
 
+    deinit {
+        Logger.shared.debug("[ChatViewModel] deinit")
+    }
+
     func send(_ action: ChatAction) async {
         switch action {
         case .onAppear:
@@ -158,18 +162,21 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func openExistingRoom(roomID: String, title: String) async {
+        let cachedContext = interactor.cachedStoreContext(roomID: roomID)
+        let displayTitle = cachedContext?.storeName.nilIfEmpty
+            ?? title.nilIfEmpty
+            ?? "채팅"
         viewState.mode = .roomDetail
         viewState.selectedRoomID = roomID
-        viewState.title = title
-        currentContext = ChatRoomContext(
+        applyContext(ChatRoomContext(
             entryPoint: .chatList,
             roomID: roomID,
-            opponentID: nil,
-            storeID: nil,
-            storeName: nil,
-            displayTitle: title,
-            canUseStoreScopedTitle: false
-        )
+            opponentID: cachedContext?.opponentID.nilIfEmpty,
+            storeID: cachedContext?.storeID.nilIfEmpty,
+            storeName: cachedContext?.storeName.nilIfEmpty,
+            displayTitle: displayTitle,
+            canUseStoreScopedTitle: cachedContext?.storeName.nilIfEmpty != nil
+        ))
         await loadCachedMessagesAndStartLiveSync(roomID: roomID, isRefresh: false)
     }
 
@@ -248,7 +255,7 @@ final class ChatPresenter: ObservableObject {
             return
         }
 
-        Logger.shared.debug("[ChatViewModel] disconnectSocket onDisappear roomId=\(realtimeRoomID ?? "-")")
+        Logger.shared.debug("[ChatViewModel] disconnectSocket reason=viewDisappear roomId=\(realtimeRoomID ?? "-")")
         realtimeRoomID = nil
         interactor.stopRealtime()
     }
@@ -398,9 +405,10 @@ final class ChatPresenter: ObservableObject {
 
     private func makeRoomRow(_ room: ChatRoom) -> ChatRoomRowViewState {
         let participant = displayParticipant(for: room)
+        let context = interactor.makeContext(for: room, entryPoint: .chatList)
         return ChatRoomRowViewState(
             id: room.id,
-            title: participant?.nick ?? "알 수 없는 사용자",
+            title: context.displayTitle,
             subtitle: room.lastMessage?.content.nilIfEmpty ?? "대화를 시작해 보세요.",
             timeText: relativeTime(from: room.lastMessage?.createdAt ?? room.updatedAt),
             avatarPath: participant?.profileImagePath
@@ -432,7 +440,7 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func roomTitle(_ room: ChatRoom) -> String {
-        displayParticipant(for: room)?.nick ?? "채팅"
+        interactor.makeContext(for: room, entryPoint: .chatList).displayTitle
     }
 
     private func displayParticipant(for room: ChatRoom) -> ChatParticipant? {
@@ -466,6 +474,9 @@ final class ChatPresenter: ObservableObject {
     private func applyContext(_ context: ChatRoomContext) {
         currentContext = context
         viewState.title = context.displayTitle
+        Logger.shared.debug(
+            "[ChatNavigation] source=\(context.entryPoint.logValue) roomId=\(context.roomID) storeId=\(context.storeID ?? "-") opponentId=\(context.opponentID ?? "-") title=\(context.displayTitle)"
+        )
         Logger.shared.debug(
             "[ChatRoomContext] resolvedTitle=\(context.displayTitle) roomId=\(context.roomID) storeId=\(context.storeID ?? "-") storeName=\(context.storeName ?? "-") opponentId=\(context.opponentID ?? "-") canUseStoreScopedTitle=\(context.canUseStoreScopedTitle)"
         )
@@ -532,5 +543,18 @@ private extension String {
     var nilIfEmpty: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private extension ChatRoomEntryPoint {
+    var logValue: String {
+        switch self {
+        case .storeDetail:
+            return "storeDetail"
+        case .chatList:
+            return "chatList"
+        case .userProfile:
+            return "profile"
+        }
     }
 }

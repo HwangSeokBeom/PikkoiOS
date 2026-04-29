@@ -150,7 +150,7 @@ final class CheckoutFeatureTests: XCTestCase {
         await presenter.send(.primaryButtonTapped)
 
         let recordedEvents = await interactor.recordedEvents()
-        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest])
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .validatePaymentConfiguration, .createOrder, .makePaymentRequest])
         XCTAssertEqual(presenter.viewState.createdOrderID, "order-1")
         XCTAssertEqual(presenter.viewState.createdOrderCode, "D123456")
         XCTAssertEqual(presenter.viewState.paymentStage, .presentingPayment)
@@ -202,6 +202,40 @@ final class CheckoutFeatureTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.validationIssues.count, 1)
         XCTAssertEqual(presenter.viewState.items.first?.validationMessage, "가격이 변경되었어요.")
         XCTAssertNil(presenter.viewState.createdOrderID)
+        XCTAssertEqual(cartStore.summary.itemCount, 2)
+    }
+
+    func testCheckoutPresenterDoesNotCreateOrderWhenPaymentConfigurationIsMissing() async {
+        let cartStore = makeFilledCartStore()
+        let interactor = SpyCheckoutInteractor(
+            initialState: makeLoadedViewState(),
+            validationResult: .success(.valid),
+            paymentConfigurationResult: .failure(.configurationRequired),
+            createResult: .success(
+                CreatedOrder(
+                    id: "order-1",
+                    orderCode: "D123456",
+                    totalPriceAmount: 4_500,
+                    createdAt: Date(),
+                    updatedAt: Date(),
+                    paymentBridgePayload: nil
+                )
+            )
+        )
+        let presenter = CheckoutPresenter(
+            interactor: interactor,
+            router: CheckoutRouter(),
+            cartStore: cartStore
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.primaryButtonTapped)
+
+        let recordedEvents = await interactor.recordedEvents()
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .validatePaymentConfiguration])
+        XCTAssertNil(presenter.viewState.createdOrderID)
+        XCTAssertEqual(presenter.viewState.primaryActionTitle, "결제 설정 확인하기")
+        XCTAssertEqual(presenter.viewState.paymentStage, .idle)
         XCTAssertEqual(cartStore.summary.itemCount, 2)
     }
 
@@ -257,7 +291,7 @@ final class CheckoutFeatureTests: XCTestCase {
         _ = await (first, second)
 
         let recordedEvents = await interactor.recordedEvents()
-        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest])
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .validatePaymentConfiguration, .createOrder, .makePaymentRequest])
     }
 
     func testCheckoutPresenterValidatesPaymentAfterBridgeSuccess() async {
@@ -302,7 +336,7 @@ final class CheckoutFeatureTests: XCTestCase {
 
         let recordedEvents = await interactor.recordedEvents()
         let validatedRequest = await interactor.lastValidatedRequest()
-        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest, .validatePayment])
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .validatePaymentConfiguration, .createOrder, .makePaymentRequest, .validatePayment])
         XCTAssertEqual(validatedRequest?.impUID, "imp_123")
         XCTAssertEqual(validatedRequest?.merchantUID, "ORDER-001")
         XCTAssertEqual(presenter.viewState.completionState, .paymentValidated)
@@ -386,7 +420,7 @@ final class CheckoutFeatureTests: XCTestCase {
         let validatedRequests = await interactor.validatedRequests()
         XCTAssertEqual(
             recordedEvents,
-            [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest, .validatePayment, .validatePayment]
+            [.loadInitialState, .validatePrice, .validatePaymentConfiguration, .createOrder, .makePaymentRequest, .validatePayment, .validatePayment]
         )
         XCTAssertEqual(validatedRequests.count, 2)
         XCTAssertEqual(validatedRequests.first?.impUID, "imp_delayed")
@@ -421,7 +455,7 @@ final class CheckoutFeatureTests: XCTestCase {
         await presenter.send(.paymentBridgeResult(.missingImpUID))
 
         let recordedEvents = await interactor.recordedEvents()
-        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest])
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .validatePaymentConfiguration, .createOrder, .makePaymentRequest])
         XCTAssertEqual(presenter.viewState.paymentStage, .paymentFailed)
         XCTAssertEqual(cartStore.summary.itemCount, 2)
     }
@@ -453,7 +487,7 @@ final class CheckoutFeatureTests: XCTestCase {
         await presenter.send(.paymentBridgeResult(.failed(message: "결제를 완료하지 못했어요.")))
 
         let recordedEvents = await interactor.recordedEvents()
-        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest])
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .validatePaymentConfiguration, .createOrder, .makePaymentRequest])
         XCTAssertEqual(presenter.viewState.paymentStage, .paymentFailed)
         XCTAssertEqual(cartStore.summary.itemCount, 2)
     }
@@ -522,7 +556,7 @@ final class CheckoutFeatureTests: XCTestCase {
         await presenter.send(.primaryButtonTapped)
 
         let recordedEvents = await interactor.recordedEvents()
-        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .createOrder, .makePaymentRequest])
+        XCTAssertEqual(recordedEvents, [.loadInitialState, .validatePrice, .validatePaymentConfiguration, .createOrder, .makePaymentRequest])
     }
 
     private func makeDraft() -> CheckoutDraft {
@@ -696,6 +730,7 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
     enum Event: Equatable {
         case loadInitialState
         case validatePrice
+        case validatePaymentConfiguration
         case createOrder
         case makePaymentRequest
         case validatePayment
@@ -703,6 +738,7 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
 
     let initialState: CheckoutViewState
     let validationResult: Result<CheckoutPriceValidationResult, CheckoutFeatureError>
+    let paymentConfigurationResult: Result<Void, CheckoutFeatureError>
     let createResult: Result<CreatedOrder, CheckoutFeatureError>
     let validatePaymentResult: Result<ValidatedPaymentReceipt, CheckoutFeatureError>
     var validationDelayNanos: UInt64 = 0
@@ -713,6 +749,7 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
     init(
         initialState: CheckoutViewState,
         validationResult: Result<CheckoutPriceValidationResult, CheckoutFeatureError>,
+        paymentConfigurationResult: Result<Void, CheckoutFeatureError> = .success(()),
         createResult: Result<CreatedOrder, CheckoutFeatureError>,
         validatePaymentResult: Result<ValidatedPaymentReceipt, CheckoutFeatureError> = .success(
             ValidatedPaymentReceipt(
@@ -728,6 +765,7 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
     ) {
         self.initialState = initialState
         self.validationResult = validationResult
+        self.paymentConfigurationResult = paymentConfigurationResult
         self.createResult = createResult
         self.validatePaymentResult = validatePaymentResult
         self.validationDelayNanos = validationDelayNanos
@@ -746,6 +784,16 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
         switch validationResult {
         case .success(let result):
             return result
+        case .failure(let error):
+            throw error
+        }
+    }
+
+    func validatePaymentConfigurationBeforeOrderCreation() async throws {
+        await recorder.append(.validatePaymentConfiguration)
+        switch paymentConfigurationResult {
+        case .success:
+            return
         case .failure(let error):
             throw error
         }

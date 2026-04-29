@@ -32,13 +32,14 @@ struct AuthRepositoryImpl: AuthRepository {
 
         do {
             let profile = try await fetchMyProfile()
+            let latestTokens = try await tokenStore.loadTokens() ?? tokens
             return UserSession(
                 userID: profile.userID,
                 email: profile.email,
                 displayName: profile.nick,
                 profileImagePath: profile.profileImagePath,
-                accessToken: tokens.accessToken,
-                refreshToken: tokens.refreshToken
+                accessToken: latestTokens.accessToken,
+                refreshToken: latestTokens.refreshToken
             )
         } catch let error as NetworkError {
             if error.isAuthenticationFailure {

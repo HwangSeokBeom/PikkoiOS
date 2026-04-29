@@ -15,6 +15,7 @@ Do not commit real secrets unless the team explicitly decides they are safe to p
    - `GOOGLE_REVERSED_CLIENT_ID`
    - `PIKKO_BASE_URL`
    - `PIKKO_SESAC_KEY`
+   - `PORTONE_USER_CODE`
 4. Keep local secret files out of git. `.gitignore` excludes:
    - `Config/AuthSecrets.xcconfig`
    - `Config/LocalSecrets.xcconfig`
@@ -28,6 +29,24 @@ PIKKO_BASE_URL = http:$(PIKKO_URL_SLASH)$(PIKKO_URL_SLASH)pickup.sesac.kr:42678/
 ```
 
 Both `http://pickup.sesac.kr:42678` and `http://pickup.sesac.kr:42678/` are accepted at runtime.
+
+## PortOne iamport_ios
+
+The current payment bridge uses the `iamport_ios` SDK. This SDK requires `PORTONE_USER_CODE` from the PortOne console and does not use the newer `PORTONE_CHANNEL_KEY` value.
+
+Debug and Release xcconfigs provide placeholders first, then optionally include local secret files. After the includes, `PIKKO_APP_ENV`, `APS_ENVIRONMENT`, and `PAYMENT_TEST_MODE` are set again so a shared local secrets file cannot accidentally switch the build environment.
+
+Expected local payment keys:
+
+```xcconfig
+PORTONE_USER_CODE = impXXXXXXXX
+PORTONE_PG = html5_inicis
+PORTONE_PG_ID = INIpayTest
+PORTONE_PAY_METHOD = card
+PORTONE_APP_SCHEME = pikko
+```
+
+For Release, use production PortOne values and keep `PAYMENT_TEST_MODE = NO` from `Config/Release.xcconfig`.
 
 ## GoogleService-Info.plist
 
@@ -72,6 +91,7 @@ The Pikko app target should have:
 App startup currently configures Firebase and FCM in `App/PikkoApp.swift`:
 
 - `FirebaseApp.configure()` runs once at launch if `GoogleService-Info.plist` exists in the bundle.
+- `FirebaseAppDelegateProxyEnabled = NO` is set because APNs and FCM delegate handling is wired manually.
 - `UNUserNotificationCenter.current().delegate` is set.
 - `Messaging.messaging().delegate` is set.
 - Notification permission is requested at launch.

@@ -135,6 +135,9 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
                 _ = try await tokenRefreshCoordinator.refreshTokens()
                 return try await fetchImageData(from: url, didRetryAfterRefresh: true)
             case 444:
+                logger.warning(
+                    "Image request returned 444. url=\(url.absoluteString) fallback=placeholder impact=transport_only"
+                )
                 throw ImageLoadError.notFoundOrBlocked
             default:
                 let error = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)

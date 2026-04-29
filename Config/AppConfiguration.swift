@@ -91,6 +91,16 @@ struct AppConfiguration: Sendable {
         static let paymentTestMode = "PAYMENT_TEST_MODE"
     }
 
+    struct ConfiguredValueDiagnostic: Equatable, Sendable {
+        let key: String
+        let source: String
+        let state: String
+
+        var logStatus: String {
+            "\(state):source=\(source)"
+        }
+    }
+
     let environment: AppEnvironment
     let baseURL: URL?
     let baseURLError: AppConfigurationError?
@@ -383,11 +393,18 @@ struct AppConfiguration: Sendable {
     }
 
     private static func configuredRawString(forAnyOf keys: [String], bundle: Bundle) -> String? {
+        configuredRawStringWithSource(forAnyOf: keys, bundle: bundle)?.value
+    }
+
+    private static func configuredRawStringWithSource(
+        forAnyOf keys: [String],
+        bundle: Bundle
+    ) -> (value: String, source: String)? {
         for key in keys {
             if let environmentValue = ProcessInfo.processInfo.environment[key] {
                 let trimmedEnvironmentValue = environmentValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmedEnvironmentValue.isEmpty {
-                    return trimmedEnvironmentValue
+                    return (trimmedEnvironmentValue, "ProcessInfo.environment.\(key)")
                 }
             }
         }
@@ -399,11 +416,47 @@ struct AppConfiguration: Sendable {
 
             let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                return trimmed
+                return (trimmed, "Info.plist.\(key)")
             }
         }
 
         return nil
+    }
+
+    static func portOneUserCodeDiagnostic(bundle: Bundle = .main) -> ConfiguredValueDiagnostic {
+        configuredValueDiagnostic(
+            key: BundleKey.portOneUserCode,
+            bundle: bundle,
+            placeholder: placeholderPortOneUserCode
+        )
+    }
+
+    static func configuredValueDiagnostic(
+        key: String,
+        bundle: Bundle = .main,
+        placeholder: String? = nil
+    ) -> ConfiguredValueDiagnostic {
+        guard let raw = configuredRawStringWithSource(forAnyOf: [key], bundle: bundle) else {
+            return ConfiguredValueDiagnostic(
+                key: key,
+                source: "missing:expected_xcconfig=Config/Secrets.xcconfig|Config/AuthSecrets.xcconfig|Config/LocalSecrets.xcconfig",
+                state: "missing"
+            )
+        }
+
+        guard let normalized = normalizedConfiguredValue(raw.value) else {
+            return ConfiguredValueDiagnostic(key: key, source: raw.source, state: "empty")
+        }
+
+        if isPlaceholderValue(normalized, placeholder: placeholder) {
+            return ConfiguredValueDiagnostic(key: key, source: raw.source, state: "placeholder")
+        }
+
+        if isUnresolvedBuildSettingReference(normalized) {
+            return ConfiguredValueDiagnostic(key: key, source: raw.source, state: "unresolved_build_setting")
+        }
+
+        return ConfiguredValueDiagnostic(key: key, source: raw.source, state: "set")
     }
 
     static func isValidSeSACKey(_ key: String) -> Bool {

@@ -2,8 +2,9 @@ import SwiftUI
 
 struct CheckoutView: View {
     private enum Layout {
-        static let scrollBottomInset: CGFloat = PikkoSpacing.xxl + RootTabBarMetrics.scrollContentBottomInset
-        static let ctaBottomInset: CGFloat = PikkoSpacing.sm + RootTabBarMetrics.scrollContentBottomInset
+        static let estimatedBottomActionBarHeight: CGFloat = 172
+        static let scrollBottomInset: CGFloat = estimatedBottomActionBarHeight + RootTabBarMetrics.scrollContentBottomInset
+        static let ctaBottomInset: CGFloat = PikkoSpacing.sm + RootTabBarMetrics.contentHeight
     }
 
     @ObservedObject var presenter: CheckoutPresenter
@@ -149,6 +150,7 @@ struct CheckoutView: View {
                     .padding(.bottom, Layout.scrollBottomInset)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .contentMargins(.bottom, Layout.scrollBottomInset, for: .scrollIndicators)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {

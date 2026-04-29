@@ -13,6 +13,7 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
     private var activeRoomID: String?
     private var activeNamespace: String?
     private var isDisconnecting = false
+    private var lastDisconnectReason = "none"
 
     init(
         configuration: AppConfiguration,
@@ -25,13 +26,18 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
     }
 
     deinit {
-        Logger.shared.debug("[ChatSocket] deinit roomId=\(activeRoomID ?? "-") namespace=\(activeNamespace ?? "-")")
+        Logger.shared.debug(
+            "[ChatSocket] deinit roomId=\(activeRoomID ?? "-") namespace=\(activeNamespace ?? "-") reason=\(activeRoomID == nil ? lastDisconnectReason : "objectReleasedWhileActive")"
+        )
     }
 
     func connect(roomID: String, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
-        if activeRoomID == roomID, socket?.status == .connected || socket?.status == .connecting {
-            Logger.shared.debug("[ChatSocket] connect ignored roomId=\(roomID) reason=already-active")
-            return
+        if activeRoomID == roomID {
+            let status = socket?.status
+            if status == .connected || status == .connecting {
+                Logger.shared.debug("[ChatSocket] connect ignored roomId=\(roomID) reason=already-active")
+                return
+            }
         }
 
         if activeRoomID != nil {
@@ -80,6 +86,7 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         self.socket = socket
         activeRoomID = roomID
         activeNamespace = namespace
+        lastDisconnectReason = "active"
 
         socket.connect()
     }
@@ -92,6 +99,7 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
             return
         }
         isDisconnecting = true
+        lastDisconnectReason = "clientRequested"
         defer { isDisconnecting = false }
 
         let namespace = activeNamespace
@@ -104,7 +112,7 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         activeNamespace = nil
 
         if let namespace {
-            Logger.shared.debug("[ChatSocket] disconnected reason=client namespace=\(namespace)")
+            Logger.shared.debug("[ChatSocket] disconnected reason=clientRequested namespace=\(namespace)")
         }
     }
 
@@ -118,9 +126,12 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
             Logger.shared.debug("[ChatSocket] connected namespace=\(namespace)")
         }
 
-        socket.on(clientEvent: .disconnect) { data, _ in
+        socket.on(clientEvent: .disconnect) { [weak self] data, _ in
             let reason = data.first.map(String.init(describing:)) ?? "unknown"
-            Logger.shared.debug("[ChatSocket] disconnected reason=\(reason)")
+            let lifecycleReason = self?.isDisconnecting == true ? "clientRequested" : "serverOrTransport"
+            Logger.shared.debug(
+                "[ChatSocket] disconnected reason=\(reason) lifecycleReason=\(lifecycleReason) namespace=\(namespace)"
+            )
         }
 
         socket.on(clientEvent: .error) { data, _ in

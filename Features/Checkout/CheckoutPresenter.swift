@@ -56,6 +56,8 @@ final class CheckoutPresenter: ObservableObject {
 
     private func submitOrder() async {
         guard viewState.isPrimaryEnabled, !viewState.isPrimaryLoading else { return }
+        let previousOrderID = viewState.createdOrderID
+        let previousOrderCode = viewState.createdOrderCode
 
         // The backend does not currently expose a re-pay contract for an unpaid order.
         // After a PortOne cancellation/failure, retry creates a new order instead of reusing
@@ -96,6 +98,8 @@ final class CheckoutPresenter: ObservableObject {
                 return
             }
 
+            try await interactor.validatePaymentConfigurationBeforeOrderCreation()
+
             setLoadingState(
                 isValidatingPrice: false,
                 isSubmittingOrder: true,
@@ -106,6 +110,11 @@ final class CheckoutPresenter: ObservableObject {
             )
 
             let createdOrder = try await interactor.createOrder(input: input)
+            if let previousOrderID, let previousOrderCode {
+                Logger.shared.warning(
+                    "Checkout retry created new order retryPolicy=create_new_order previousOrderId=\(previousOrderID) previousOrderCode=\(previousOrderCode) newOrderId=\(createdOrder.id) newOrderCode=\(createdOrder.orderCode)"
+                )
+            }
             viewState.createdOrderID = createdOrder.id
             viewState.createdOrderCode = createdOrder.orderCode
             viewState.totalPriceText = formatWon(createdOrder.totalPriceAmount)
@@ -248,7 +257,8 @@ final class CheckoutPresenter: ObservableObject {
             viewState.errorMessage = "로그인 후 주문을 생성할 수 있어요."
             router.routeToAuth()
         case .configurationRequired:
-            viewState.errorMessage = "결제 설정 문제로 결제를 시작할 수 없어요. 장바구니는 유지되며 주문을 다시 생성할 수 있어요."
+            viewState.primaryActionTitle = "결제 설정 확인하기"
+            viewState.errorMessage = "PORTONE_USER_CODE 설정이 필요해요. Config/Secrets.xcconfig에 실제 PortOne 가맹점 식별코드를 넣고 다시 빌드해 주세요. 장바구니는 유지되며 설정 전에는 주문을 생성하지 않아요."
         }
     }
 

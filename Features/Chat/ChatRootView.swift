@@ -151,7 +151,9 @@ struct ChatRootView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            messageComposer
+            if presenter.viewState.selectedRoomID != nil {
+                messageComposer
+            }
         }
         .refreshable {
             await presenter.send(.refreshRequested)
@@ -242,8 +244,18 @@ struct ChatRootView: View {
         }
         .padding(.horizontal, PikkoSpacing.lg)
         .padding(.top, PikkoSpacing.sm)
-        .padding(.bottom, PikkoSpacing.sm + (isComposerFocused ? 0 : RootTabBarMetrics.scrollContentBottomInset))
+        .padding(.bottom, PikkoSpacing.sm + (isComposerFocused ? 0 : RootTabBarMetrics.contentHeight))
         .background(PikkoColor.background.opacity(0.96))
+        .onAppear {
+            Logger.shared.debug(
+                "[ChatInput] inputContainerAdded=true inputBottomConstraintTarget=\(isComposerFocused ? "keyboardLayoutGuide" : "tabBarTop") isHidden=false"
+            )
+        }
+        .onChange(of: isComposerFocused) { _, focused in
+            Logger.shared.debug(
+                "[ChatInput] inputContainerAdded=true inputBottomConstraintTarget=\(focused ? "keyboardLayoutGuide" : "tabBarTop") isHidden=false"
+            )
+        }
         .onChange(of: selectedPhotoItems) { _, items in
             Task { await handleImageSelection(items) }
         }

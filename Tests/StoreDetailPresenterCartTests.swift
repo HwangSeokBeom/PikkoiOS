@@ -108,14 +108,49 @@ final class StoreDetailPresenterCartTests: XCTestCase {
         XCTAssertEqual(target.preferredTitle, "새싹 카페")
     }
 
-    func testCreateChatRoomRequestDTOEncodesStoreIDWithoutOpponentFallback() throws {
+    func testCreateChatRoomRequestDTOEncodesOpponentIDForStoreScopedRoom() throws {
         let data = try NetworkCoding.makeJSONEncoder().encode(
-            CreateChatRoomRequestDTO(storeID: "store-1")
+            CreateChatRoomRequestDTO(opponentID: "owner-1")
         )
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
 
-        XCTAssertEqual(object["store_id"], "store-1")
-        XCTAssertNil(object["opponent_id"])
+        XCTAssertEqual(object["opponent_id"], "owner-1")
+        XCTAssertNil(object["store_id"])
+    }
+
+    func testCreateChatRoomRequestDTOEncodesOpponentIDOnlyForUserChat() throws {
+        let data = try NetworkCoding.makeJSONEncoder().encode(
+            CreateChatRoomRequestDTO(opponentID: "owner-1")
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+
+        XCTAssertEqual(object["opponent_id"], "owner-1")
+        XCTAssertNil(object["store_id"])
+    }
+
+    func testChatRoomDTOMapsNestedStoreContext() throws {
+        let data = Data(
+            """
+            {
+              "room_id": "room-1",
+              "createdAt": "2026-04-29T00:00:00Z",
+              "updatedAt": "2026-04-29T00:00:00Z",
+              "participants": [
+                { "user_id": "owner-1", "nick": "상대방" }
+              ],
+              "store": {
+                "store_id": "store-1",
+                "name": "새싹 카페"
+              }
+            }
+            """.utf8
+        )
+
+        let dto = try NetworkCoding.makeJSONDecoder().decode(ChatRoomDTO.self, from: data)
+        let room = ChatMapper(fileURLResolver: PassthroughAuthorizedFileURLResolver()).mapRoom(dto)
+
+        XCTAssertEqual(room.storeID, "store-1")
+        XCTAssertEqual(room.storeName, "새싹 카페")
     }
 
     func testReviewWriteUnavailableShowsEligibilityBannerState() async {
@@ -293,4 +328,15 @@ private final class SpyStoreDetailRouter: StoreDetailRouting {
     }
 
     func clearPendingRoute() {}
+}
+
+private struct PassthroughAuthorizedFileURLResolver: AuthorizedFileURLResolving {
+    func resolveURL(from path: String) throws -> URL {
+        URL(string: "https://example.com/\(path)")!
+    }
+
+    func resolveOptionalURL(from path: String?) throws -> URL? {
+        guard let path else { return nil }
+        return try resolveURL(from: path)
+    }
 }

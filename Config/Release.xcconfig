@@ -15,3 +15,9 @@ PORTONE_APP_SCHEME = pikko
 PAYMENT_TEST_MODE = NO
 
 #include? "Secrets.xcconfig"
+#include? "AuthSecrets.xcconfig"
+#include? "LocalSecrets.xcconfig"
+
+PIKKO_APP_ENV = production
+APS_ENVIRONMENT = production
+PAYMENT_TEST_MODE = NO

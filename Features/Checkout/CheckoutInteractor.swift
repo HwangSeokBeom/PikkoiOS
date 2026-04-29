@@ -4,6 +4,7 @@ import Foundation
 protocol CheckoutInteracting {
     func loadInitialState() async -> CheckoutViewState
     func validatePrice(input: CheckoutSubmissionInput) async throws -> CheckoutPriceValidationResult
+    func validatePaymentConfigurationBeforeOrderCreation() async throws
     func createOrder(input: CheckoutSubmissionInput) async throws -> CreatedOrder
     func makePaymentRequest(createdOrder: CreatedOrder) async throws -> PaymentGatewayRequest
     func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt
@@ -103,6 +104,24 @@ struct CheckoutInteractor: CheckoutInteracting {
             throw error
         } catch {
             throw CheckoutFeatureError.unavailable(message: "가격 검증 중 알 수 없는 오류가 발생했어요.")
+        }
+    }
+
+    func validatePaymentConfigurationBeforeOrderCreation() async throws {
+        let diagnostics = makePaymentPreparationDiagnostics(
+            createdOrder: nil,
+            merchantUID: nil,
+            amount: draft.subtotalAmount
+        )
+        logPaymentPreparationDiagnostics(diagnostics)
+
+        let blockingIssues = diagnostics.filter(\.blocksPayment)
+        guard blockingIssues.isEmpty else {
+            let missingOrInvalidKeys = blockingIssues.map(\.key).joined(separator: ",")
+            Logger.shared.error(
+                "PortOne payment preparation blocked before order creation missingOrInvalidKeys=\(missingOrInvalidKeys) environment=\(appConfiguration.environment.rawValue)"
+            )
+            throw CheckoutFeatureError.configurationRequired
         }
     }
 
@@ -230,11 +249,13 @@ struct CheckoutInteractor: CheckoutInteracting {
     }
 
     private func makePaymentPreparationDiagnostics(
-        createdOrder: CreatedOrder,
-        merchantUID: String,
+        createdOrder: CreatedOrder?,
+        merchantUID: String?,
         amount: Decimal
     ) -> [PaymentPreparationDiagnostic] {
-        [
+        let portOneUserCodeDiagnostic = AppConfiguration.portOneUserCodeDiagnostic()
+        let portOneUserCode = appConfiguration.portOneUserCode?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        return [
             PaymentPreparationDiagnostic(
                 key: "storeId",
                 status: draft.storeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "missing" : "ok",
@@ -242,8 +263,10 @@ struct CheckoutInteractor: CheckoutInteracting {
             ),
             PaymentPreparationDiagnostic(
                 key: "PORTONE_USER_CODE",
-                status: appConfiguration.portOneUserCode?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty == nil ? "missing_or_placeholder" : "ok",
-                blocksPayment: appConfiguration.portOneUserCode?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty == nil
+                status: portOneUserCode == nil
+                    ? "missing_or_placeholder(\(portOneUserCodeDiagnostic.logStatus),buildSetting=PORTONE_USER_CODE)"
+                    : "ok(\(portOneUserCodeDiagnostic.logStatus),buildSetting=PORTONE_USER_CODE)",
+                blocksPayment: portOneUserCode == nil
             ),
             PaymentPreparationDiagnostic(
                 key: "PORTONE_CHANNEL_KEY",
@@ -252,8 +275,8 @@ struct CheckoutInteractor: CheckoutInteracting {
             ),
             PaymentPreparationDiagnostic(
                 key: "paymentId",
-                status: merchantUID.isEmpty ? "missing_order_code" : "ok",
-                blocksPayment: merchantUID.isEmpty
+                status: merchantUID?.nilIfEmpty == nil ? "pending_order_code" : "ok",
+                blocksPayment: false
             ),
             PaymentPreparationDiagnostic(
                 key: "redirectUrl",
