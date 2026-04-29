@@ -4,6 +4,7 @@ struct StoreDetailReviewSummarySectionView: View {
     let ratingSummary: StoreDetailRatingSummary
     let reviewPreview: StoreDetailReviewPreview
     let ratingBars: [StoreDetailReviewRatingBar]
+    var isWriteEnabled = true
     var onWriteTapped: (() -> Void)?
     var onEditTapped: (() -> Void)?
     var onDeleteTapped: (() -> Void)?
@@ -18,7 +19,7 @@ struct StoreDetailReviewSummarySectionView: View {
                 subtitle: reviewPreview.metricSummary,
                 actionTitle: reviewPreview.showsActions ? nil : "리뷰 작성",
                 actionSystemImage: reviewPreview.showsActions ? nil : "star.bubble.fill",
-                action: reviewPreview.showsActions ? nil : onWriteTapped
+                action: reviewPreview.showsActions || !isWriteEnabled ? nil : onWriteTapped
             )
 
             VStack(alignment: .leading, spacing: PikkoSpacing.md) {

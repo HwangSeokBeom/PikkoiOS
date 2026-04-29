@@ -296,6 +296,7 @@ final class StoreDetailPresenterCartTests: XCTestCase {
             ),
             reviewPage: CursorPage(items: [], nextCursor: nil),
             reviewRatings: [],
+            reviewEligibility: .unavailable,
             distanceMeters: 120,
             warningMessage: nil
         )

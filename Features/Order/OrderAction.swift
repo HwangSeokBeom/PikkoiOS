@@ -8,8 +8,9 @@ enum OrderAction: Equatable {
     case orderTapped(String)
     case cancelConfirmed(String)
     case statusSelected(orderCode: String, currentStatus: OrderStatus, nextStatus: OrderStatus)
-    case statusChangeConfirmed(orderCode: String, nextStatus: OrderStatus)
+    case statusChangeConfirmed(orderCode: String, currentStatus: OrderStatus, nextStatus: OrderStatus)
     case orderAppeared(String)
+    case paymentReceiptRefreshRequested(orderCode: String, force: Bool)
     case loginRequiredTapped
     case exploreStoresTapped
 }

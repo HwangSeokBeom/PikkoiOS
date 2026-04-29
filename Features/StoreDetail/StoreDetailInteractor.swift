@@ -41,16 +41,19 @@ struct StoreDetailInteractor: StoreDetailInteracting {
 
         async let reviewPageResult = loadReviewPage()
         async let reviewRatingsResult = loadReviewRatings()
+        async let reviewEligibilityResult = loadReviewEligibility()
 
         let reviewsResult = await reviewPageResult
         let ratingsResult = await reviewRatingsResult
+        let eligibilityResult = await reviewEligibilityResult
 
         return StoreDetailContent(
             detail: detailResult,
             reviewPage: reviewsResult.page,
             reviewRatings: ratingsResult.ratings,
+            reviewEligibility: eligibilityResult.eligibility,
             distanceMeters: makeDistanceMeters(from: detailResult),
-            warningMessage: reviewsResult.warningMessage ?? ratingsResult.warningMessage
+            warningMessage: reviewsResult.warningMessage ?? ratingsResult.warningMessage ?? eligibilityResult.warningMessage
         )
     }
 
@@ -65,9 +68,7 @@ struct StoreDetailInteractor: StoreDetailInteracting {
     func findReviewableOrderCode() async throws -> String? {
         do {
             let page = try await orderRepository.fetchOrders(cursor: nil, filter: nil)
-            return page.items.first {
-                $0.storeID == storeID && $0.status == .completed
-            }?.orderCode
+            return reviewEligibility(from: page.items).orderCode
         } catch {
             throw mapReviewMutationError(error)
         }
@@ -118,6 +119,38 @@ struct StoreDetailInteractor: StoreDetailInteracting {
             Logger.shared.warning("StoreDetail review ratings load failed: \(error.localizedDescription)")
             return ([], mapNonBlockingErrorMessage(error))
         }
+    }
+
+    private func loadReviewEligibility() async -> (eligibility: StoreReviewEligibility, warningMessage: String?) {
+        do {
+            let page = try await orderRepository.fetchOrders(cursor: nil, filter: nil)
+            return (reviewEligibility(from: page.items), nil)
+        } catch {
+            Logger.shared.warning("StoreDetail review eligibility load failed: \(error.localizedDescription)")
+            return (
+                .unavailable,
+                nil
+            )
+        }
+    }
+
+    private func reviewEligibility(from orders: [OrderSummary]) -> StoreReviewEligibility {
+        let storeOrders = orders.filter { $0.storeID == storeID }
+        for order in storeOrders {
+            let alreadyReviewed = order.reviewID != nil
+            let isWritable = order.status == .completed && !alreadyReviewed
+            Logger.shared.debug(
+                "[ReviewEligibility] orderCode=\(order.orderCode) storeId=\(order.storeID) status=\(order.status.apiValue) alreadyReviewed=\(alreadyReviewed) isWritable=\(isWritable)"
+            )
+            if isWritable {
+                return StoreReviewEligibility(orderCode: order.orderCode, disabledReasonText: nil)
+            }
+        }
+
+        let disabledReason = storeOrders.contains(where: { $0.status == .completed && $0.reviewID != nil })
+            ? "이미 이 주문에 대한 리뷰를 작성했어요."
+            : "픽업 완료된 주문 내역에서 리뷰를 작성할 수 있어요."
+        return StoreReviewEligibility(orderCode: nil, disabledReasonText: disabledReason)
     }
 
     private func mapBlockingError(_ error: Error) -> StoreDetailFeatureError {

@@ -35,6 +35,15 @@
 - [ ] `PICKED_UP` enables review creation when no review exists.
 - [ ] Failed/canceled/unvalidated payment states do not expose order detail or review CTA from Checkout.
 
+## Order Status Update
+
+- [ ] `PENDING_APPROVAL` with verified payment enables exactly one `APPROVED` action and sends `PUT /v1/orders/{order_code}` with `{"nextStatus":"APPROVED"}`.
+- [ ] `PENDING_APPROVAL` with unchecked or failed payment blocks `APPROVED`, or refreshes the receipt before deciding.
+- [ ] `APPROVED` orders do not show or send another `APPROVED` request; the next action is `IN_PROGRESS`.
+- [ ] Unknown current order status blocks PUT, refreshes `GET /v1/orders`, and shows "주문 상태를 확인할 수 없어 최신 주문 정보를 다시 불러왔습니다."
+- [ ] PUT 400 shows the server message and keeps the previous server order status in the UI.
+- [ ] After refresh, the status stepper and action button match the server `orderStatus`/`currentOrderStatus`.
+
 ## App Lifecycle And Network
 
 - [ ] Put the app in background during PortOne payment, return, and confirm callback handling still reaches validation.

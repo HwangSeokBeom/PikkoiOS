@@ -122,8 +122,27 @@ enum OrderStatus: Equatable, Sendable {
         }
     }
 
+    var canEvaluateStatusTransition: Bool {
+        if case .unknown = self {
+            return false
+        }
+        return true
+    }
+
     func canTransition(to nextStatus: OrderStatus) -> Bool {
         allowedNextStatus == nextStatus
+    }
+
+    func isEarlierProgressStep(than status: OrderStatus) -> Bool {
+        guard let currentStepIndex = progressStepIndex,
+              let otherStepIndex = status.progressStepIndex else {
+            return false
+        }
+        return currentStepIndex < otherStepIndex
+    }
+
+    func requiresPaymentVerification(to nextStatus: OrderStatus) -> Bool {
+        self == .pending && nextStatus == .accepted
     }
 
     var isTerminal: Bool {
@@ -136,7 +155,12 @@ enum OrderStatus: Equatable, Sendable {
     }
 
     var isCancellable: Bool {
-        false
+        switch self {
+        case .pending, .accepted:
+            return true
+        case .preparing, .ready, .completed, .cancelled, .rejected, .failed, .unknown:
+            return false
+        }
     }
 
     var progressStepIndex: Int? {
@@ -180,6 +204,14 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
     let pickupTime: Date?
     let reviewID: String?
     let reviewRating: Decimal?
+    let paymentLookupKey: String?
+    let paymentID: String?
+    let merchantUID: String?
+    let impUID: String?
+    let paymentStatus: String?
+    let paymentVerificationState: String?
+    let receiptURL: URL?
+    let receiptExists: Bool
 
     var canCancel: Bool {
         status.isCancellable
@@ -202,7 +234,15 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
         itemSummaries: [OrderItemSummary],
         pickupTime: Date?,
         reviewID: String? = nil,
-        reviewRating: Decimal? = nil
+        reviewRating: Decimal? = nil,
+        paymentLookupKey: String? = nil,
+        paymentID: String? = nil,
+        merchantUID: String? = nil,
+        impUID: String? = nil,
+        paymentStatus: String? = nil,
+        paymentVerificationState: String? = nil,
+        receiptURL: URL? = nil,
+        receiptExists: Bool = false
     ) {
         self.id = id
         self.orderCode = orderCode
@@ -217,6 +257,61 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
         self.pickupTime = pickupTime
         self.reviewID = reviewID
         self.reviewRating = reviewRating
+        self.paymentLookupKey = paymentLookupKey
+        self.paymentID = paymentID
+        self.merchantUID = merchantUID
+        self.impUID = impUID
+        self.paymentStatus = paymentStatus
+        self.paymentVerificationState = paymentVerificationState
+        self.receiptURL = receiptURL
+        self.receiptExists = receiptExists
+    }
+
+    init(
+        id: String,
+        orderCode: String,
+        storeID: String,
+        storeName: String,
+        storeImagePath: String?,
+        status: OrderStatus,
+        createdAt: Date,
+        paidAt: Date? = nil,
+        totalAmount: Decimal,
+        itemSummaries: [OrderItemSummary],
+        pickupTime: Date?,
+        reviewID: String? = nil,
+        reviewRating: Decimal? = nil,
+        paymentLookupKey: String? = nil,
+        paymentID: String? = nil,
+        merchantUID: String? = nil,
+        impUID: String? = nil,
+        paymentStatus: String? = nil,
+        receiptURL: URL? = nil,
+        receiptExists: Bool = false
+    ) {
+        self.init(
+            id: id,
+            orderCode: orderCode,
+            storeID: storeID,
+            storeName: storeName,
+            storeImagePath: storeImagePath,
+            status: status,
+            createdAt: createdAt,
+            paidAt: paidAt,
+            totalAmount: totalAmount,
+            itemSummaries: itemSummaries,
+            pickupTime: pickupTime,
+            reviewID: reviewID,
+            reviewRating: reviewRating,
+            paymentLookupKey: paymentLookupKey,
+            paymentID: paymentID,
+            merchantUID: merchantUID,
+            impUID: impUID,
+            paymentStatus: paymentStatus,
+            paymentVerificationState: nil,
+            receiptURL: receiptURL,
+            receiptExists: receiptExists
+        )
     }
 
     init(

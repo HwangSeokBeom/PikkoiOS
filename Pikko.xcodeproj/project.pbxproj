@@ -93,7 +93,7 @@
 		4823EAA89DE89A0DE7CB56C2 /* OrderFeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80572F46E2E93BBF7B95E72A /* OrderFeatureTests.swift */; };
 		4B5484181D3D6FEB4A4ACF07 /* CheckoutOrderSubmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54C6B71C7CBC8F8BFF76CE68 /* CheckoutOrderSubmission.swift */; };
 		4C9FFD0C483948695C66B65F /* StoreDetailResponseDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 141BF8EC369C8A9ED7F48BA8 /* StoreDetailResponseDTO.swift */; };
-		4DA01EE62E75BF609CA85809 /* HomePresenter 2.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A79F115355C2C3EC95E502 /* HomePresenter 2.swift */; };
+		4DA01EE62E75BF609CA85809 /* HomePresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A79F115355C2C3EC95E502 /* HomePresenter.swift */; };
 		4DA2AD38C6BC82AF8620A899 /* CartSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55AEFF62331067E866E6F487 /* CartSummary.swift */; };
 		4E6F0071E66288BBC2FF604A /* APIClientProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DD03818923AA2C04BB08804 /* APIClientProtocol.swift */; };
 		50186D0DD3CFF648652AD318 /* LoadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E18950A744120885F6AC292 /* LoadingView.swift */; };
@@ -187,7 +187,7 @@
 		A25992C278276AFE33707DE3 /* CommunityPostListResponseDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = D415A546FEFD52FC5156CADC /* CommunityPostListResponseDTO.swift */; };
 		A2707044567843D5330B879C /* ChatRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A39EE641F6ECDA0F3CEFD3 /* ChatRouter.swift */; };
 		A2D9BA8B27D0D254C4C3587D /* StoreDetailInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECA708712C33DEC036B913D2 /* StoreDetailInteractor.swift */; };
-		A36698E0D8DA8DC0D56A6481 /* HomeBuilder 2.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEE06324B9B60F730EAD8674 /* HomeBuilder 2.swift */; };
+		A36698E0D8DA8DC0D56A6481 /* HomeBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEE06324B9B60F730EAD8674 /* HomeBuilder.swift */; };
 		A51AC93B73FA5B38B31C76DC /* CommunityComposerInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4982D936DEBC1A8AEE6BDA /* CommunityComposerInteractor.swift */; };
 		A534BAD341D7FDC948CEA043 /* HomePresenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1441D1218EAA294466D11111 /* HomePresenterTests.swift */; };
 		A69810AF325377BBAC09DCD9 /* StoreRepositoryImpl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50B57440C07E7BF43BD95B1E /* StoreRepositoryImpl.swift */; };
@@ -301,7 +301,7 @@
 		FB1608AD43E6EE3CB6FB8937 /* StoreSummaryListResponseDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07BD5E56E31372D5CDD09CF /* StoreSummaryListResponseDTO.swift */; };
 		FCD67458C0137E73D5DC4E6C /* StoreDetailViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B41C71505215A6191ED8101 /* StoreDetailViewState.swift */; };
 		FD9923E6142D4E6A1C3637B9 /* CommunityDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06A102FE304F83D7C07A45A3 /* CommunityDetailView.swift */; };
-		FEFD0AECA145A500450D794A /* HomeInteractor 2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 554F5DC442BE84D33685B770 /* HomeInteractor 2.swift */; };
+		FEFD0AECA145A500450D794A /* HomeInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 554F5DC442BE84D33685B770 /* HomeInteractor.swift */; };
 		FEFEF3F679C8519D7C227BAB /* CommunityPostDetailResponseDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = F412D61B3EADCC3E1C7FE98C /* CommunityPostDetailResponseDTO.swift */; };
 		FF09418777755FE892774BCD /* CommunityRemoteDataSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5644946D84330EAE55F45FE /* CommunityRemoteDataSource.swift */; };
 		FF38FA9FDDD0D33D190CD464 /* CommunityDetailInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 227231C77E65175CC1418B45 /* CommunityDetailInteractor.swift */; };
@@ -416,7 +416,7 @@
 		541DFF8169E03E467CC35D7C /* CartBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartBuilder.swift; sourceTree = "<group>"; };
 		5479332AA33338AF3F23EE11 /* HomeDataMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeDataMappingTests.swift; sourceTree = "<group>"; };
 		54C6B71C7CBC8F8BFF76CE68 /* CheckoutOrderSubmission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutOrderSubmission.swift; sourceTree = "<group>"; };
-		554F5DC442BE84D33685B770 /* HomeInteractor 2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HomeInteractor 2.swift"; sourceTree = "<group>"; };
+		554F5DC442BE84D33685B770 /* HomeInteractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeInteractor.swift; sourceTree = "<group>"; };
 		55AEFF62331067E866E6F487 /* CartSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartSummary.swift; sourceTree = "<group>"; };
 		58D7CF6AE0C0317F308816D7 /* MultipartFormDataBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipartFormDataBuilder.swift; sourceTree = "<group>"; };
 		5B481E58F045512A1F0B48B7 /* StoreRemoteDataSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreRemoteDataSource.swift; sourceTree = "<group>"; };
@@ -509,7 +509,7 @@
 		AD9B517D46FB3287C82FED1D /* AuthRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRepository.swift; sourceTree = "<group>"; };
 		AE5F006D8754CCAB421D6CFD /* OrderRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderRootView.swift; sourceTree = "<group>"; };
 		AE8A7B7BEFC1D6066D79145F /* CheckoutBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutBuilder.swift; sourceTree = "<group>"; };
-		AEE06324B9B60F730EAD8674 /* HomeBuilder 2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HomeBuilder 2.swift"; sourceTree = "<group>"; };
+		AEE06324B9B60F730EAD8674 /* HomeBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeBuilder.swift; sourceTree = "<group>"; };
 		AF7A81E3CC0BEB1978D93E56 /* AuthPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthPresenter.swift; sourceTree = "<group>"; };
 		B009FF526EFF9C7B948743A8 /* GoogleSignInService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleSignInService.swift; sourceTree = "<group>"; };
 		B038463024AE8B813EA72CCF /* CartRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartRepository.swift; sourceTree = "<group>"; };
@@ -520,7 +520,7 @@
 		B48D81F252B37E52AD911F19 /* MapLauncherProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapLauncherProtocol.swift; sourceTree = "<group>"; };
 		B6345B2DD253A086BE41CBE1 /* OrderViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderViewState.swift; sourceTree = "<group>"; };
 		B743FCF1E51E9197B6B45367 /* Endpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Endpoint.swift; sourceTree = "<group>"; };
-		B7A79F115355C2C3EC95E502 /* HomePresenter 2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HomePresenter 2.swift"; sourceTree = "<group>"; };
+		B7A79F115355C2C3EC95E502 /* HomePresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomePresenter.swift; sourceTree = "<group>"; };
 		B827F0E1F79F4E34C1DA4289 /* CommunityDetailContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityDetailContent.swift; sourceTree = "<group>"; };
 		B832CC73ACBF4F4F71672A0F /* AppDIContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDIContainer.swift; sourceTree = "<group>"; };
 		B9ADC54145916CCC4A6E00B8 /* CartViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartViewState.swift; sourceTree = "<group>"; };
@@ -835,10 +835,10 @@
 			isa = PBXGroup;
 			children = (
 				893E6D5D82F72CBE547D2646 /* HomeAction.swift */,
-				AEE06324B9B60F730EAD8674 /* HomeBuilder 2.swift */,
+				AEE06324B9B60F730EAD8674 /* HomeBuilder.swift */,
 				FDA30BD19381A8AE07C2150F /* HomeContent.swift */,
-				554F5DC442BE84D33685B770 /* HomeInteractor 2.swift */,
-				B7A79F115355C2C3EC95E502 /* HomePresenter 2.swift */,
+				554F5DC442BE84D33685B770 /* HomeInteractor.swift */,
+				B7A79F115355C2C3EC95E502 /* HomePresenter.swift */,
 				DCE951406D34D5C4E1433950 /* HomeRootView.swift */,
 				BC6E9618B393F9CB04B23F2C /* HomeRouter.swift */,
 				1A326CF5B42F594F864C35AA /* HomeViewState.swift */,
@@ -1736,14 +1736,14 @@
 				6D24CC6D9CE1B8C6B5D3904D /* HTTPStatusMapper.swift in Sources */,
 				6BF5D20A143C936E9BB180D5 /* HomeAction.swift in Sources */,
 				051DB5CB4651DE5054FE4C31 /* HomeBannerSectionView.swift in Sources */,
-				A36698E0D8DA8DC0D56A6481 /* HomeBuilder 2.swift in Sources */,
+				A36698E0D8DA8DC0D56A6481 /* HomeBuilder.swift in Sources */,
 				D1F9C4A801642ECAEDBD92BD /* HomeCategorySectionView.swift in Sources */,
 				BE2348E3546EA9CF43C6D9AD /* HomeContent.swift in Sources */,
 				BC23213561AB44ADEB640FC0 /* HomeHeaderSectionView.swift in Sources */,
-				FEFD0AECA145A500450D794A /* HomeInteractor 2.swift in Sources */,
+				FEFD0AECA145A500450D794A /* HomeInteractor.swift in Sources */,
 				61E85B93D88578AD83FA98AA /* HomePickedStoresSectionView.swift in Sources */,
 				8624D17AC0A58A7D95D4446E /* HomePopularStoresSectionView.swift in Sources */,
-				4DA01EE62E75BF609CA85809 /* HomePresenter 2.swift in Sources */,
+				4DA01EE62E75BF609CA85809 /* HomePresenter.swift in Sources */,
 				A990F8774188EFF5EB76E384 /* HomeRootView.swift in Sources */,
 				3AB30A8F551F508D7AD55EF7 /* HomeRouter.swift in Sources */,
 				42AF08326B25084B447535AB /* HomeView.swift in Sources */,

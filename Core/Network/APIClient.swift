@@ -190,16 +190,18 @@ final class APIClient: APIClientProtocol {
         } ?? "{}"
 
         if endpoint.path == "/v1/payments/validation" {
+            let orderCode = paymentValidationOrderCode(from: request.httpBody) ?? "nil"
             Logger.shared.warning(
-                "[PaymentValidation] failed statusCode=\(statusCode) message=\(serverMessage) body=\(maskedPaymentValidationBody(from: request.httpBody))"
+                "[PaymentValidation] failed orderCode=\(orderCode) statusCode=\(statusCode) message=\(serverMessage) body=\(maskedPaymentValidationBody(from: request.httpBody))"
             )
         } else if endpoint.path.hasPrefix("/v1/payments/") {
+            let selectedKey = endpoint.path.replacingOccurrences(of: "/v1/payments/", with: "")
             Logger.shared.warning(
-                "[PaymentReceipt] failed orderCode=\(endpoint.path.replacingOccurrences(of: "/v1/payments/", with: "")) statusCode=\(statusCode) message=\(serverMessage)"
+                "[PaymentReceipt] failed selectedKey=\(selectedKey) statusCode=\(statusCode) fallback=receiptUnavailable message=\(serverMessage) body=\(payloadSnippet)"
             )
         } else if endpoint.method == .put, endpoint.path.hasPrefix("/v1/orders/") {
             Logger.shared.warning(
-                "[OrderStatus] failed statusCode=\(statusCode) serverMessage=\(serverMessage) body=\(requestBody) responseBody=\(payloadSnippet)"
+                "[OrderStatus] failed orderCode=\(endpoint.path.replacingOccurrences(of: "/v1/orders/", with: "")) statusCode=\(statusCode) serverMessage=\(serverMessage) body=\(requestBody) responseBody=\(payloadSnippet)"
             )
         }
 #endif
@@ -212,6 +214,14 @@ final class APIClient: APIClientProtocol {
         }
         let impUID = object["imp_uid"] as? String
         return "{\"imp_uid\":\"<present:\((impUID?.isEmpty == false))>\"}"
+    }
+
+    private func paymentValidationOrderCode(from data: Data?) -> String? {
+        guard let data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return object["order_code"] as? String ?? object["orderCode"] as? String
     }
 
     private func decode<ResponseDTO: Decodable & Sendable>(

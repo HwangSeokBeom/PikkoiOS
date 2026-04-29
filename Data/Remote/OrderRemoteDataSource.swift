@@ -30,7 +30,7 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
     func fetchPaymentReceipt(orderCode: String) async throws -> PaymentResponseDTO {
         let encodedOrderCode = orderCode.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? orderCode
         Logger.shared.debug(
-            "[PaymentReceipt] request endpoint=GET /v1/payments/{order_code} orderCode=\(orderCode)"
+            "[PaymentReceipt] request method=GET path=/v1/payments/{order_code} orderCode=\(orderCode) selectedKey=\(orderCode)"
         )
         let endpoint = Endpoint<PaymentResponseDTO>(
             path: "/v1/payments/\(encodedOrderCode)",
@@ -40,12 +40,12 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
         do {
             let response = try await apiClient.execute(endpoint)
             Logger.shared.debug(
-                "[PaymentReceipt] success orderCode=\(orderCode) paymentStatus=\(response.status) paidAtExists=\(response.paidAt != nil)"
+                "[PaymentReceipt] success orderCode=\(orderCode) receiptExists=true paymentStatus=\(response.status) paidAtExists=\(response.paidAt != nil)"
             )
             return response
         } catch {
             Logger.shared.warning(
-                "[PaymentReceipt] failed orderCode=\(orderCode) statusCode=unknown message=\(error.localizedDescription)"
+                "[PaymentReceipt] failed selectedKey=\(orderCode) statusCode=unknown fallback=receiptUnavailable message=\(error.localizedDescription) body=<unavailable>"
             )
             throw error
         }
@@ -54,7 +54,7 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
     func validatePayment(_ request: PaymentValidationRequestDTO) async throws -> ReceiptOrderResponseDTO {
         let bodyData = try NetworkCoding.makeJSONEncoder().encode(request)
         Logger.shared.debug(
-            "[PaymentValidation] request endpoint=POST /v1/payments/validation orderCode=\(request.orderCode ?? "nil") body=\(request.maskedLogBody)"
+            "[PaymentValidation] request method=POST path=/v1/payments/validation orderCode=\(request.orderCode ?? "nil") body=\(request.maskedLogBody)"
         )
         let endpoint = Endpoint<ReceiptOrderResponseDTO>(
             path: "/v1/payments/validation",
@@ -71,7 +71,7 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
             return response
         } catch {
             Logger.shared.warning(
-                "[PaymentValidation] failed statusCode=unknown message=\(error.localizedDescription) body=\(request.maskedLogBody)"
+                "[PaymentValidation] failed orderCode=\(request.orderCode ?? "nil") statusCode=unknown message=\(error.localizedDescription) body=\(request.maskedLogBody)"
             )
             throw error
         }
@@ -139,7 +139,7 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
         let path = "/v1/orders/\(encodedOrderCode)"
         let bodyData = try NetworkCoding.makeJSONEncoder().encode(request)
         Logger.shared.debug(
-            "[OrderStatus] request method=PUT path=/v1/orders/{order_code} orderCode=\(orderCode) body={\"nextStatus\":\"\(nextStatus)\"}"
+            "[OrderStatus] request PUT orderCode=\(orderCode) body={\"nextStatus\":\"\(nextStatus)\"}"
         )
         let endpoint = Endpoint<EmptyResponse>(
             path: path,

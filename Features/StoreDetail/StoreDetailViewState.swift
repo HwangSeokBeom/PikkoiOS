@@ -22,6 +22,9 @@ struct StoreDetailViewState: Equatable {
     var successMessage: String?
     var reviewEligibilityMessage: String?
     var reviewEligibilityScrollTrigger = 0
+    var reviewableOrderCode: String?
+    var isReviewWritable = false
+    var reviewDisabledReasonText: String?
 }
 
 struct StoreDetailEmptyState: Equatable {

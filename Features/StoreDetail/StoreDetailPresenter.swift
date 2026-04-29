@@ -27,6 +27,7 @@ final class StoreDetailPresenter: ObservableObject {
         self.router = router
         self.cartStore = cartStore
         bindCartStore()
+        bindOrderStatusChanges()
     }
 
     func send(_ action: StoreDetailAction) async {
@@ -107,6 +108,22 @@ final class StoreDetailPresenter: ObservableObject {
             .store(in: &cancellables)
     }
 
+    private func bindOrderStatusChanges() {
+        NotificationCenter.default.publisher(for: .pikkoOrderStatusDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                guard let event = notification.userInfo?[OrderStatusChangeNotificationUserInfoKey.event] as? OrderStatusChangeNotification,
+                      event.status == .completed else {
+                    return
+                }
+
+                Task { @MainActor [weak self] in
+                    await self?.refreshReviewEligibilityAfterOrderStatusChange()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
     private func loadInitialContent() async {
         viewState.isLoading = true
         viewState.errorMessage = nil
@@ -158,6 +175,9 @@ final class StoreDetailPresenter: ObservableObject {
             from: content.reviewPage.items.first,
             totalReviewCount: content.detail.totalReviewCount
         )
+        viewState.reviewableOrderCode = content.reviewEligibility.orderCode
+        viewState.isReviewWritable = content.reviewEligibility.isWritable
+        viewState.reviewDisabledReasonText = content.reviewEligibility.disabledReasonText
 
         syncCartState()
     }
@@ -236,11 +256,21 @@ final class StoreDetailPresenter: ObservableObject {
         viewState.reviewEligibilityMessage = nil
 
         do {
-            guard let orderCode = try await interactor.findReviewableOrderCode() else {
-                viewState.reviewEligibilityMessage = "픽업 완료된 주문 내역에서 리뷰를 작성할 수 있어요."
+            let orderCode: String?
+            if let cachedOrderCode = viewState.reviewableOrderCode {
+                orderCode = cachedOrderCode
+            } else {
+                orderCode = try await interactor.findReviewableOrderCode()
+            }
+            guard let orderCode else {
+                viewState.reviewEligibilityMessage = viewState.reviewDisabledReasonText
+                    ?? "픽업 완료된 주문 내역에서 리뷰를 작성할 수 있어요."
                 viewState.reviewEligibilityScrollTrigger += 1
                 return
             }
+            viewState.reviewableOrderCode = orderCode
+            viewState.isReviewWritable = true
+            viewState.reviewDisabledReasonText = nil
 
             router.routeToReviewComposer(
                 context: ReviewComposerContext(
@@ -251,6 +281,23 @@ final class StoreDetailPresenter: ObservableObject {
             )
         } catch {
             viewState.errorMessage = resolveErrorMessage(from: error)
+        }
+    }
+
+    private func refreshReviewEligibilityAfterOrderStatusChange() async {
+        guard hasLoaded else { return }
+        do {
+            guard let orderCode = try await interactor.findReviewableOrderCode() else {
+                return
+            }
+            viewState.reviewableOrderCode = orderCode
+            viewState.isReviewWritable = true
+            viewState.reviewDisabledReasonText = nil
+            Logger.shared.debug(
+                "[ReviewEligibility] storeId=\(viewState.storeID) orderCode=\(orderCode) source=statusNotification isWritable=true"
+            )
+        } catch {
+            Logger.shared.warning("StoreDetail review eligibility refresh failed: \(error.localizedDescription)")
         }
     }
 

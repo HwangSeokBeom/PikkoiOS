@@ -119,6 +119,7 @@ struct StoreDetailView: View {
                                     ratingSummary: presenter.viewState.ratingSummary,
                                     reviewPreview: presenter.viewState.reviewPreview,
                                     ratingBars: presenter.viewState.reviewRatings,
+                                    isWriteEnabled: presenter.viewState.isReviewWritable,
                                     onWriteTapped: {
                                         Task { await presenter.send(.reviewWriteTapped) }
                                     },

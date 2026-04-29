@@ -132,7 +132,7 @@ struct CheckoutPaymentBridgeView: View {
 
     private func sendGatewayResult(_ result: PaymentGatewayResult) {
         Logger.shared.debug(
-            "PortOne payment callback orderCode=\(context.orderCode) success=\(result.success) impUidPresent=\(result.impUID?.isEmpty == false) merchantUid=\(result.merchantUID ?? "nil") errorCode=\(result.errorCode ?? "nil")"
+            "PortOne payment callback orderCode=\(context.orderCode) success=\(result.success) impUid=\(result.impUID ?? "nil") merchantUid=\(result.merchantUID ?? "nil") errorCode=\(result.errorCode ?? "nil")"
         )
         if result.success {
             guard let impUID = result.impUID else {

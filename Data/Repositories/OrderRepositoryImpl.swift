@@ -5,29 +5,36 @@ struct OrderRepositoryImpl: OrderRepository {
     private let checkoutMapper: CheckoutMapper
     private let mapper: OrderMapper
     private let localSnapshotStore: OrderLocalSnapshotStore
+    private let statusOverrideStore: OrderStatusOverrideStore
 
     init(
         remoteDataSource: any OrderRemoteDataSourceProtocol,
         checkoutMapper: CheckoutMapper,
         mapper: OrderMapper,
-        localSnapshotStore: OrderLocalSnapshotStore = .shared
+        localSnapshotStore: OrderLocalSnapshotStore = .shared,
+        statusOverrideStore: OrderStatusOverrideStore = .shared
     ) {
         self.remoteDataSource = remoteDataSource
         self.checkoutMapper = checkoutMapper
         self.mapper = mapper
         self.localSnapshotStore = localSnapshotStore
+        self.statusOverrideStore = statusOverrideStore
     }
 
     func fetchOrders(cursor: String?, filter: String?) async throws -> CursorPage<OrderSummary> {
         do {
             let response = try await remoteDataSource.fetchOrders(cursor: cursor, filter: filter)
-            let remotePage = mapper.mapOrderPage(response)
+            let remotePage = await mergeCachedState(into: mapper.mapOrderPage(response))
             guard cursor == nil else {
                 return remotePage
             }
+            for order in remotePage.items {
+                await localSnapshotStore.record(summary: order)
+            }
             let snapshots = await localSnapshotStore.summaries()
+            let mergedSnapshots = await mergeCachedState(into: snapshots)
             return CursorPage(
-                items: merge(remoteOrders: remotePage.items, localOrders: snapshots),
+                items: merge(remoteOrders: remotePage.items, localOrders: mergedSnapshots),
                 nextCursor: remotePage.nextCursor
             )
         } catch {
@@ -38,7 +45,7 @@ struct OrderRepositoryImpl: OrderRepository {
             guard cursor == nil, !snapshots.isEmpty else {
                 throw error
             }
-            return CursorPage(items: snapshots, nextCursor: nil)
+            return CursorPage(items: await mergeCachedState(into: snapshots), nextCursor: nil)
         }
     }
 
@@ -62,43 +69,71 @@ struct OrderRepositoryImpl: OrderRepository {
             throw NetworkError.notFound(message: "주문 정보를 찾을 수 없어요.")
         }
 
-        let paymentReceipt = try? await remoteDataSource.fetchPaymentReceipt(orderCode: matchedOrder.orderCode)
-        return mapper.mapOrderDetail(matchedOrder, paymentReceipt: paymentReceipt)
+        let shouldFetchReceipt = matchedOrder.receiptExists == true
+            || matchedOrder.receiptURL != nil
+            || matchedOrder.paidAt != nil
+            || matchedOrder.paymentStatus?.lowercased() == "paid"
+        Logger.shared.debug(
+            "[PaymentReceipt] autoFetch decision orderCode=\(matchedOrder.orderCode) paidAtExists=\(matchedOrder.paidAt != nil) receiptExists=\(matchedOrder.receiptExists == true) cacheState=none shouldFetch=\(shouldFetchReceipt) reason=\(shouldFetchReceipt ? "paymentEvidencePresent" : "noPaymentEvidence")"
+        )
+        let paymentReceipt = shouldFetchReceipt
+            ? try? await remoteDataSource.fetchPaymentReceipt(orderCode: matchedOrder.orderCode)
+            : nil
+        let mappedDetail = mapper.mapOrderDetail(matchedOrder, paymentReceipt: paymentReceipt)
+        return await mergeCachedState(into: mappedDetail)
     }
 
     func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt {
-        let response = try await remoteDataSource.fetchPaymentReceipt(orderCode: orderCode)
-        return mapper.mapPaymentReceipt(response)
+        do {
+            let response = try await remoteDataSource.fetchPaymentReceipt(orderCode: orderCode)
+            let receipt = mapper.mapPaymentReceipt(response)
+            await PaymentReceiptCache.shared.markVerified(orderCode: orderCode, receipt: receipt)
+            return receipt
+        } catch {
+            if case .notFound = error as? NetworkError {
+                await PaymentReceiptCache.shared.markUnavailable(orderCode: orderCode)
+            }
+            throw error
+        }
     }
 
     func cancelOrder(orderCode: String) async throws -> OrderDetail {
-        _ = orderCode
-        throw NetworkError.businessAuthorization(
-            message: "결제 완료 주문 취소는 환불 처리가 필요합니다. 현재 앱에서는 지원 준비 중입니다."
-        )
+        Logger.shared.debug("[OrderCancel] request orderCode=\(orderCode)")
+        let previousDetail = try? await fetchOrderDetail(orderID: orderCode)
+        do {
+            try await remoteDataSource.updateOrderStatus(orderCode: orderCode, nextStatus: OrderStatus.cancelled.apiValue)
+            let updatedAt = Date()
+            await statusOverrideStore.record(orderCode: orderCode, status: .cancelled, updatedAt: updatedAt)
+            await localSnapshotStore.markStatus(orderCode: orderCode, status: .cancelled, updatedAt: updatedAt)
+            if let previousDetail {
+                await localSnapshotStore.record(detail: makeCancelledDetail(from: previousDetail))
+            }
+            Logger.shared.debug("[OrderCancel] success orderCode=\(orderCode)")
+            postStatusChange(orderID: previousDetail?.orderID, orderCode: orderCode, status: .cancelled)
+            return previousDetail.map(makeCancelledDetail(from:)) ?? makeFallbackCancelledDetail(orderCode: orderCode)
+        } catch {
+            Logger.shared.warning("[OrderCancel] failed orderCode=\(orderCode) message=\(error.localizedDescription)")
+            throw error
+        }
     }
 
     func updateOrderStatus(orderCode: String, status: OrderStatus) async throws {
-        let paymentReceipt = try await fetchPaymentReceipt(orderCode: orderCode)
-        Logger.shared.debug(
-            "[OrderStatus] eligibility orderCode=\(orderCode) isPaymentCompleted=\(paymentReceipt.isPaymentCompleted) currentStatus=unknown allowedNextStatus=unknown"
-        )
-        guard paymentReceipt.isPaymentCompleted else {
-            throw NetworkError.abnormalRequest(message: "결제 검증 완료 후 상태 변경이 가능합니다.")
-        }
-
         try await remoteDataSource.updateOrderStatus(orderCode: orderCode, nextStatus: status.apiValue)
+        let updatedAt = Date()
+        await statusOverrideStore.record(orderCode: orderCode, status: status, updatedAt: updatedAt)
+        await localSnapshotStore.markStatus(orderCode: orderCode, status: status, updatedAt: updatedAt)
+        postStatusChange(orderID: nil, orderCode: orderCode, status: status)
     }
 
-    private func postStatusChange(for detail: OrderDetail) {
+    private func postStatusChange(orderID: String?, orderCode: String, status: OrderStatus) {
         NotificationCenter.default.post(
             name: .pikkoOrderStatusDidChange,
             object: nil,
             userInfo: [
                 OrderStatusChangeNotificationUserInfoKey.event: OrderStatusChangeNotification(
-                    orderID: detail.orderID,
-                    orderCode: detail.orderCode,
-                    status: detail.status
+                    orderID: orderID,
+                    orderCode: orderCode,
+                    status: status
                 )
             ]
         )
@@ -106,7 +141,12 @@ struct OrderRepositoryImpl: OrderRepository {
 
     func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt {
         let response = try await remoteDataSource.validatePayment(.init(request: request))
-        return mapper.mapValidatedPaymentReceipt(response)
+        let receipt = mapper.mapValidatedPaymentReceipt(response)
+        if let orderCode = receipt.orderCode ?? request.orderCode {
+            await PaymentReceiptCache.shared.markVerified(orderCode: orderCode)
+            Logger.shared.debug("[PaymentValidation] cache verified orderCode=\(orderCode)")
+        }
+        return receipt
     }
 
     func validatePrice(_ request: CheckoutPriceValidationRequest) async throws -> CheckoutPriceValidationResult {
@@ -128,7 +168,116 @@ struct OrderRepositoryImpl: OrderRepository {
         let missingLocalOrders = localOrders.filter {
             !remoteIDs.contains($0.id) && !remoteCodes.contains($0.orderCode)
         }
-        return missingLocalOrders + remoteOrders
+        return (missingLocalOrders + remoteOrders).sorted { lhs, rhs in
+            lhs.createdAt > rhs.createdAt
+        }
+    }
+
+    private func mergeCachedState(into page: CursorPage<OrderSummary>) async -> CursorPage<OrderSummary> {
+        CursorPage(
+            items: await mergeCachedState(into: page.items),
+            nextCursor: page.nextCursor
+        )
+    }
+
+    private func mergeCachedState(into orders: [OrderSummary]) async -> [OrderSummary] {
+        var mergedOrders: [OrderSummary] = []
+        for order in orders {
+            mergedOrders.append(await mergeCachedState(into: order))
+        }
+        return mergedOrders
+    }
+
+    private func mergeCachedState(into order: OrderSummary) async -> OrderSummary {
+        let cacheState = await PaymentReceiptCache.shared.state(for: order.orderCode)
+        let overrideStatus = await statusOverrideStore.statusIfPreferred(
+            orderCode: order.orderCode,
+            serverStatus: order.status
+        )
+        let finalStatus = overrideStatus ?? order.status
+        let finalPaymentState = mergedPaymentVerificationState(
+            order: order,
+            cacheState: cacheState
+        )
+        Logger.shared.debug(
+            "[OrderMapping] statusMerge orderCode=\(order.orderCode) dtoStatus=\(order.status.apiValue) cachedPaymentState=\(cacheState?.logValue ?? "none") localOverrideStatus=\(overrideStatus?.apiValue ?? "nil") finalStatus=\(finalStatus.apiValue) finalPaymentState=\(finalPaymentState ?? "unchecked")"
+        )
+
+        return OrderSummary(
+            id: order.id,
+            orderCode: order.orderCode,
+            storeID: order.storeID,
+            storeName: order.storeName,
+            storeImagePath: order.storeImagePath,
+            status: finalStatus,
+            createdAt: order.createdAt,
+            paidAt: order.paidAt,
+            totalAmount: order.totalAmount,
+            itemSummaries: order.itemSummaries,
+            pickupTime: order.pickupTime,
+            reviewID: order.reviewID,
+            reviewRating: order.reviewRating,
+            paymentLookupKey: order.paymentLookupKey,
+            paymentID: order.paymentID,
+            merchantUID: order.merchantUID,
+            impUID: order.impUID,
+            paymentStatus: order.paymentStatus,
+            paymentVerificationState: finalPaymentState,
+            receiptURL: order.receiptURL,
+            receiptExists: order.receiptExists || cacheState?.isVerified == true
+        )
+    }
+
+    private func mergeCachedState(into detail: OrderDetail) async -> OrderDetail {
+        let overrideStatus = await statusOverrideStore.statusIfPreferred(
+            orderCode: detail.orderCode,
+            serverStatus: detail.status
+        )
+        let finalStatus = overrideStatus ?? detail.status
+        guard finalStatus != detail.status else {
+            return detail
+        }
+
+        return OrderDetail(
+            orderID: detail.orderID,
+            orderCode: detail.orderCode,
+            storeID: detail.storeID,
+            storeName: detail.storeName,
+            storeCategory: detail.storeCategory,
+            storeCloseTime: detail.storeCloseTime,
+            storeImagePath: detail.storeImagePath,
+            status: finalStatus,
+            createdAt: detail.createdAt,
+            updatedAt: detail.updatedAt,
+            paidAt: detail.paidAt,
+            pickupTime: detail.pickupTime,
+            totalAmount: detail.totalAmount,
+            items: detail.items,
+            timeline: detail.timeline,
+            paymentSummary: detail.paymentSummary,
+            userMemo: detail.userMemo,
+            reviewID: detail.reviewID,
+            reviewRating: detail.reviewRating
+        )
+    }
+
+    private func mergedPaymentVerificationState(
+        order: OrderSummary,
+        cacheState: PaymentReceiptCacheState?
+    ) -> String? {
+        let rawState = order.paymentVerificationState?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if rawState == "verified" {
+            return "verified"
+        }
+        if order.paymentStatus?.lowercased() == "paid", order.paidAt != nil {
+            return "verified"
+        }
+        if cacheState?.isVerified == true {
+            return "verified"
+        }
+        return order.paymentVerificationState
     }
 
     private func makeCancelledDetail(from detail: OrderDetail) -> OrderDetail {
@@ -170,6 +319,47 @@ struct OrderRepositoryImpl: OrderRepository {
             reviewID: detail.reviewID,
             reviewRating: detail.reviewRating
         )
+    }
+
+    private func makeFallbackCancelledDetail(orderCode: String) -> OrderDetail {
+        let now = Date()
+        return OrderDetail(
+            orderID: orderCode,
+            orderCode: orderCode,
+            storeID: "",
+            storeName: "주문",
+            storeCategory: nil,
+            storeCloseTime: nil,
+            storeImagePath: nil,
+            status: .cancelled,
+            createdAt: now,
+            updatedAt: now,
+            paidAt: nil,
+            pickupTime: nil,
+            totalAmount: 0,
+            items: [],
+            timeline: [
+                OrderStatusTimelineEntry(
+                    id: "CANCELLED-\(orderCode)",
+                    status: .cancelled,
+                    completed: true,
+                    changedAt: now
+                )
+            ],
+            paymentSummary: nil,
+            userMemo: nil,
+            reviewID: nil,
+            reviewRating: nil
+        )
+    }
+}
+
+private extension PaymentReceiptCacheState {
+    var isVerified: Bool {
+        if case .verified = self {
+            return true
+        }
+        return false
     }
 }
 
@@ -239,6 +429,53 @@ actor OrderLocalSnapshotStore {
         persist()
     }
 
+    func record(summary: OrderSummary) {
+        let timeline = [
+            OrderStatusTimelineEntry(
+                id: "\(summary.status.apiValue)-\(summary.orderCode)",
+                status: summary.status,
+                completed: true,
+                changedAt: summary.createdAt
+            )
+        ]
+        let detail = OrderDetail(
+            orderID: summary.id,
+            orderCode: summary.orderCode,
+            storeID: summary.storeID,
+            storeName: summary.storeName,
+            storeCategory: nil,
+            storeCloseTime: nil,
+            storeImagePath: summary.storeImagePath,
+            status: summary.status,
+            createdAt: summary.createdAt,
+            updatedAt: Date(),
+            paidAt: summary.paidAt,
+            pickupTime: summary.pickupTime,
+            totalAmount: summary.totalAmount,
+            items: summary.itemSummaries,
+            timeline: timeline,
+            paymentSummary: OrderPaymentSummary(
+                statusText: summary.paymentStatus,
+                methodText: nil,
+                paidAt: summary.paidAt,
+                receiptURL: summary.receiptURL
+            ),
+            userMemo: nil,
+            reviewID: summary.reviewID,
+            reviewRating: summary.reviewRating
+        )
+        record(detail: detail)
+    }
+
+    func record(detail: OrderDetail) {
+        storedDetails.removeAll {
+            $0.orderID == detail.orderID || $0.orderCode == detail.orderCode
+        }
+        storedDetails.insert(detail, at: 0)
+        storedDetails = Array(storedDetails.prefix(20))
+        persist()
+    }
+
     func summaries() -> [OrderSummary] {
         storedDetails.map {
             OrderSummary(
@@ -254,7 +491,9 @@ actor OrderLocalSnapshotStore {
                 itemSummaries: $0.items,
                 pickupTime: $0.pickupTime,
                 reviewID: $0.reviewID,
-                reviewRating: $0.reviewRating
+                reviewRating: $0.reviewRating,
+                receiptURL: $0.paymentSummary?.receiptURL,
+                receiptExists: $0.paymentSummary?.receiptURL != nil
             )
         }
     }
@@ -326,6 +565,103 @@ actor OrderLocalSnapshotStore {
             Logger.shared.warning("Failed to persist local order snapshots: \(error.localizedDescription)")
         }
     }
+}
+
+actor OrderStatusOverrideStore {
+    static let shared = OrderStatusOverrideStore(store: UserDefaultsStore())
+
+    private struct Entry: Sendable {
+        let status: OrderStatus
+        let updatedAt: Date
+    }
+
+    private let store: any UserDefaultsStoring
+    private let storageKey: String
+    private let ttl: TimeInterval
+    private var entries: [String: Entry]
+
+    init(
+        store: any UserDefaultsStoring,
+        storageKey: String = "order.statusOverrides",
+        ttl: TimeInterval = 1_800
+    ) {
+        self.store = store
+        self.storageKey = storageKey
+        self.ttl = ttl
+        self.entries = store
+            .codableValue([StoredOrderStatusOverride].self, forKey: storageKey)?
+            .reduce(into: [String: Entry]()) { partial, storedOverride in
+                partial[storedOverride.orderCode] = Entry(
+                    status: OrderStatus(serverValue: storedOverride.status),
+                    updatedAt: storedOverride.updatedAt
+                )
+            } ?? [:]
+    }
+
+    func record(orderCode: String, status: OrderStatus, updatedAt: Date = Date()) {
+        entries[orderCode] = Entry(status: status, updatedAt: updatedAt)
+        persist()
+    }
+
+    func statusIfPreferred(orderCode: String, serverStatus: OrderStatus, now: Date = Date()) -> OrderStatus? {
+        guard let entry = entries[orderCode] else { return nil }
+
+        if now.timeIntervalSince(entry.updatedAt) > ttl {
+            entries[orderCode] = nil
+            persist()
+            Logger.shared.debug("[OrderStatus] localOverrideExpired orderCode=\(orderCode)")
+            return nil
+        }
+
+        if serverStatus == entry.status {
+            entries[orderCode] = nil
+            persist()
+            return nil
+        }
+
+        if serverStatus.isSameOrLaterProgressStep(than: entry.status) {
+            entries[orderCode] = nil
+            persist()
+            return nil
+        }
+
+        if entry.status.isLaterProgressStep(than: serverStatus) || entry.status == .cancelled {
+            Logger.shared.debug(
+                "[OrderStatus] serverRegressionIgnored orderCode=\(orderCode) serverStatus=\(serverStatus.apiValue) localStatus=\(entry.status.apiValue)"
+            )
+            return entry.status
+        }
+
+        return nil
+    }
+
+    func clear() {
+        entries = [:]
+        store.removeValue(forKey: storageKey)
+    }
+
+    private func persist() {
+        do {
+            try store.setCodable(
+                entries.map { orderCode, entry in
+                    StoredOrderStatusOverride(
+                        orderCode: orderCode,
+                        status: entry.status.apiValue,
+                        updatedAt: entry.updatedAt
+                    )
+                },
+                forKey: storageKey
+            )
+        } catch {
+            Logger.shared.warning("Failed to persist order status overrides: \(error.localizedDescription)")
+        }
+    }
+}
+
+private struct StoredOrderStatusOverride: Codable {
+    let orderCode: String
+    let status: String
+    let updatedAt: Date
 }
 
 private struct StoredOrderDetailSnapshot: Codable {
@@ -471,5 +807,21 @@ private struct StoredOrderPaymentSnapshot: Codable {
 private extension OrderStatus {
     var serverStorageValue: String {
         apiValue
+    }
+
+    func isLaterProgressStep(than status: OrderStatus) -> Bool {
+        guard let currentStepIndex = progressStepIndex,
+              let otherStepIndex = status.progressStepIndex else {
+            return false
+        }
+        return currentStepIndex > otherStepIndex
+    }
+
+    func isSameOrLaterProgressStep(than status: OrderStatus) -> Bool {
+        guard let currentStepIndex = progressStepIndex,
+              let otherStepIndex = status.progressStepIndex else {
+            return false
+        }
+        return currentStepIndex >= otherStepIndex
     }
 }

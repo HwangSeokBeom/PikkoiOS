@@ -45,8 +45,13 @@ struct OrderMapper: Sendable {
             orderStatus: dto.currentOrderStatus,
             paymentStatus: paymentReceipt?.status,
             paidAt: paidAt,
-            receiptURL: paymentReceipt?.receiptURL
+            receiptExists: paymentReceipt != nil || hasReceipt(dto),
+            receiptURLExists: paymentReceipt?.receiptURL != nil || dto.receiptURL != nil,
+            paymentVerificationState: paymentVerificationState(paymentReceipt) ?? dto.paymentVerificationState ?? "unchecked"
         )
+
+        let mappedStatus = OrderStatus(serverValue: dto.currentOrderStatus)
+        logMappedOrderStatus(orderCode: dto.orderCode, status: mappedStatus, source: "detailDTO")
 
         return OrderDetail(
             orderID: dto.orderID,
@@ -56,7 +61,7 @@ struct OrderMapper: Sendable {
             storeCategory: dto.store.category,
             storeCloseTime: dto.store.close,
             storeImagePath: dto.store.storeImageURLs.first.map(resolveAuthorizedPath),
-            status: OrderStatus(serverValue: dto.currentOrderStatus),
+            status: mappedStatus,
             createdAt: dateParser.parseISO8601(dto.createdAt) ?? .distantPast,
             updatedAt: dateParser.parseISO8601(dto.updatedAt) ?? .distantPast,
             paidAt: paidAt,
@@ -109,13 +114,19 @@ struct OrderMapper: Sendable {
 
     private func mapOrderSummary(_ dto: OrderWithStatusResponseDTO) -> OrderSummary {
         let paidAt = dto.paidAt.flatMap(dateParser.parseISO8601)
+        let receiptURL = dto.receiptURL.flatMap(URL.init(string:))
         logOrderMapping(
             orderCode: dto.orderCode,
             orderStatus: dto.currentOrderStatus,
-            paymentStatus: nil,
+            paymentStatus: dto.paymentStatus,
             paidAt: paidAt,
-            receiptURL: nil
+            receiptExists: hasReceipt(dto),
+            receiptURLExists: receiptURL != nil,
+            paymentVerificationState: dto.paymentVerificationState ?? "unchecked"
         )
+
+        let mappedStatus = OrderStatus(serverValue: dto.currentOrderStatus)
+        logMappedOrderStatus(orderCode: dto.orderCode, status: mappedStatus, source: "ordersDTO")
 
         return OrderSummary(
             id: dto.orderID,
@@ -123,14 +134,22 @@ struct OrderMapper: Sendable {
             storeID: dto.store.id,
             storeName: dto.store.name,
             storeImagePath: dto.store.storeImageURLs.first.map(resolveAuthorizedPath),
-            status: OrderStatus(serverValue: dto.currentOrderStatus),
+            status: mappedStatus,
             createdAt: dateParser.parseISO8601(dto.createdAt) ?? .distantPast,
             paidAt: paidAt,
             totalAmount: dto.totalPrice,
             itemSummaries: dto.orderMenuList.map(mapOrderItemSummary),
             pickupTime: dto.orderStatusTimeline.first(where: { OrderStatus(serverValue: $0.status) == .ready })?.changedAt.flatMap(dateParser.parseISO8601),
             reviewID: dto.review?.id,
-            reviewRating: dto.review?.rating
+            reviewRating: dto.review?.rating,
+            paymentLookupKey: dto.paymentLookupKey,
+            paymentID: dto.paymentID,
+            merchantUID: dto.merchantUID,
+            impUID: dto.impUID,
+            paymentStatus: dto.paymentStatus,
+            paymentVerificationState: dto.paymentVerificationState,
+            receiptURL: receiptURL,
+            receiptExists: hasReceipt(dto)
         )
     }
 
@@ -174,11 +193,29 @@ struct OrderMapper: Sendable {
         orderStatus: String,
         paymentStatus: String?,
         paidAt: Date?,
-        receiptURL: String?
+        receiptExists: Bool,
+        receiptURLExists: Bool,
+        paymentVerificationState: String
     ) {
         Logger.shared.debug(
-            "[OrderMapping] orderCode=\(orderCode) orderStatus=\(orderStatus) paymentStatus=\(paymentStatus ?? "nil") paidAtExists=\(paidAt != nil) receiptExists=\(receiptURL != nil)"
+            "[OrderMapping] raw orderCode=\(orderCode) orderStatus=\(orderStatus) paymentStatus=\(paymentStatus ?? "nil") paidAtExists=\(paidAt != nil) receiptExists=\(receiptExists) receiptUrlExists=\(receiptURLExists) paymentVerificationState=\(paymentVerificationState)"
         )
+    }
+
+    private func logMappedOrderStatus(orderCode: String, status: OrderStatus, source: String) {
+        Logger.shared.debug(
+            "[OrderMapping] entity orderCode=\(orderCode) orderStatus=\(status.apiValue) statusTitle=\(status.displayTitle) source=\(source)"
+        )
+    }
+
+    private func hasReceipt(_ dto: OrderWithStatusResponseDTO) -> Bool {
+        dto.receiptExists ?? (dto.receiptURL != nil)
+    }
+
+    private func paymentVerificationState(_ receipt: PaymentResponseDTO?) -> String? {
+        guard let receipt else { return nil }
+        let paidAt = receipt.paidAt.flatMap(dateParser.parseISO8601)
+        return receipt.status.lowercased() == "paid" && paidAt != nil ? "verified" : "notVerified"
     }
 
     private func makePaymentBridgePayload(_ dto: OrderCreateResponseDTO) -> CheckoutPaymentBridgePayload? {
