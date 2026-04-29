@@ -28,25 +28,53 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
     }
 
     func fetchPaymentReceipt(orderCode: String) async throws -> PaymentResponseDTO {
+        let encodedOrderCode = orderCode.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? orderCode
+        Logger.shared.debug(
+            "[PaymentReceipt] request endpoint=GET /v1/payments/{order_code} orderCode=\(orderCode)"
+        )
         let endpoint = Endpoint<PaymentResponseDTO>(
-            path: "/v1/payments/\(orderCode)",
+            path: "/v1/payments/\(encodedOrderCode)",
             method: .get,
             authorizationPolicy: .accessToken
         )
-        return try await apiClient.execute(endpoint)
+        do {
+            let response = try await apiClient.execute(endpoint)
+            Logger.shared.debug(
+                "[PaymentReceipt] success orderCode=\(orderCode) paymentStatus=\(response.status) paidAtExists=\(response.paidAt != nil)"
+            )
+            return response
+        } catch {
+            Logger.shared.warning(
+                "[PaymentReceipt] failed orderCode=\(orderCode) statusCode=unknown message=\(error.localizedDescription)"
+            )
+            throw error
+        }
     }
 
     func validatePayment(_ request: PaymentValidationRequestDTO) async throws -> ReceiptOrderResponseDTO {
+        let bodyData = try NetworkCoding.makeJSONEncoder().encode(request)
+        Logger.shared.debug(
+            "[PaymentValidation] request endpoint=POST /v1/payments/validation orderCode=\(request.orderCode ?? "nil") body=\(request.maskedLogBody)"
+        )
         let endpoint = Endpoint<ReceiptOrderResponseDTO>(
             path: "/v1/payments/validation",
             method: .post,
-            body: RequestBody.json(
-                try NetworkCoding.makeJSONEncoder().encode(request)
-            ),
+            body: RequestBody.json(bodyData),
             timeout: .paymentValidation,
             authorizationPolicy: .accessToken
         )
-        return try await apiClient.execute(endpoint)
+        do {
+            let response = try await apiClient.execute(endpoint)
+            Logger.shared.debug(
+                "[PaymentValidation] success orderCode=\(request.orderCode ?? response.orderItem?.orderCode ?? "nil") response=paymentIDExists:\(response.paymentID != nil), orderCode:\(response.orderItem?.orderCode ?? "nil")"
+            )
+            return response
+        } catch {
+            Logger.shared.warning(
+                "[PaymentValidation] failed statusCode=unknown message=\(error.localizedDescription) body=\(request.maskedLogBody)"
+            )
+            throw error
+        }
     }
 
     func validatePrice(_ request: CheckoutPriceValidationRequestDTO) async throws -> CheckoutPriceValidationResponseDTO {
@@ -109,17 +137,24 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
         let encodedOrderCode = orderCode.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? orderCode
         let request = OrderStatusUpdateRequestDTO(nextStatus: nextStatus)
         let path = "/v1/orders/\(encodedOrderCode)"
+        let bodyData = try NetworkCoding.makeJSONEncoder().encode(request)
+        Logger.shared.debug(
+            "[OrderStatus] request method=PUT path=/v1/orders/{order_code} orderCode=\(orderCode) body={\"nextStatus\":\"\(nextStatus)\"}"
+        )
         let endpoint = Endpoint<EmptyResponse>(
             path: path,
             method: .put,
-            body: RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(request)),
+            body: RequestBody.json(bodyData),
             authorizationPolicy: .accessToken
         )
         do {
             _ = try await apiClient.execute(endpoint)
+            Logger.shared.debug(
+                "[OrderStatus] success orderCode=\(orderCode) nextStatus=\(nextStatus)"
+            )
         } catch {
             Logger.shared.warning(
-                "Order status update failed. endpoint=PUT \(path) body={nextStatus:\(nextStatus)} message=\(error.localizedDescription)"
+                "[OrderStatus] failed statusCode=unknown serverMessage=\(error.localizedDescription) body={\"nextStatus\":\"\(nextStatus)\"}"
             )
             throw error
         }

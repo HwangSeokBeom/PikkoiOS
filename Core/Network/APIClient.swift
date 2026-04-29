@@ -63,6 +63,13 @@ final class APIClient: APIClientProtocol {
                     "HTTP request failed. endpoint=\(endpoint.method.rawValue) \(endpoint.path) statusCode=\(httpResponse.statusCode) serverMessage=\(serverMessage) mappedMessage=\(mappedError.localizedDescription)"
                 )
                 logFailurePayloadIfNeeded(endpoint: endpoint, statusCode: httpResponse.statusCode, data: data)
+                logDomainFailureIfNeeded(
+                    endpoint: endpoint,
+                    request: request,
+                    statusCode: httpResponse.statusCode,
+                    serverMessage: serverMessage,
+                    data: data
+                )
                 if endpoint.path == "/v1/users/login/kakao" {
                     Logger.shared.warning(
                         "[Auth] social login failed provider=kakao endpoint=\(endpoint.path) statusCode=\(httpResponse.statusCode) serverMessage=\(serverMessage)"
@@ -167,6 +174,44 @@ final class APIClient: APIClientProtocol {
             "[Network] response failed statusCode=\(statusCode) endpoint=\(endpoint.method.rawValue) \(endpoint.path) body=\(payloadSnippet)"
         )
 #endif
+    }
+
+    private func logDomainFailureIfNeeded<ResponseDTO: Decodable & Sendable>(
+        endpoint: Endpoint<ResponseDTO>,
+        request: URLRequest,
+        statusCode: Int,
+        serverMessage: String,
+        data: Data
+    ) {
+#if DEBUG
+        let payloadSnippet = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8>"
+        let requestBody = request.httpBody.flatMap {
+            String(data: $0.prefix(512), encoding: .utf8)
+        } ?? "{}"
+
+        if endpoint.path == "/v1/payments/validation" {
+            Logger.shared.warning(
+                "[PaymentValidation] failed statusCode=\(statusCode) message=\(serverMessage) body=\(maskedPaymentValidationBody(from: request.httpBody))"
+            )
+        } else if endpoint.path.hasPrefix("/v1/payments/") {
+            Logger.shared.warning(
+                "[PaymentReceipt] failed orderCode=\(endpoint.path.replacingOccurrences(of: "/v1/payments/", with: "")) statusCode=\(statusCode) message=\(serverMessage)"
+            )
+        } else if endpoint.method == .put, endpoint.path.hasPrefix("/v1/orders/") {
+            Logger.shared.warning(
+                "[OrderStatus] failed statusCode=\(statusCode) serverMessage=\(serverMessage) body=\(requestBody) responseBody=\(payloadSnippet)"
+            )
+        }
+#endif
+    }
+
+    private func maskedPaymentValidationBody(from data: Data?) -> String {
+        guard let data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return "{}"
+        }
+        let impUID = object["imp_uid"] as? String
+        return "{\"imp_uid\":\"<present:\((impUID?.isEmpty == false))>\"}"
     }
 
     private func decode<ResponseDTO: Decodable & Sendable>(

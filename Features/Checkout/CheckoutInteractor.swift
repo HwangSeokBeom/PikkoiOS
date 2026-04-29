@@ -8,6 +8,7 @@ protocol CheckoutInteracting {
     func createOrder(input: CheckoutSubmissionInput) async throws -> CreatedOrder
     func makePaymentRequest(createdOrder: CreatedOrder) async throws -> PaymentGatewayRequest
     func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt
+    func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt
 }
 
 @MainActor
@@ -237,6 +238,18 @@ struct CheckoutInteractor: CheckoutInteracting {
             throw error
         } catch {
             throw CheckoutFeatureError.unavailable(message: "결제 확인 중 알 수 없는 오류가 발생했어요.")
+        }
+    }
+
+    func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt {
+        do {
+            return try await orderRepository.fetchPaymentReceipt(orderCode: orderCode)
+        } catch let error as NetworkError {
+            throw map(error: error)
+        } catch let error as CheckoutFeatureError {
+            throw error
+        } catch {
+            throw CheckoutFeatureError.unavailable(message: "결제 영수증을 확인하지 못했어요.")
         }
     }
 

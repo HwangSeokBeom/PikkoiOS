@@ -305,7 +305,7 @@ final class CheckoutPresenter: ObservableObject {
             )
         case .succeeded(let impUID, let merchantUID):
             Logger.shared.debug(
-                "PortOne payment callback received success=true orderCode=\(viewState.createdOrderCode ?? "nil") merchantUid=\(merchantUID ?? "nil") impUidPresent=\(!impUID.isEmpty)"
+                "[Payment] callback received orderCode=\(viewState.createdOrderCode ?? "nil") success=true paymentIdExists=\(!impUID.isEmpty) merchantUidExists=\(merchantUID?.isEmpty == false)"
             )
             let validationRequest = PaymentValidationRequest(
                 orderID: viewState.createdOrderID,
@@ -373,7 +373,7 @@ final class CheckoutPresenter: ObservableObject {
     private func validatePaymentWithServer(_ validationRequest: PaymentValidationRequest) async {
         pendingValidationRequest = validationRequest
         Logger.shared.debug(
-            "Payment validation started orderCode=\(validationRequest.orderCode ?? "nil") merchantUid=\(validationRequest.merchantUID ?? "nil") impUidPresent=\(!validationRequest.impUID.isEmpty)"
+            "[PaymentValidation] request endpoint=POST /v1/payments/validation orderCode=\(validationRequest.orderCode ?? "nil") body={\"imp_uid\":\"<present:\(!validationRequest.impUID.isEmpty)>\"}"
         )
         setLoadingState(
             isValidatingPrice: false,
@@ -386,6 +386,10 @@ final class CheckoutPresenter: ObservableObject {
 
         do {
             let receipt = try await interactor.validatePayment(validationRequest)
+            var receiptConfirmsPayment = true
+            if let orderCode = receipt.orderCode ?? validationRequest.orderCode {
+                receiptConfirmsPayment = await refreshPaymentReceiptAfterValidation(orderCode: orderCode)
+            }
             cartStore.clear()
             pendingValidationRequest = nil
 
@@ -393,15 +397,17 @@ final class CheckoutPresenter: ObservableObject {
             viewState.isVerifyingPayment = false
             viewState.isPrimaryLoading = false
             viewState.isPrimaryEnabled = false
-            viewState.completionState = .paymentValidated
+            viewState.completionState = receiptConfirmsPayment ? .paymentValidated : .validationPending
             viewState.paymentStage = .paymentCompleted
             viewState.createdOrderID = receipt.orderID ?? viewState.createdOrderID
             viewState.createdOrderCode = receipt.orderCode ?? viewState.createdOrderCode
             viewState.primaryActionTitle = "결제 확인 완료"
-            viewState.successMessage = "결제가 확인됐어요. 주문이 접수되었고, 목록 반영까지 잠시 걸릴 수 있습니다."
+            viewState.successMessage = receiptConfirmsPayment
+                ? "결제가 확인됐어요. 주문이 접수되었고, 목록 반영까지 잠시 걸릴 수 있습니다."
+                : "결제 검증은 접수되었지만 영수증 조회가 지연되고 있어요. 주문 내역을 새로고침해 주세요."
             postOrderRefreshRequested()
             Logger.shared.debug(
-                "Payment validation succeeded orderCode=\(viewState.createdOrderCode ?? "nil") impUidPresent=\(!validationRequest.impUID.isEmpty)"
+                "[PaymentValidation] success orderCode=\(viewState.createdOrderCode ?? "nil") response=paymentIDExists:\(receipt.paymentID != nil), orderIDExists:\(receipt.orderID != nil)"
             )
         } catch let error as CheckoutFeatureError {
             applyFailedValidationState(for: error, validationRequest: validationRequest)
@@ -411,6 +417,21 @@ final class CheckoutPresenter: ObservableObject {
                 validationRequest: validationRequest,
                 debugError: error
             )
+        }
+    }
+
+    private func refreshPaymentReceiptAfterValidation(orderCode: String) async -> Bool {
+        do {
+            let receipt = try await interactor.fetchPaymentReceipt(orderCode: orderCode)
+            Logger.shared.debug(
+                "[PaymentReceipt] success orderCode=\(orderCode) paymentStatus=\(receipt.status) paidAtExists=\(receipt.paidAt != nil)"
+            )
+            return receipt.isPaymentCompleted
+        } catch {
+            Logger.shared.warning(
+                "[PaymentReceipt] failed orderCode=\(orderCode) statusCode=unknown message=\(error.localizedDescription)"
+            )
+            return false
         }
     }
 
@@ -428,11 +449,11 @@ final class CheckoutPresenter: ObservableObject {
              .notFound(let featureMessage),
              .unavailable(let featureMessage):
             Logger.shared.debug(
-                "Payment validation failed orderCode=\(validationRequest.orderCode ?? "nil") merchantUid=\(validationRequest.merchantUID ?? "nil") impUidPresent=\(!validationRequest.impUID.isEmpty) error=\(featureMessage)"
+                "[PaymentValidation] failed statusCode=unknown message=\(featureMessage) body={\"imp_uid\":\"<present:\(!validationRequest.impUID.isEmpty)>\"}"
             )
         case .validationIssues:
             Logger.shared.debug(
-                "Payment validation failed orderCode=\(validationRequest.orderCode ?? "nil") merchantUid=\(validationRequest.merchantUID ?? "nil") impUidPresent=\(!validationRequest.impUID.isEmpty) error=validationIssues"
+                "[PaymentValidation] failed statusCode=unknown message=validationIssues body={\"imp_uid\":\"<present:\(!validationRequest.impUID.isEmpty)>\"}"
             )
         }
 
@@ -449,7 +470,7 @@ final class CheckoutPresenter: ObservableObject {
     ) {
         if let validationRequest, let debugError {
             Logger.shared.debug(
-                "Payment validation failed orderCode=\(validationRequest.orderCode ?? "nil") merchantUid=\(validationRequest.merchantUID ?? "nil") impUidPresent=\(!validationRequest.impUID.isEmpty) error=\(debugError)"
+                "[PaymentValidation] failed statusCode=unknown message=\(debugError.localizedDescription) body={\"imp_uid\":\"<present:\(!validationRequest.impUID.isEmpty)>\"}"
             )
         }
         viewState.paymentBridgeContext = nil

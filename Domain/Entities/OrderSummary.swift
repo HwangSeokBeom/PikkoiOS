@@ -57,6 +57,75 @@ enum OrderStatus: Equatable, Sendable {
         }
     }
 
+    var apiValue: String {
+        switch self {
+        case .pending:
+            return "PENDING_APPROVAL"
+        case .accepted:
+            return "APPROVED"
+        case .preparing:
+            return "IN_PROGRESS"
+        case .ready:
+            return "READY_FOR_PICKUP"
+        case .completed:
+            return "PICKED_UP"
+        case .cancelled:
+            return "CANCELLED"
+        case .rejected:
+            return "REJECTED"
+        case .failed:
+            return "FAILED"
+        case .unknown(let value):
+            return value
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .pending:
+            return 0
+        case .accepted:
+            return 1
+        case .preparing:
+            return 2
+        case .ready:
+            return 3
+        case .completed:
+            return 4
+        case .cancelled:
+            return 5
+        case .rejected:
+            return 6
+        case .failed:
+            return 7
+        case .unknown:
+            return 8
+        }
+    }
+
+    static var selectableStatuses: [OrderStatus] {
+        [.pending, .accepted, .preparing, .ready, .completed]
+    }
+
+    var allowedNextStatus: OrderStatus? {
+        switch self {
+        case .pending:
+            return .accepted
+        case .accepted:
+            return .preparing
+        case .preparing:
+            return .ready
+        case .ready:
+            return .completed
+        case .completed, .cancelled, .rejected, .failed, .unknown:
+            return nil
+        }
+    }
+
+    func canTransition(to nextStatus: OrderStatus) -> Bool {
+        allowedNextStatus == nextStatus
+    }
+
     var isTerminal: Bool {
         switch self {
         case .completed, .cancelled, .rejected, .failed:
@@ -105,6 +174,7 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
     let storeImagePath: String?
     let status: OrderStatus
     let createdAt: Date
+    let paidAt: Date?
     let totalAmount: Decimal
     let itemSummaries: [OrderItemSummary]
     let pickupTime: Date?
@@ -115,6 +185,10 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
         status.isCancellable
     }
 
+    var isPaymentCompleted: Bool {
+        paidAt != nil
+    }
+
     init(
         id: String,
         orderCode: String,
@@ -123,6 +197,7 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
         storeImagePath: String?,
         status: OrderStatus,
         createdAt: Date,
+        paidAt: Date? = nil,
         totalAmount: Decimal,
         itemSummaries: [OrderItemSummary],
         pickupTime: Date?,
@@ -136,6 +211,7 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
         self.storeImagePath = storeImagePath
         self.status = status
         self.createdAt = createdAt
+        self.paidAt = paidAt
         self.totalAmount = totalAmount
         self.itemSummaries = itemSummaries
         self.pickupTime = pickupTime
@@ -151,6 +227,7 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
         storeImagePath: String?,
         status: OrderStatus,
         createdAt: Date,
+        paidAt: Date? = nil,
         totalAmount: Decimal,
         itemSummaries: [OrderItemSummary],
         pickupTime: Date?
@@ -163,6 +240,7 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
             storeImagePath: storeImagePath,
             status: status,
             createdAt: createdAt,
+            paidAt: paidAt,
             totalAmount: totalAmount,
             itemSummaries: itemSummaries,
             pickupTime: pickupTime,

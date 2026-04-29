@@ -6,6 +6,7 @@ struct OrderView: View {
     let onAuthTap: () -> Void
     let onExploreTap: () -> Void
     @State private var cancelCandidate: OrderListItemViewState?
+    @State private var statusChangeCandidate: OrderStatusChangeCandidate?
 
     var body: some View {
         ZStack {
@@ -82,6 +83,27 @@ struct OrderView: View {
         } message: {
             Text("결제 완료 주문 취소는 환불 처리가 필요합니다. 현재 앱에서는 지원 준비 중입니다.")
         }
+        .alert("주문 상태를 변경할까요?", isPresented: statusChangeConfirmationBinding) {
+            Button("취소", role: .cancel) {
+                statusChangeCandidate = nil
+            }
+            Button("변경하기") {
+                guard let candidate = statusChangeCandidate else { return }
+                statusChangeCandidate = nil
+                Task {
+                    await presenter.send(
+                        .statusChangeConfirmed(
+                            orderCode: candidate.orderCode,
+                            nextStatus: candidate.nextStatus
+                        )
+                    )
+                }
+            }
+        } message: {
+            if let candidate = statusChangeCandidate {
+                Text("주문번호 \(candidate.orderCode)의 상태를 '\(candidate.nextStatus.displayTitle)'으로 변경합니다.")
+            }
+        }
     }
 
     private var pickupNotice: some View {
@@ -124,6 +146,21 @@ struct OrderView: View {
                         },
                         onCancelTap: {
                             cancelCandidate = order
+                        },
+                        onStatusSelect: { nextStatus in
+                            Task {
+                                await presenter.send(
+                                    .statusSelected(
+                                        orderCode: order.orderCode,
+                                        currentStatus: order.status,
+                                        nextStatus: nextStatus
+                                    )
+                                )
+                            }
+                            statusChangeCandidate = OrderStatusChangeCandidate(
+                                orderCode: order.orderCode,
+                                nextStatus: nextStatus
+                            )
                         }
                     )
                     .onAppear {
@@ -161,6 +198,22 @@ struct OrderView: View {
             }
         )
     }
+
+    private var statusChangeConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { statusChangeCandidate != nil },
+            set: { isPresented in
+                if !isPresented {
+                    statusChangeCandidate = nil
+                }
+            }
+        )
+    }
+}
+
+private struct OrderStatusChangeCandidate: Equatable {
+    let orderCode: String
+    let nextStatus: OrderStatus
 }
 
 private struct OrderRowView: View {
@@ -177,6 +230,7 @@ private struct OrderRowView: View {
     let imageLoader: any AuthorizedImageLoading
     let onTap: () -> Void
     let onCancelTap: () -> Void
+    let onStatusSelect: (OrderStatus) -> Void
 
     var body: some View {
         Group {
@@ -191,30 +245,34 @@ private struct OrderRowView: View {
 
     private var activeCard: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.md) {
-            Button(action: onTap) {
-                HStack(alignment: .top, spacing: Layout.imageTextSpacing) {
-                    VStack(alignment: .leading, spacing: Layout.textVerticalSpacing) {
-                        Text("주문번호 \(order.orderCode)")
-                            .font(PikkoTypography.captionStrong)
-                            .foregroundStyle(PikkoColor.tertiaryText)
+            HStack(alignment: .top, spacing: Layout.imageTextSpacing) {
+                VStack(alignment: .leading, spacing: Layout.textVerticalSpacing) {
+                    Text("주문번호 \(order.orderCode)")
+                        .font(PikkoTypography.captionStrong)
+                        .foregroundStyle(PikkoColor.tertiaryText)
 
-                        Text(order.storeName)
-                            .font(PikkoTypography.hero)
-                            .foregroundStyle(PikkoColor.accentStrong)
-                            .lineLimit(2)
+                    Text(order.storeName)
+                        .font(PikkoTypography.hero)
+                        .foregroundStyle(PikkoColor.accentStrong)
+                        .lineLimit(2)
 
-                        Text(order.createdAtText)
-                            .font(PikkoTypography.caption)
-                            .foregroundStyle(PikkoColor.secondaryText)
-                    }
-
-                    Spacer(minLength: PikkoSpacing.sm)
-
-                    activeTimeline
+                    Text(order.createdAtText)
+                        .font(PikkoTypography.caption)
+                        .foregroundStyle(PikkoColor.secondaryText)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
+                .onTapGesture(perform: onTap)
+
+                OrderStatusSelectorView(
+                    currentStatus: order.status,
+                    isUpdating: order.isStatusUpdating,
+                    isPaymentCompleted: order.isPaymentCompleted,
+                    allowedNextStatus: order.allowedNextStatus,
+                    disabledMessage: order.statusChangeMessage,
+                    onSelectStatus: onStatusSelect
+                )
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, Layout.cardHorizontalPadding)
             .padding(.vertical, Layout.cardVerticalPadding)
             .background(PikkoColor.surfaceElevated)
@@ -228,18 +286,6 @@ private struct OrderRowView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
-    }
-
-    private var activeTimeline: some View {
-        VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
-            ForEach(order.statusSteps) { step in
-                timelineStepRow(step)
-            }
-        }
-        .padding(PikkoSpacing.md)
-        .frame(minWidth: 124, alignment: .leading)
-        .background(PikkoColor.gray100.opacity(0.65))
-        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
     }
 
     private var activeMenuCard: some View {
@@ -308,63 +354,54 @@ private struct OrderRowView: View {
     }
 
     private var historyCard: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: PikkoSpacing.md) {
-                HStack(alignment: .top, spacing: Layout.imageTextSpacing) {
-                    VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
-                        Text(order.storeName)
-                            .font(PikkoTypography.title)
-                            .foregroundStyle(PikkoColor.primaryText)
-                            .lineLimit(2)
+        VStack(alignment: .leading, spacing: PikkoSpacing.md) {
+            HStack(alignment: .top, spacing: Layout.imageTextSpacing) {
+                VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+                    Text(order.storeName)
+                        .font(PikkoTypography.title)
+                        .foregroundStyle(PikkoColor.primaryText)
+                        .lineLimit(2)
 
-                        Text("\(order.orderCode)   \(order.createdAtText)")
-                            .font(PikkoTypography.caption)
-                            .foregroundStyle(PikkoColor.secondaryText)
-                            .lineLimit(1)
-
-                        Text(order.primaryItemText)
-                            .font(PikkoTypography.body)
-                            .foregroundStyle(PikkoColor.secondaryText)
-                            .lineLimit(1)
-
-                        Text(order.totalPriceText)
-                            .font(PikkoTypography.bodyStrong)
-                            .foregroundStyle(PikkoColor.accentStrong)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    AuthorizedAsyncImage(
-                        path: order.storeImagePath,
-                        loader: imageLoader,
-                        cornerRadius: PikkoRadius.card
-                    )
-                    .frame(width: 78, height: 78)
-                    .clipped()
-                }
-
-                if let reviewRatingText = order.reviewRatingText {
-                    ratingPill(reviewRatingText)
-                } else if order.canWriteReview {
-                    Text("리뷰 작성")
-                        .font(PikkoTypography.bodyStrong)
+                    Text("\(order.orderCode)   \(order.createdAtText)")
+                        .font(PikkoTypography.caption)
                         .foregroundStyle(PikkoColor.secondaryText)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 40)
-                        .background(PikkoColor.gray100)
-                        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
-                } else {
-                    Text(order.statusTitle)
-                        .font(PikkoTypography.bodyStrong)
+                        .lineLimit(1)
+
+                    Text(order.primaryItemText)
+                        .font(PikkoTypography.body)
                         .foregroundStyle(PikkoColor.secondaryText)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 40)
-                        .background(PikkoColor.gray100)
-                        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                        .lineLimit(1)
+
+                    Text(order.totalPriceText)
+                        .font(PikkoTypography.bodyStrong)
+                        .foregroundStyle(PikkoColor.accentStrong)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onTap)
+
+                OrderStatusSelectorView(
+                    currentStatus: order.status,
+                    isUpdating: order.isStatusUpdating,
+                    isPaymentCompleted: order.isPaymentCompleted,
+                    allowedNextStatus: order.allowedNextStatus,
+                    disabledMessage: order.statusChangeMessage,
+                    onSelectStatus: onStatusSelect
+                )
             }
-            .contentShape(Rectangle())
+
+            if let reviewRatingText = order.reviewRatingText {
+                ratingPill(reviewRatingText)
+            } else if order.canWriteReview {
+                Text("리뷰 작성")
+                    .font(PikkoTypography.bodyStrong)
+                    .foregroundStyle(PikkoColor.secondaryText)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 40)
+                    .background(PikkoColor.gray100)
+                    .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+            }
         }
-        .buttonStyle(.plain)
     }
 
     private func timelineStepRow(_ step: OrderProgressStepViewState) -> some View {
@@ -523,6 +560,100 @@ private struct OrderRowView: View {
         }
         .buttonStyle(.plain)
         .disabled(order.isCancelling)
+    }
+}
+
+private struct OrderStatusSelectorView: View {
+    let currentStatus: OrderStatus
+    let isUpdating: Bool
+    let isPaymentCompleted: Bool
+    let allowedNextStatus: OrderStatus?
+    let disabledMessage: String?
+    let onSelectStatus: (OrderStatus) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+            if let disabledMessage {
+                Text(disabledMessage)
+                    .font(PikkoTypography.caption)
+                    .foregroundStyle(PikkoColor.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            ForEach(OrderStatus.selectableStatuses, id: \.apiValue) { status in
+                Button {
+                    guard isEnabled(status) else { return }
+                    onSelectStatus(status)
+                } label: {
+                    HStack(spacing: PikkoSpacing.xs) {
+                        statusIcon(for: status)
+
+                        Text(status.displayTitle)
+                            .font(status == currentStatus ? PikkoTypography.captionStrong : PikkoTypography.caption)
+                            .foregroundStyle(textColor(for: status))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.9)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!isEnabled(status))
+                .opacity(isEnabled(status) || status == currentStatus ? 1 : 0.42)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if isUpdating {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(PikkoColor.accentStrong)
+                    .padding(.top, 2)
+                    .padding(.trailing, 2)
+            }
+        }
+        .padding(PikkoSpacing.md)
+        .frame(minWidth: 136, alignment: .leading)
+        .background(PikkoColor.gray100.opacity(0.65))
+        .overlay {
+            RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                .stroke(PikkoColor.accent.opacity(0.16), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+        .opacity(isUpdating ? 0.72 : 1)
+    }
+
+    private func isEnabled(_ status: OrderStatus) -> Bool {
+        isPaymentCompleted
+            && !isUpdating
+            && status == allowedNextStatus
+            && status != currentStatus
+    }
+
+    @ViewBuilder
+    private func statusIcon(for status: OrderStatus) -> some View {
+        if status == currentStatus {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(PikkoColor.accent)
+        } else if status == allowedNextStatus, isPaymentCompleted {
+            Image(systemName: "arrow.right.circle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(PikkoColor.accentStrong)
+        } else {
+            Image(systemName: "circle")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(PikkoColor.gray300)
+        }
+    }
+
+    private func textColor(for status: OrderStatus) -> Color {
+        if status == currentStatus {
+            return PikkoColor.accentStrong
+        }
+        if status == allowedNextStatus, isPaymentCompleted {
+            return PikkoColor.primaryText
+        }
+        return PikkoColor.tertiaryText
     }
 }
 

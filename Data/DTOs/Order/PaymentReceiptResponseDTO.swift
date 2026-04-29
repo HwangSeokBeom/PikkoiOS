@@ -18,6 +18,10 @@ struct PaymentValidationRequestDTO: Encodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case impUID = "imp_uid"
     }
+
+    var maskedLogBody: String {
+        "{\"imp_uid\":\"<present:\(!impUID.isEmpty)>\"}"
+    }
 }
 
 struct PaymentResponseDTO: Decodable, Sendable {

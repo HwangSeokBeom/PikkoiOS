@@ -226,8 +226,27 @@ private struct StubOrderRepository: OrderRepository {
         throw NetworkError.notFound(message: "주문 정보를 찾을 수 없어요.")
     }
 
+    func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt {
+        PaymentReceipt(
+            impUID: "imp_test",
+            merchantUID: orderCode,
+            amount: 12_000,
+            currency: "KRW",
+            status: "paid",
+            methodText: "card",
+            paidAt: Date(),
+            receiptURL: nil
+        )
+    }
+
     func cancelOrder(orderCode: String) async throws -> OrderDetail {
         _ = orderCode
+        throw NetworkError.invalidRequest
+    }
+
+    func updateOrderStatus(orderCode: String, status: OrderStatus) async throws {
+        _ = orderCode
+        _ = status
         throw NetworkError.invalidRequest
     }
 

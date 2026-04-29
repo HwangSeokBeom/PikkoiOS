@@ -16,6 +16,7 @@ struct OrderViewState: Equatable {
     var emptyState: OrderEmptyState?
     var requiresAuthentication = false
     var cancellingOrderIDs: Set<String> = []
+    var statusUpdatingOrderCodes: Set<String> = []
 }
 
 struct OrderListItemViewState: Equatable, Identifiable {
@@ -23,6 +24,7 @@ struct OrderListItemViewState: Equatable, Identifiable {
     let orderCode: String
     let storeName: String
     let storeImagePath: String?
+    let status: OrderStatus
     let statusTitle: String
     let statusSteps: [OrderProgressStepViewState]
     let primaryItemText: String
@@ -35,6 +37,10 @@ struct OrderListItemViewState: Equatable, Identifiable {
     let isHighlighted: Bool
     let canCancel: Bool
     let isCancelling: Bool
+    let isStatusUpdating: Bool
+    let isPaymentCompleted: Bool
+    let allowedNextStatus: OrderStatus?
+    let statusChangeMessage: String?
     var isPastOrder = false
     var canWriteReview = false
 }

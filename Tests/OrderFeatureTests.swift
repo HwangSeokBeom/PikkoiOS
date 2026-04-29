@@ -151,6 +151,34 @@ final class OrderFeatureTests: XCTestCase {
         XCTAssertTrue(presenter.viewState.cancellingOrderIDs.isEmpty)
     }
 
+    func testStatusChangeEligibilityRequiresPaidOrderAndOnlyAllowsNextStep() async {
+        let paidPendingOrder = makeOrder(id: "order-1", status: .pending, paidAt: Date())
+        let unpaidPendingOrder = makeOrder(id: "order-2", status: .pending, paidAt: nil)
+        let presenter = OrderPresenter(
+            interactor: SpyOrderInteractor(
+                initialState: makeInitialState(),
+                fetchResults: [
+                    .success(CursorPage(items: [paidPendingOrder, unpaidPendingOrder], nextCursor: nil))
+                ]
+            ),
+            router: SpyOrderRouter()
+        )
+
+        await presenter.send(.onAppear)
+
+        let paidItem = presenter.viewState.orders.first { $0.id == paidPendingOrder.id }
+        XCTAssertEqual(paidItem?.allowedNextStatus, .accepted)
+        XCTAssertTrue(paidItem?.isPaymentCompleted == true)
+        XCTAssertNil(paidItem?.statusChangeMessage)
+        XCTAssertTrue(OrderStatus.pending.canTransition(to: .accepted))
+        XCTAssertFalse(OrderStatus.pending.canTransition(to: .completed))
+
+        let unpaidItem = presenter.viewState.orders.first { $0.id == unpaidPendingOrder.id }
+        XCTAssertNil(unpaidItem?.allowedNextStatus)
+        XCTAssertFalse(unpaidItem?.isPaymentCompleted ?? true)
+        XCTAssertEqual(unpaidItem?.statusChangeMessage, "결제 검증 완료 후 상태 변경이 가능합니다.")
+    }
+
     func testPendingOrderStaysInActiveFilterWhenCancelIsNotAvailable() async {
         let pendingOrder = makeOrder(id: "order-1", status: .pending)
         let presenter = OrderPresenter(
@@ -390,7 +418,8 @@ final class OrderFeatureTests: XCTestCase {
         id: String,
         storeName: String = "새싹 카페",
         status: OrderStatus = .preparing,
-        itemSummaries: [OrderItemSummary]? = nil
+        itemSummaries: [OrderItemSummary]? = nil,
+        paidAt: Date? = nil
     ) -> OrderSummary {
         OrderSummary(
             id: id,
@@ -400,6 +429,7 @@ final class OrderFeatureTests: XCTestCase {
             storeImagePath: nil,
             status: status,
             createdAt: Date(timeIntervalSince1970: 1_710_000_000),
+            paidAt: paidAt,
             totalAmount: 12_200,
             itemSummaries: itemSummaries ?? [
                 OrderItemSummary(
@@ -569,7 +599,18 @@ private final class StubOrderRemoteDataSource: OrderRemoteDataSourceProtocol, @u
 
     func fetchPaymentReceipt(orderCode: String) async throws -> PaymentResponseDTO {
         _ = orderCode
-        throw NetworkError.notFound(message: "영수증 없음")
+        let json = """
+        {
+          "imp_uid": "imp_test",
+          "merchant_uid": "\(orderCode)",
+          "amount": 12000,
+          "currency": "KRW",
+          "status": "paid",
+          "pay_method": "card",
+          "paidAt": "2024-03-09T16:00:00Z"
+        }
+        """.data(using: .utf8)!
+        return try NetworkCoding.makeJSONDecoder().decode(PaymentResponseDTO.self, from: json)
     }
 
     func validatePayment(_ request: PaymentValidationRequestDTO) async throws -> ReceiptOrderResponseDTO {
@@ -613,6 +654,7 @@ private struct SpyOrderInteractor: OrderInteracting {
     let initialState: OrderViewState
     let fetchResults: [Result<CursorPage<OrderSummary>, OrderFeatureError>]
     var cancelResults: [String: Result<OrderDetail, OrderFeatureError>] = [:]
+    var statusUpdateResults: [String: Result<Void, OrderFeatureError>] = [:]
 
     private let recorder = OrderFetchRecorder()
 
@@ -635,6 +677,19 @@ private struct SpyOrderInteractor: OrderInteracting {
         await recorder.requests
     }
 
+    func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt {
+        PaymentReceipt(
+            impUID: "imp_test",
+            merchantUID: orderCode,
+            amount: 12_000,
+            currency: "KRW",
+            status: "paid",
+            methodText: "card",
+            paidAt: Date(),
+            receiptURL: nil
+        )
+    }
+
     func cancelOrder(orderCode: String) async throws -> OrderDetail {
         guard let result = cancelResults[orderCode] else {
             throw OrderFeatureError.unavailable(message: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
@@ -643,6 +698,20 @@ private struct SpyOrderInteractor: OrderInteracting {
         switch result {
         case .success(let detail):
             return detail
+        case .failure(let error):
+            throw error
+        }
+    }
+
+    func updateOrderStatus(orderCode: String, status: OrderStatus) async throws {
+        _ = status
+        guard let result = statusUpdateResults[orderCode] else {
+            return
+        }
+
+        switch result {
+        case .success:
+            return
         case .failure(let error):
             throw error
         }

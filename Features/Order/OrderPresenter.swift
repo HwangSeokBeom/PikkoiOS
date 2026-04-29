@@ -50,6 +50,14 @@ final class OrderPresenter: ObservableObject {
         case .cancelConfirmed(let orderID):
             await cancelOrder(orderID: orderID)
 
+        case .statusSelected(let orderCode, let currentStatus, let nextStatus):
+            Logger.shared.debug(
+                "[OrderStatus] select orderCode=\(orderCode) current=\(currentStatus.displayTitle) next=\(nextStatus.displayTitle)"
+            )
+
+        case .statusChangeConfirmed(let orderCode, let nextStatus):
+            await updateOrderStatus(orderCode: orderCode, nextStatus: nextStatus)
+
         case .orderAppeared(let orderID):
             guard orderID == viewState.orders.last?.id,
                   viewState.canLoadMore,
@@ -188,12 +196,14 @@ final class OrderPresenter: ObservableObject {
         let primaryItemText = additionalCount > 0 ? "\(primaryMenuName) 외 \(additionalCount)개" : primaryMenuName
         let createdAtText = dateParser.string(from: order.createdAt, format: "M월 d일 a h:mm")
         let pickupTimeText = order.pickupTime.map { "픽업 예상 \($0.formatted(date: .omitted, time: .shortened))" }
+        let allowedNextStatus = order.isPaymentCompleted ? order.status.allowedNextStatus : nil
 
         return OrderListItemViewState(
             id: order.id,
             orderCode: order.orderCode,
             storeName: order.storeName,
             storeImagePath: order.storeImagePath,
+            status: order.status,
             statusTitle: order.status.displayTitle,
             statusSteps: makeProgressSteps(for: order.status),
             primaryItemText: primaryItemText,
@@ -209,6 +219,10 @@ final class OrderPresenter: ObservableObject {
             isHighlighted: order.id == viewState.highlightedOrderID,
             canCancel: order.canCancel,
             isCancelling: viewState.cancellingOrderIDs.contains(order.id),
+            isStatusUpdating: viewState.statusUpdatingOrderCodes.contains(order.orderCode),
+            isPaymentCompleted: order.isPaymentCompleted,
+            allowedNextStatus: allowedNextStatus,
+            statusChangeMessage: order.isPaymentCompleted ? nil : "결제 검증 완료 후 상태 변경이 가능합니다.",
             isPastOrder: order.status.isTerminal,
             canWriteReview: order.status == .completed && order.reviewID == nil
         )
@@ -282,6 +296,59 @@ final class OrderPresenter: ObservableObject {
         applyOrders(resetErrorMessage: false)
     }
 
+    private func updateOrderStatus(orderCode: String, nextStatus: OrderStatus) async {
+        guard let order = allOrders.first(where: { $0.orderCode == orderCode }),
+              order.status != nextStatus,
+              !viewState.statusUpdatingOrderCodes.contains(orderCode) else { return }
+
+        let allowedNextStatus = order.status.allowedNextStatus
+        Logger.shared.debug(
+            "[OrderStatus] eligibility orderCode=\(orderCode) isPaymentCompleted=\(order.isPaymentCompleted) currentStatus=\(order.status.apiValue) allowedNextStatus=\(allowedNextStatus?.apiValue ?? "nil")"
+        )
+        guard order.isPaymentCompleted else {
+            viewState.errorMessage = "결제 검증 완료 후 상태 변경이 가능합니다."
+            return
+        }
+        guard order.status.canTransition(to: nextStatus) else {
+            viewState.errorMessage = "현재 주문 상태에서 다음 단계만 변경할 수 있어요."
+            return
+        }
+
+        Logger.shared.debug(
+            "[OrderStatus] confirm orderCode=\(orderCode) next=\(nextStatus.displayTitle)"
+        )
+        viewState.statusUpdatingOrderCodes.insert(orderCode)
+        viewState.errorMessage = nil
+        viewState.successMessage = nil
+        applyOrders(resetErrorMessage: false)
+
+        do {
+            let receipt = try await interactor.fetchPaymentReceipt(orderCode: orderCode)
+            Logger.shared.debug(
+                "[OrderStatus] eligibility orderCode=\(orderCode) isPaymentCompleted=\(receipt.isPaymentCompleted) currentStatus=\(order.status.apiValue) allowedNextStatus=\(allowedNextStatus?.apiValue ?? "nil")"
+            )
+            guard receipt.isPaymentCompleted else {
+                throw OrderFeatureError.unavailable(message: "결제 검증 완료 후 상태 변경이 가능합니다.")
+            }
+            try await interactor.updateOrderStatus(orderCode: orderCode, status: nextStatus)
+            _ = await loadOrders(mode: .refresh)
+            viewState.successMessage = "주문 상태가 변경되었습니다."
+            Logger.shared.debug(
+                "[OrderStatus] success orderCode=\(orderCode) next=\(nextStatus.displayTitle)"
+            )
+        } catch {
+            let featureError = (error as? OrderFeatureError)
+                ?? .unavailable(message: "주문 상태 변경에 실패했어요. 다시 시도해 주세요.")
+            viewState.errorMessage = featureError.userMessage
+            Logger.shared.error(
+                "[OrderStatus] failed orderCode=\(orderCode) next=\(nextStatus.displayTitle) error=\(error.localizedDescription)"
+            )
+        }
+
+        viewState.statusUpdatingOrderCodes.remove(orderCode)
+        applyOrders(resetErrorMessage: false)
+    }
+
     private func upsert(detail: OrderDetail) {
         let summary = makeSummary(from: detail)
         if let index = allOrders.firstIndex(where: { $0.id == detail.orderID || $0.orderCode == detail.orderCode }) {
@@ -300,6 +367,7 @@ final class OrderPresenter: ObservableObject {
             storeImagePath: detail.storeImagePath,
             status: detail.status,
             createdAt: detail.createdAt,
+            paidAt: detail.paidAt,
             totalAmount: detail.totalAmount,
             itemSummaries: detail.items,
             pickupTime: detail.pickupTime,
@@ -376,6 +444,7 @@ final class OrderPresenter: ObservableObject {
             storeImagePath: existing.storeImagePath,
             status: event.status,
             createdAt: existing.createdAt,
+            paidAt: existing.paidAt,
             totalAmount: existing.totalAmount,
             itemSummaries: existing.itemSummaries,
             pickupTime: existing.pickupTime,
@@ -384,6 +453,29 @@ final class OrderPresenter: ObservableObject {
         )
         viewState.cancellingOrderIDs.remove(existing.id)
         applyOrders(resetErrorMessage: false)
+    }
+
+    private func applyStatus(orderCode: String, status: OrderStatus) {
+        guard let index = allOrders.firstIndex(where: { $0.orderCode == orderCode }) else {
+            return
+        }
+
+        let existing = allOrders[index]
+        allOrders[index] = OrderSummary(
+            id: existing.id,
+            orderCode: existing.orderCode,
+            storeID: existing.storeID,
+            storeName: existing.storeName,
+            storeImagePath: existing.storeImagePath,
+            status: status,
+            createdAt: existing.createdAt,
+            paidAt: existing.paidAt,
+            totalAmount: existing.totalAmount,
+            itemSummaries: existing.itemSummaries,
+            pickupTime: existing.pickupTime,
+            reviewID: existing.reviewID,
+            reviewRating: existing.reviewRating
+        )
     }
 
     private func makeEmptyState() -> OrderEmptyState {

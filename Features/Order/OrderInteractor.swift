@@ -4,7 +4,9 @@ import Foundation
 protocol OrderInteracting {
     func loadInitialState() async -> OrderViewState
     func fetchOrders(cursor: String?, filter: OrderListFilter) async throws -> CursorPage<OrderSummary>
+    func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt
     func cancelOrder(orderCode: String) async throws -> OrderDetail
+    func updateOrderStatus(orderCode: String, status: OrderStatus) async throws
 }
 
 @MainActor
@@ -48,11 +50,27 @@ struct OrderInteractor: OrderInteracting {
         }
     }
 
+    func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt {
+        do {
+            return try await orderRepository.fetchPaymentReceipt(orderCode: orderCode)
+        } catch {
+            throw map(error: error, fallbackMessage: "결제 영수증을 확인하지 못했어요.")
+        }
+    }
+
     func cancelOrder(orderCode: String) async throws -> OrderDetail {
         do {
             return try await orderRepository.cancelOrder(orderCode: orderCode)
         } catch {
             throw map(error: error, fallbackMessage: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
+        }
+    }
+
+    func updateOrderStatus(orderCode: String, status: OrderStatus) async throws {
+        do {
+            try await orderRepository.updateOrderStatus(orderCode: orderCode, status: status)
+        } catch {
+            throw map(error: error, fallbackMessage: "주문 상태 변경에 실패했어요. 다시 시도해 주세요.")
         }
     }
 

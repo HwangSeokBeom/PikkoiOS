@@ -40,6 +40,13 @@ struct OrderMapper: Sendable {
         let paidAt = paymentReceipt?.paidAt.flatMap(dateParser.parseISO8601)
             ?? dto.paidAt.flatMap(dateParser.parseISO8601)
         let items = dto.orderMenuList.map(mapOrderItemSummary)
+        logOrderMapping(
+            orderCode: dto.orderCode,
+            orderStatus: dto.currentOrderStatus,
+            paymentStatus: paymentReceipt?.status,
+            paidAt: paidAt,
+            receiptURL: paymentReceipt?.receiptURL
+        )
 
         return OrderDetail(
             orderID: dto.orderID,
@@ -75,6 +82,19 @@ struct OrderMapper: Sendable {
         )
     }
 
+    func mapPaymentReceipt(_ dto: PaymentResponseDTO) -> PaymentReceipt {
+        PaymentReceipt(
+            impUID: dto.impUID,
+            merchantUID: dto.merchantUID,
+            amount: dto.amount,
+            currency: dto.currency,
+            status: dto.status,
+            methodText: dto.payMethod,
+            paidAt: dto.paidAt.flatMap(dateParser.parseISO8601),
+            receiptURL: dto.receiptURL.flatMap(URL.init(string:))
+        )
+    }
+
     func statusTitle(for status: OrderStatus) -> String {
         status.displayTitle
     }
@@ -88,7 +108,16 @@ struct OrderMapper: Sendable {
     }
 
     private func mapOrderSummary(_ dto: OrderWithStatusResponseDTO) -> OrderSummary {
-        OrderSummary(
+        let paidAt = dto.paidAt.flatMap(dateParser.parseISO8601)
+        logOrderMapping(
+            orderCode: dto.orderCode,
+            orderStatus: dto.currentOrderStatus,
+            paymentStatus: nil,
+            paidAt: paidAt,
+            receiptURL: nil
+        )
+
+        return OrderSummary(
             id: dto.orderID,
             orderCode: dto.orderCode,
             storeID: dto.store.id,
@@ -96,6 +125,7 @@ struct OrderMapper: Sendable {
             storeImagePath: dto.store.storeImageURLs.first.map(resolveAuthorizedPath),
             status: OrderStatus(serverValue: dto.currentOrderStatus),
             createdAt: dateParser.parseISO8601(dto.createdAt) ?? .distantPast,
+            paidAt: paidAt,
             totalAmount: dto.totalPrice,
             itemSummaries: dto.orderMenuList.map(mapOrderItemSummary),
             pickupTime: dto.orderStatusTimeline.first(where: { OrderStatus(serverValue: $0.status) == .ready })?.changedAt.flatMap(dateParser.parseISO8601),
@@ -136,6 +166,18 @@ struct OrderMapper: Sendable {
             methodText: dto?.payMethod,
             paidAt: dto?.paidAt.flatMap(dateParser.parseISO8601) ?? fallbackPaidAt,
             receiptURL: dto?.receiptURL.flatMap(URL.init(string:))
+        )
+    }
+
+    private func logOrderMapping(
+        orderCode: String,
+        orderStatus: String,
+        paymentStatus: String?,
+        paidAt: Date?,
+        receiptURL: String?
+    ) {
+        Logger.shared.debug(
+            "[OrderMapping] orderCode=\(orderCode) orderStatus=\(orderStatus) paymentStatus=\(paymentStatus ?? "nil") paidAtExists=\(paidAt != nil) receiptExists=\(receiptURL != nil)"
         )
     }
 

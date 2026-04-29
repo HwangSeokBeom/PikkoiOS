@@ -66,11 +66,28 @@ struct OrderRepositoryImpl: OrderRepository {
         return mapper.mapOrderDetail(matchedOrder, paymentReceipt: paymentReceipt)
     }
 
+    func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt {
+        let response = try await remoteDataSource.fetchPaymentReceipt(orderCode: orderCode)
+        return mapper.mapPaymentReceipt(response)
+    }
+
     func cancelOrder(orderCode: String) async throws -> OrderDetail {
         _ = orderCode
         throw NetworkError.businessAuthorization(
             message: "결제 완료 주문 취소는 환불 처리가 필요합니다. 현재 앱에서는 지원 준비 중입니다."
         )
+    }
+
+    func updateOrderStatus(orderCode: String, status: OrderStatus) async throws {
+        let paymentReceipt = try await fetchPaymentReceipt(orderCode: orderCode)
+        Logger.shared.debug(
+            "[OrderStatus] eligibility orderCode=\(orderCode) isPaymentCompleted=\(paymentReceipt.isPaymentCompleted) currentStatus=unknown allowedNextStatus=unknown"
+        )
+        guard paymentReceipt.isPaymentCompleted else {
+            throw NetworkError.abnormalRequest(message: "결제 검증 완료 후 상태 변경이 가능합니다.")
+        }
+
+        try await remoteDataSource.updateOrderStatus(orderCode: orderCode, nextStatus: status.apiValue)
     }
 
     private func postStatusChange(for detail: OrderDetail) {
@@ -232,6 +249,7 @@ actor OrderLocalSnapshotStore {
                 storeImagePath: $0.storeImagePath,
                 status: $0.status,
                 createdAt: $0.createdAt,
+                paidAt: $0.paidAt,
                 totalAmount: $0.totalAmount,
                 itemSummaries: $0.items,
                 pickupTime: $0.pickupTime,
@@ -248,17 +266,21 @@ actor OrderLocalSnapshotStore {
     }
 
     func markCancelled(orderCode: String, updatedAt: Date) {
+        markStatus(orderCode: orderCode, status: .cancelled, updatedAt: updatedAt)
+    }
+
+    func markStatus(orderCode: String, status: OrderStatus, updatedAt: Date) {
         guard let index = storedDetails.firstIndex(where: { $0.orderCode == orderCode }) else {
             return
         }
 
         let existing = storedDetails[index]
         var timeline = existing.timeline
-        if !timeline.contains(where: { $0.status == .cancelled }) {
+        if !timeline.contains(where: { $0.status == status }) {
             timeline.append(
                 OrderStatusTimelineEntry(
-                    id: "CANCELLED-\(orderCode)",
-                    status: .cancelled,
+                    id: "\(status.apiValue)-\(orderCode)",
+                    status: status,
                     completed: true,
                     changedAt: updatedAt
                 )
@@ -273,7 +295,7 @@ actor OrderLocalSnapshotStore {
             storeCategory: existing.storeCategory,
             storeCloseTime: existing.storeCloseTime,
             storeImagePath: existing.storeImagePath,
-            status: .cancelled,
+            status: status,
             createdAt: existing.createdAt,
             updatedAt: updatedAt,
             paidAt: existing.paidAt,
@@ -448,25 +470,6 @@ private struct StoredOrderPaymentSnapshot: Codable {
 
 private extension OrderStatus {
     var serverStorageValue: String {
-        switch self {
-        case .pending:
-            return "PENDING_APPROVAL"
-        case .accepted:
-            return "APPROVED"
-        case .preparing:
-            return "IN_PROGRESS"
-        case .ready:
-            return "READY_FOR_PICKUP"
-        case .completed:
-            return "PICKED_UP"
-        case .cancelled:
-            return "CANCELLED"
-        case .rejected:
-            return "REJECTED"
-        case .failed:
-            return "FAILED"
-        case .unknown(let value):
-            return value
-        }
+        apiValue
     }
 }
