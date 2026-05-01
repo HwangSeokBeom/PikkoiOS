@@ -66,12 +66,13 @@ struct OrderView: View {
                     .padding(.top, PikkoSpacing.xl)
                     .padding(.bottom, PikkoSpacing.xl + RootTabBarMetrics.scrollContentBottomInset)
                 }
+                .contentMargins(.bottom, RootTabBarMetrics.scrollContentBottomInset, for: .scrollIndicators)
                 .refreshable {
                     await presenter.send(.refreshRequested)
                 }
             }
         }
-        .alert("주문 취소 안내", isPresented: cancelConfirmationBinding) {
+        .alert("주문을 취소할까요?", isPresented: cancelConfirmationBinding) {
             Button("아니요", role: .cancel) {
                 cancelCandidate = nil
             }
@@ -81,14 +82,15 @@ struct OrderView: View {
                 Task { await presenter.send(.cancelConfirmed(orderID)) }
             }
         } message: {
-            Text("주문을 취소 상태로 변경합니다. 취소 후에는 조리 진행을 다시 시작할 수 없습니다.")
+            Text("취소 후에는 주문현황에서 제외돼요.")
         }
-        .alert("주문 상태를 변경할까요?", isPresented: statusChangeConfirmationBinding) {
+        .alert("주문 상태 변경", isPresented: statusChangeConfirmationBinding) {
             Button("취소", role: .cancel) {
                 statusChangeCandidate = nil
             }
             Button("변경하기") {
-                guard let candidate = statusChangeCandidate else { return }
+                guard let candidate = statusChangeCandidate,
+                      !isStatusChangeCandidateUpdating else { return }
                 statusChangeCandidate = nil
                 Task {
                     await presenter.send(
@@ -100,9 +102,10 @@ struct OrderView: View {
                     )
                 }
             }
+            .disabled(isStatusChangeCandidateUpdating)
         } message: {
             if let candidate = statusChangeCandidate {
-                Text("주문번호 \(candidate.orderCode)의 상태를 '\(candidate.nextStatus.displayTitle)'으로 변경합니다.")
+                Text("이 주문을 '\(candidate.nextStatus.displayTitle)'으로 변경할까요?")
             }
         }
         .onChange(of: presenter.viewState.orders) { _, orders in
@@ -156,15 +159,6 @@ struct OrderView: View {
                         },
                         onStatusSelect: { nextStatus in
                             guard let candidate = makeStatusChangeCandidate(order: order, nextStatus: nextStatus) else {
-                                Task {
-                                    await presenter.send(
-                                        .statusSelected(
-                                            orderCode: order.orderCode,
-                                            currentStatus: order.status,
-                                            nextStatus: nextStatus
-                                        )
-                                    )
-                                }
                                 return
                             }
                             Task {
@@ -177,17 +171,6 @@ struct OrderView: View {
                                 )
                             }
                             statusChangeCandidate = candidate
-                        },
-                        onDisabledStatusSelect: { nextStatus in
-                            Task {
-                                await presenter.send(
-                                    .statusSelected(
-                                        orderCode: order.orderCode,
-                                        currentStatus: order.status,
-                                        nextStatus: nextStatus
-                                    )
-                                )
-                            }
                         },
                         onRefreshPaymentReceipt: {
                             Task {
@@ -244,6 +227,13 @@ struct OrderView: View {
         )
     }
 
+    private var isStatusChangeCandidateUpdating: Bool {
+        guard let candidate = statusChangeCandidate else {
+            return false
+        }
+        return presenter.viewState.orders.first { $0.orderCode == candidate.orderCode }?.isStatusUpdating == true
+    }
+
     private func makeStatusChangeCandidate(
         order: OrderListItemViewState,
         nextStatus: OrderStatus
@@ -298,7 +288,6 @@ private struct OrderRowView: View {
     let onTap: () -> Void
     let onCancelTap: () -> Void
     let onStatusSelect: (OrderStatus) -> Void
-    let onDisabledStatusSelect: (OrderStatus) -> Void
     let onRefreshPaymentReceipt: () -> Void
 
     var body: some View {
@@ -335,14 +324,14 @@ private struct OrderRowView: View {
 
                 OrderStatusSelectorView(
                     currentStatus: order.status,
+                    currentStatusTitle: order.currentStatusTitle,
                     isUpdating: order.isStatusUpdating,
                     paymentVerificationState: order.paymentVerificationState,
                     allowedNextStatus: order.allowedNextStatus,
                     disabledMessage: order.statusChangeMessage,
                     canRefreshPaymentReceipt: order.canRefreshPaymentReceipt,
                     onRefreshPaymentReceipt: onRefreshPaymentReceipt,
-                    onSelectStatus: onStatusSelect,
-                    onDisabledStatusSelect: onDisabledStatusSelect
+                    onSelectStatus: onStatusSelect
                 )
             }
             .padding(.horizontal, Layout.cardHorizontalPadding)
@@ -355,6 +344,10 @@ private struct OrderRowView: View {
 
             if order.canCancel {
                 cancelButton
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else if let cancelDisabledReasonText = order.cancelDisabledReasonText {
+                cancelUnavailableMessage
+                    .accessibilityLabel(cancelDisabledReasonText)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
@@ -454,14 +447,14 @@ private struct OrderRowView: View {
 
                 OrderStatusSelectorView(
                     currentStatus: order.status,
+                    currentStatusTitle: order.currentStatusTitle,
                     isUpdating: order.isStatusUpdating,
                     paymentVerificationState: order.paymentVerificationState,
                     allowedNextStatus: order.allowedNextStatus,
                     disabledMessage: order.statusChangeMessage,
                     canRefreshPaymentReceipt: order.canRefreshPaymentReceipt,
                     onRefreshPaymentReceipt: onRefreshPaymentReceipt,
-                    onSelectStatus: onStatusSelect,
-                    onDisabledStatusSelect: onDisabledStatusSelect
+                    onSelectStatus: onStatusSelect
                 )
             }
 
@@ -482,6 +475,8 @@ private struct OrderRowView: View {
                     .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
                 }
                 .buttonStyle(.plain)
+            } else if let reviewDisabledReasonText = order.reviewDisabledReasonText {
+                reviewUnavailableMessage(reviewDisabledReasonText)
             }
         }
     }
@@ -641,12 +636,28 @@ private struct OrderRowView: View {
             .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         }
         .buttonStyle(.plain)
-        .disabled(order.isCancelling)
+        .disabled(!order.isCancelEnabled || order.isCancelling)
+    }
+
+    private var cancelUnavailableMessage: some View {
+        Text(order.cancelDisabledReasonText ?? "현재 주문은 앱에서 취소할 수 없어요.")
+            .font(PikkoTypography.caption)
+            .foregroundStyle(PikkoColor.secondaryText)
+            .padding(.vertical, PikkoSpacing.xs)
+    }
+
+    private func reviewUnavailableMessage(_ message: String) -> some View {
+        Text(message)
+            .font(PikkoTypography.caption)
+            .foregroundStyle(PikkoColor.secondaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, PikkoSpacing.xs)
     }
 }
 
 private struct OrderStatusSelectorView: View {
     let currentStatus: OrderStatus
+    let currentStatusTitle: String
     let isUpdating: Bool
     let paymentVerificationState: PaymentVerificationState
     let allowedNextStatus: OrderStatus?
@@ -654,10 +665,40 @@ private struct OrderStatusSelectorView: View {
     let canRefreshPaymentReceipt: Bool
     let onRefreshPaymentReceipt: () -> Void
     let onSelectStatus: (OrderStatus) -> Void
-    let onDisabledStatusSelect: (OrderStatus) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+            currentStatusRow
+
+            if let allowedNextStatus {
+                Button {
+                    guard !isUpdating else { return }
+                    onSelectStatus(allowedNextStatus)
+                } label: {
+                    HStack(spacing: PikkoSpacing.xs) {
+                        if isUpdating {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(PikkoColor.accentStrong)
+                        } else {
+                            Image(systemName: "arrow.right.circle.fill")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(PikkoColor.accentStrong)
+                        }
+
+                        Text(actionTitle(for: allowedNextStatus))
+                            .font(PikkoTypography.captionStrong)
+                            .foregroundStyle(PikkoColor.primaryText)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.86)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isUpdating)
+            }
+
             if let disabledMessage {
                 VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
                     Text(disabledMessage)
@@ -685,31 +726,6 @@ private struct OrderStatusSelectorView: View {
                     }
                 }
             }
-
-            ForEach(OrderStatus.selectableStatuses, id: \.apiValue) { status in
-                Button {
-                    guard !isUpdating else { return }
-                    if isEnabled(status) {
-                        onSelectStatus(status)
-                    } else {
-                        onDisabledStatusSelect(status)
-                    }
-                } label: {
-                    HStack(spacing: PikkoSpacing.xs) {
-                        statusIcon(for: status)
-
-                        Text(status.displayTitle)
-                            .font(status == currentStatus ? PikkoTypography.captionStrong : PikkoTypography.caption)
-                            .foregroundStyle(textColor(for: status))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.9)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .opacity(isEnabled(status) || status == currentStatus ? 1 : 0.42)
-            }
         }
         .overlay(alignment: .topTrailing) {
             if isUpdating {
@@ -731,37 +747,42 @@ private struct OrderStatusSelectorView: View {
         .opacity(isUpdating ? 0.72 : 1)
     }
 
-    private func isEnabled(_ status: OrderStatus) -> Bool {
-        !isUpdating
-            && status == allowedNextStatus
-            && status != currentStatus
-    }
-
-    @ViewBuilder
-    private func statusIcon(for status: OrderStatus) -> some View {
-        if status == currentStatus {
+    private var currentStatusRow: some View {
+        HStack(spacing: PikkoSpacing.xs) {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(PikkoColor.accent)
-        } else if status == allowedNextStatus {
-            Image(systemName: "arrow.right.circle.fill")
-                .font(.system(size: 13, weight: .semibold))
+
+            Text(currentStatusTitle)
+                .font(PikkoTypography.captionStrong)
                 .foregroundStyle(PikkoColor.accentStrong)
-        } else {
-            Image(systemName: "circle")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(PikkoColor.gray300)
+                .lineLimit(1)
+                .minimumScaleFactor(0.9)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func textColor(for status: OrderStatus) -> Color {
-        if status == currentStatus {
-            return PikkoColor.accentStrong
+    private func actionTitle(for status: OrderStatus) -> String {
+        switch status {
+        case .accepted:
+            return "주문승인으로 변경"
+        case .preparing:
+            return "조리 중으로 변경"
+        case .ready:
+            return "픽업대기로 변경"
+        case .completed:
+            return "픽업완료로 변경"
+        case .pending:
+            return "승인대기로 변경"
+        case .cancelled:
+            return "주문취소로 변경"
+        case .rejected:
+            return "주문거절로 변경"
+        case .failed:
+            return "주문실패로 변경"
+        case .unknown:
+            return "확인중으로 변경"
         }
-        if status == allowedNextStatus {
-            return PikkoColor.primaryText
-        }
-        return PikkoColor.tertiaryText
     }
 
     private var messageColor: Color {

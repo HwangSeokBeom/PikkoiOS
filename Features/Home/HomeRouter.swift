@@ -6,6 +6,7 @@ protocol HomeRouting: AnyObject {
     func routeToLocationPicker()
     func routeToLocationPermissionSettings()
     func routeToLocationSearch()
+    func routeToNotificationList()
     func routeToSearch(query: String)
     func routeToBanner(_ banner: HomeBannerItem)
     func routeToStoreDetail(storeID: String)
@@ -17,6 +18,7 @@ enum HomeRouteDestination: Equatable {
     case search(String)
     case bannerWeb(HomeBannerItem)
     case locationSearch
+    case notificationList
 }
 
 @MainActor
@@ -40,6 +42,11 @@ final class HomeRouter: ObservableObject, HomeRouting {
 
     func routeToLocationSearch() {
         pendingDestination = .locationSearch
+    }
+
+    func routeToNotificationList() {
+        Logger(category: "NotificationBell").debugVerbose("[NotificationBell] tapped")
+        pendingDestination = .notificationList
     }
 
     func routeToSearch(query: String) {

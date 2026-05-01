@@ -138,9 +138,20 @@ struct StoreDetailInteractor: StoreDetailInteracting {
         let storeOrders = orders.filter { $0.storeID == storeID }
         for order in storeOrders {
             let alreadyReviewed = order.reviewID != nil
+            let paymentState = order.paymentVerificationState ?? (order.isPaymentCompleted ? "verified" : "unchecked")
             let isWritable = order.status == .completed && !alreadyReviewed
+            let reason: String
+            if order.storeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                reason = "missingStoreId"
+            } else if order.status != .completed {
+                reason = "notPickedUp"
+            } else if alreadyReviewed {
+                reason = "alreadyReviewed"
+            } else {
+                reason = "pickedUpAndNotReviewed"
+            }
             Logger.shared.debug(
-                "[ReviewEligibility] orderCode=\(order.orderCode) storeId=\(order.storeID) status=\(order.status.apiValue) alreadyReviewed=\(alreadyReviewed) isWritable=\(isWritable)"
+                "[ReviewEligibility] orderCode=\(order.orderCode) storeId=\(order.storeID.isEmpty ? "nil" : order.storeID) status=\(order.status.apiValue) paymentState=\(paymentState) alreadyReviewed=\(alreadyReviewed) matchedReviewId=\(order.reviewID ?? "nil") isWritable=\(isWritable) reason=\(reason)"
             )
             if isWritable {
                 return StoreReviewEligibility(orderCode: order.orderCode, disabledReasonText: nil)

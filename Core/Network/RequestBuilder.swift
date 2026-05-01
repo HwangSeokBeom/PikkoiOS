@@ -83,13 +83,31 @@ struct RequestBuilder: Sendable {
         endpoint: Endpoint<ResponseDTO>
     ) {
 #if DEBUG
+        if isVideoStreamEndpoint(endpoint) {
+            Logger.shared.debug(
+                "[VideoAPI] request stream videoID=\(videoID(fromStreamEndpointPath: endpoint.path)) hasAuthorization=\(request.value(forHTTPHeaderField: "Authorization")?.isEmpty == false) hasSesacKey=\(request.value(forHTTPHeaderField: "SesacKey")?.isEmpty == false)"
+            )
+        }
+
         guard endpoint.authorizationPolicy.requiresAuthenticatedSession else { return }
 
         let authorization = request.value(forHTTPHeaderField: "Authorization")
         let sesacKey = request.value(forHTTPHeaderField: "SesacKey")
-        Logger.shared.debug(
+        Logger.shared.debugVerbose(
             "[Network] request method=\(endpoint.method.rawValue) url=\(request.url?.absoluteString ?? endpoint.path) hasAuthorization=\(authorization?.isEmpty == false) hasSesacKey=\(sesacKey?.isEmpty == false) accessTokenMasked=\(SensitiveLogRedactor.summary(for: authorization))"
         )
 #endif
+    }
+
+    private func isVideoStreamEndpoint<ResponseDTO: Decodable & Sendable>(_ endpoint: Endpoint<ResponseDTO>) -> Bool {
+        endpoint.method == .get
+            && endpoint.path.hasPrefix("/v1/videos/")
+            && endpoint.path.hasSuffix("/stream")
+    }
+
+    private func videoID(fromStreamEndpointPath path: String) -> String {
+        path
+            .replacingOccurrences(of: "/v1/videos/", with: "")
+            .replacingOccurrences(of: "/stream", with: "")
     }
 }

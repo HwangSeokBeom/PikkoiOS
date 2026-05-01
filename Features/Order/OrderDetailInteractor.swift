@@ -5,6 +5,7 @@ protocol OrderDetailInteracting {
     func loadInitialState() async -> OrderDetailViewState
     func fetchOrderDetail() async throws -> OrderDetail
     func cancelOrder(orderCode: String) async throws -> OrderDetail
+    func cancelPendingOrderLocally(orderCode: String) async throws -> OrderDetail
 }
 
 @MainActor
@@ -12,15 +13,18 @@ struct OrderDetailInteractor: OrderDetailInteracting {
     private let orderID: String
     private let orderRepository: OrderRepository
     private let sessionStore: SessionStore
+    private let localCancellationStore: LocalOrderCancellationStore
 
     init(
         orderID: String,
         orderRepository: OrderRepository,
-        sessionStore: SessionStore
+        sessionStore: SessionStore,
+        localCancellationStore: LocalOrderCancellationStore = .shared
     ) {
         self.orderID = orderID
         self.orderRepository = orderRepository
         self.sessionStore = sessionStore
+        self.localCancellationStore = localCancellationStore
     }
 
     func loadInitialState() async -> OrderDetailViewState {
@@ -40,7 +44,11 @@ struct OrderDetailInteractor: OrderDetailInteracting {
 
     func fetchOrderDetail() async throws -> OrderDetail {
         do {
-            return try await orderRepository.fetchOrderDetail(orderID: orderID)
+            let detail = try await orderRepository.fetchOrderDetail(orderID: orderID)
+            guard let userID = sessionStore.currentUserID else {
+                return detail
+            }
+            return await localCancellationStore.apply(to: detail, userID: userID)
         } catch {
             throw map(error: error)
         }
@@ -51,6 +59,50 @@ struct OrderDetailInteractor: OrderDetailInteracting {
             return try await orderRepository.cancelOrder(orderCode: orderCode)
         } catch {
             throw map(error: error, fallbackMessage: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
+        }
+    }
+
+    func cancelPendingOrderLocally(orderCode: String) async throws -> OrderDetail {
+        guard let userID = sessionStore.currentUserID else {
+            throw OrderFeatureError.authenticationRequired
+        }
+
+        let page = try await orderRepository.fetchOrders(cursor: nil, filter: nil)
+        if let order = page.items.first(where: { $0.orderCode == orderCode || $0.id == orderID }) {
+            guard order.status == .pending else {
+                throw OrderFeatureError.unavailable(message: "매장 승인 후에는 앱에서 취소할 수 없어요.")
+            }
+            guard !hasPaymentIdentifier(order), !order.isPaymentCompleted else {
+                throw OrderFeatureError.unavailable(message: "결제 취소 API가 필요해요. 매장에 문의해 주세요.")
+            }
+            await localCancellationStore.save(order: order, userID: userID)
+            let detail = try await orderRepository.fetchOrderDetail(orderID: order.id)
+            return await localCancellationStore.apply(to: detail, userID: userID)
+        }
+
+        let detail = try await orderRepository.fetchOrderDetail(orderID: orderID)
+        guard detail.status == .pending else {
+            throw OrderFeatureError.unavailable(message: "매장 승인 후에는 앱에서 취소할 수 없어요.")
+        }
+        guard detail.paidAt == nil,
+              detail.paymentSummary?.paidAt == nil,
+              detail.paymentSummary?.receiptURL == nil,
+              detail.paymentSummary?.statusText?.lowercased() != "paid" else {
+            throw OrderFeatureError.unavailable(message: "결제 취소 API가 필요해요. 매장에 문의해 주세요.")
+        }
+
+        await localCancellationStore.save(detail: detail, userID: userID)
+        return await localCancellationStore.apply(to: detail, userID: userID)
+    }
+
+    private func hasPaymentIdentifier(_ order: OrderSummary) -> Bool {
+        [
+            order.paymentLookupKey,
+            order.paymentID,
+            order.merchantUID,
+            order.impUID
+        ].contains { value in
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         }
     }
 

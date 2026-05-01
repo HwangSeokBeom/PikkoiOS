@@ -28,6 +28,7 @@ struct FeatureBuilderFactory {
         HomeBuilder(
             storeRepository: container.storeRepository,
             bannerRepository: container.bannerRepository,
+            notificationService: container.appNotificationService,
             locationService: container.locationService,
             reverseGeocoder: container.reverseGeocoder,
             sessionStore: appState.sessionStore,
@@ -41,8 +42,22 @@ struct FeatureBuilderFactory {
             makeBannerWebView: { banner in
                 AnyView(makeBannerWebView(banner: banner))
             },
+            makeNotificationListView: {
+                AnyView(makeNotificationListView())
+            },
             makeAuthView: {
                 AnyView(makeAuthView(context: .protectedResource))
+            }
+        ).build(resetTrigger: resetTrigger)
+    }
+
+    func makeVideoListView(resetTrigger: Int = 0) -> VideoListRootView {
+        VideoListBuilder(
+            videoRepository: container.videoRepository,
+            sessionStore: appState.sessionStore,
+            imageLoader: container.authorizedImageLoader,
+            makeVideoPlayerView: { video, onVideoUpdated in
+                AnyView(makeVideoPlayerView(video: video, onVideoUpdated: onVideoUpdated))
             }
         ).build(resetTrigger: resetTrigger)
     }
@@ -115,6 +130,8 @@ struct FeatureBuilderFactory {
             initialOrderID: orderID ?? appState.pendingHighlightedOrderID,
             orderRepository: container.orderRepository,
             sessionStore: appState.sessionStore,
+            notificationService: container.appNotificationService,
+            orderStatusSnapshotStore: container.orderStatusSnapshotStore,
             imageLoader: container.authorizedImageLoader,
             makeAuthView: {
                 AnyView(makeAuthView(context: .orderHistory))
@@ -167,12 +184,16 @@ struct FeatureBuilderFactory {
             makeChatListView: {
                 AnyView(makeChatView())
             },
+            makeNotificationListView: {
+                AnyView(makeNotificationListView())
+            },
             makeUserSearchView: {
                 AnyView(makeUserSearchView())
             },
             makeDeveloperDiagnosticsView: {
                 AnyView(makeDeveloperDiagnosticsView())
-            }
+            },
+            initialUnreadNotificationCount: container.appNotificationService.unreadCount()
         ).build()
     }
 
@@ -190,6 +211,7 @@ struct FeatureBuilderFactory {
         do {
             try await container.authRepository.updateDeviceToken(deviceToken)
             appState.sessionStore.markCurrentDeviceTokenSynced()
+            Logger(category: "FCM").debug("[FCM] token uploaded endpoint=/v1/users/deviceToken")
         } catch let error as NetworkError {
             if case .configuration(let configurationError) = error {
                 Logger.shared.warning("Device token sync skipped due to configuration issue: \(configurationError.userMessage)")
@@ -201,11 +223,17 @@ struct FeatureBuilderFactory {
         }
     }
 
+    func routePendingNotificationIfNeeded() {
+        container.appNotificationRouter.routePendingIfNeeded()
+    }
+
     func makeCommunityView() -> CommunityRootView {
         CommunityBuilder(
             communityRepository: container.communityRepository,
             locationService: container.locationService,
             sessionStore: appState.sessionStore,
+            notificationService: container.appNotificationService,
+            communityNotificationSnapshotStore: container.communityNotificationSnapshotStore,
             imageLoader: container.authorizedImageLoader,
             makeAuthView: { context, onAuthenticated in
                 AnyView(
@@ -236,6 +264,9 @@ struct FeatureBuilderFactory {
             communityRepository: container.communityRepository,
             locationService: container.locationService,
             sessionStore: appState.sessionStore,
+            notificationService: container.appNotificationService,
+            communityNotificationSnapshotStore: container.communityNotificationSnapshotStore,
+            activeCommunityPostTracker: container.activeCommunityPostTracker,
             imageLoader: container.authorizedImageLoader,
             makeAuthView: { context, onAuthenticated in
                 AnyView(
@@ -285,6 +316,8 @@ struct FeatureBuilderFactory {
             communityRepository: container.communityRepository,
             locationService: container.locationService,
             sessionStore: appState.sessionStore,
+            notificationService: container.appNotificationService,
+            communityNotificationSnapshotStore: container.communityNotificationSnapshotStore,
             imageLoader: container.authorizedImageLoader,
             makeAuthView: { context, onAuthenticated in
                 AnyView(
@@ -328,7 +361,30 @@ struct FeatureBuilderFactory {
             },
             storeRepository: container.storeRepository,
             sessionStore: appState.sessionStore,
+            notificationService: container.appNotificationService,
+            activeChatRoomTracker: container.activeChatRoomTracker,
             imageLoader: container.authorizedImageLoader
+        ).build()
+    }
+
+    func makeNotificationListView() -> NotificationListRootView {
+        NotificationListBuilder(
+            notificationService: container.appNotificationService,
+            appNotificationRouter: container.appNotificationRouter
+        ).build()
+    }
+
+    private func makeVideoPlayerView(
+        video: Video,
+        onVideoUpdated: @escaping (Video) -> Void
+    ) -> VideoPlayerView {
+        VideoPlayerBuilder(
+            video: video,
+            fetchStreamUseCase: FetchVideoStreamUseCase(repository: container.videoRepository),
+            setLikeUseCase: SetVideoLikeUseCase(repository: container.videoRepository),
+            appConfiguration: container.appConfiguration,
+            tokenStore: container.tokenStore,
+            onVideoUpdated: onVideoUpdated
         ).build()
     }
 
@@ -351,6 +407,12 @@ struct FeatureBuilderFactory {
             sessionStore: appState.sessionStore,
             authRepository: container.authRepository,
             userDefaultsStore: container.userDefaultsStore,
+            notificationService: container.appNotificationService,
+            notificationDiagnosticsStore: container.notificationDiagnosticsStore,
+            activeChatRoomTracker: container.activeChatRoomTracker,
+            activeCommunityPostTracker: container.activeCommunityPostTracker,
+            orderStatusSnapshotStore: container.orderStatusSnapshotStore,
+            communityNotificationSnapshotStore: container.communityNotificationSnapshotStore,
             imageLoader: container.authorizedImageLoader
         ).build()
     }

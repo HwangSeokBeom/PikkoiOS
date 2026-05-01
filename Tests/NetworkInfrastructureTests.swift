@@ -53,6 +53,19 @@ final class NetworkInfrastructureTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "RefreshToken"))
     }
 
+    func testSensitiveLogRedactorKeepsDiagnosticHeaderBooleansReadable() {
+        let message = "[HLSProbeRequest] authMode=tokenOnly headerAuthorization=false headerSeSACKey=false headerContentType=false hasAuthorization=true hasSesacKey=true"
+
+        XCTAssertEqual(SensitiveLogRedactor.redact(message), message)
+    }
+
+    func testSensitiveLogRedactorStillRedactsActualSensitiveFields() {
+        let message = "Authorization=access-token token=playback-token SesacKey=api-key"
+        let redacted = SensitiveLogRedactor.redact(message)
+
+        XCTAssertEqual(redacted, "Authorization=<redacted> token=<redacted> SesacKey=<redacted>")
+    }
+
     func testKakaoLoginUsesSwaggerPathOAuthTokenBodyAndNoAppAuthorization() async throws {
         let apiClient = RecordingAPIClient(
             response: LoginResponseDTO(
@@ -575,6 +588,69 @@ final class NetworkInfrastructureTests: XCTestCase {
         await fulfillment(of: [invalidationExpectation], timeout: 1.0)
         let storedTokens = try await tokenStore.loadTokens()
         XCTAssertNil(storedTokens)
+    }
+
+    func testAPIClientDoesNotInvalidateSessionForVideoStreamForbidden() async throws {
+        let tokenStore = StubTokenStore(
+            tokens: StoredTokens(accessToken: "access-token", refreshToken: "refresh-token")
+        )
+        let configuration = AppConfiguration(
+            environment: .development,
+            baseURL: URL(string: "https://example.com")!,
+            seSACKey: "test-sesac-key"
+        )
+        let requestBuilder = RequestBuilder(configuration: configuration, tokenStore: tokenStore)
+
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: sessionConfiguration)
+
+        let refreshCoordinator = TokenRefreshCoordinator(
+            session: session,
+            requestBuilder: requestBuilder,
+            tokenStore: tokenStore
+        )
+        let apiClient = APIClient(
+            session: session,
+            requestBuilder: requestBuilder,
+            tokenRefreshCoordinator: refreshCoordinator
+        )
+
+        let invalidationExpectation = expectation(
+            forNotification: .pikkoSessionDidInvalidate,
+            object: nil
+        )
+        invalidationExpectation.isInverted = true
+
+        URLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/videos/video-1/stream")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 403,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                #"{"message":"Forbidden"}"#.data(using: .utf8)!
+            )
+        }
+
+        let endpoint = Endpoint<TestResponseDTO>(
+            path: "/v1/videos/video-1/stream",
+            method: .get,
+            authorizationPolicy: .accessToken
+        )
+
+        do {
+            _ = try await apiClient.execute(endpoint)
+            XCTFail("Expected forbidden error")
+        } catch let error as NetworkError {
+            XCTAssertEqual(error, .forbidden)
+        }
+
+        await fulfillment(of: [invalidationExpectation], timeout: 0.2)
+        let storedTokens = try await tokenStore.loadTokens()
+        XCTAssertEqual(storedTokens, StoredTokens(accessToken: "access-token", refreshToken: "refresh-token"))
     }
 }
 

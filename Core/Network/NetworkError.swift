@@ -55,7 +55,7 @@ extension NetworkError: LocalizedError {
 extension NetworkError {
     var isAuthenticationFailure: Bool {
         switch self {
-        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .forbidden:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired:
             return true
         default:
             return false
@@ -64,7 +64,7 @@ extension NetworkError {
 
     var shouldInvalidateSessionImmediately: Bool {
         switch self {
-        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .forbidden:
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired:
             return true
         default:
             return false

@@ -28,6 +28,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
     private var inFlightTasks: [URL: Task<Data, Error>] = [:]
     private var failedURLCache: [URL: Date] = [:]
     private var loggedFailedURLs: Set<URL> = []
+    private var loggedFallbackKeys = Set<String>()
     private let failedURLCacheTTL: TimeInterval = 300
 
     init(
@@ -82,6 +83,8 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             if case .notFoundOrBlocked = error as? ImageLoadError {
                 failedURLCache[url] = Date()
                 logFailedURLOnce(url: url, statusDescription: error.localizedDescription)
+            } else if hasLoggedFallback(for: url) {
+                // The placeholder fallback warning was already emitted at the HTTP status boundary.
             } else {
                 logger.warning("Image load failed. url=\(url.absoluteString) error=\(error.localizedDescription)")
             }
@@ -135,14 +138,12 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
                 _ = try await tokenRefreshCoordinator.refreshTokens()
                 return try await fetchImageData(from: url, didRetryAfterRefresh: true)
             case 444:
-                logger.warning(
-                    "Image request returned 444. url=\(url.absoluteString) fallback=placeholder impact=transport_only"
-                )
+                logFallbackPlaceholderOnce(url: url, statusCode: httpResponse.statusCode)
                 throw ImageLoadError.notFoundOrBlocked
             default:
                 let error = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
                 switch error {
-                case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .forbidden:
+                case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired:
                     await tokenRefreshCoordinator.invalidateSession()
                 default:
                     break
@@ -154,7 +155,12 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             }
         } catch let error as NetworkError {
             throw error
+        } catch is ImageLoadError {
+            throw NetworkError.transport
         } catch {
+            guard !hasLoggedFallback(for: url) else {
+                throw NetworkError.transport
+            }
             logger.warning("Image transport failed. url=\(url.absoluteString) error=\(error.localizedDescription)")
             throw NetworkError.transport
         }
@@ -166,5 +172,21 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
         }
         loggedFailedURLs.insert(url)
         logger.warning("Image unavailable. url=\(url.absoluteString) error=\(statusDescription)")
+    }
+
+    private func logFallbackPlaceholderOnce(url: URL, statusCode: Int) {
+        let key = fallbackLogKey(url: url, statusCode: statusCode)
+        guard loggedFallbackKeys.insert(key).inserted else {
+            return
+        }
+        logger.warning("[ImageLoader] fallbackPlaceholder url=\(url.absoluteString) status=\(statusCode) reason=transport")
+    }
+
+    private func hasLoggedFallback(for url: URL) -> Bool {
+        loggedFallbackKeys.contains { $0.hasPrefix("\(url.absoluteString)|") }
+    }
+
+    private func fallbackLogKey(url: URL, statusCode: Int) -> String {
+        "\(url.absoluteString)|\(statusCode)"
     }
 }

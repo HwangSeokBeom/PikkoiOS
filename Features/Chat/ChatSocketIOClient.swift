@@ -25,12 +25,6 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         self.mapper = mapper
     }
 
-    deinit {
-        Logger.shared.debug(
-            "[ChatSocket] deinit roomId=\(activeRoomID ?? "-") namespace=\(activeNamespace ?? "-") reason=\(activeRoomID == nil ? lastDisconnectReason : "objectReleasedWhileActive")"
-        )
-    }
-
     func connect(roomID: String, currentUserID: String?, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
         if activeRoomID == roomID {
             let status = socket?.status

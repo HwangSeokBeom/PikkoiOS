@@ -135,6 +135,7 @@ struct AppConfiguration: Sendable {
     let portOneAppSchemeDiagnostic: ConfiguredValueDiagnostic
     let isPaymentTestMode: Bool
     let authorizationHeaderFormat: TokenHeaderFormat
+    let isHLSManifestRewriteFallbackEnabled: Bool
 
     let defaultTimeout: TimeInterval
     let uploadTimeout: TimeInterval
@@ -156,7 +157,8 @@ struct AppConfiguration: Sendable {
         portOnePayMethod: String? = nil,
         portOneAppScheme: String? = nil,
         paymentTestMode: Bool? = nil,
-        authorizationHeaderFormat: TokenHeaderFormat = .raw
+        authorizationHeaderFormat: TokenHeaderFormat = .raw,
+        hlsManifestRewriteFallbackEnabled: Bool? = nil
     ) {
         let resolvedBaseURL = Self.resolveBaseURL(explicitBaseURL: baseURL, bundle: bundle)
         let resolvedSeSACKey = Self.resolveSeSACKey(explicitSeSACKey: seSACKey, bundle: bundle)
@@ -221,6 +223,8 @@ struct AppConfiguration: Sendable {
         self.defaultTimeout = URLSessionConfigurationFactory.defaultRequestTimeout
         self.uploadTimeout = URLSessionConfigurationFactory.uploadRequestTimeout
         self.paymentValidationTimeout = URLSessionConfigurationFactory.paymentValidationRequestTimeout
+        _ = hlsManifestRewriteFallbackEnabled
+        self.isHLSManifestRewriteFallbackEnabled = false
 
         if environment == .production,
            Self.isPotentiallyUnsafePaymentConfiguration(

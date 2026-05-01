@@ -35,6 +35,8 @@ struct FloatingQuickActionView: View {
             }
         }
         .buttonStyle(.plain)
+        .frame(width: 58, height: 58)
+        .contentShape(Circle())
         .pikkoShadow(PikkoShadow.floating)
         .accessibilityLabel("Open cart")
     }

@@ -10,12 +10,14 @@ struct HomeRootView: View {
     private let makeStoreDetailView: (String) -> StoreDetailRootView
     private let makeStoreSearchView: (String) -> AnyView
     private let makeBannerWebView: (HomeBannerItem) -> AnyView
+    private let makeNotificationListView: () -> AnyView
     private let makeAuthView: () -> AnyView
     private let resetTrigger: Int
 
     @State private var presentedStoreID: String?
     @State private var presentedSearchQuery: String?
     @State private var presentedBanner: HomeBannerItem?
+    @State private var isNotificationListPresented = false
     @State private var isLocationSearchPresented = false
     @Environment(\.openURL) private var openURL
 
@@ -26,6 +28,7 @@ struct HomeRootView: View {
         makeStoreDetailView: @escaping (String) -> StoreDetailRootView,
         makeStoreSearchView: @escaping (String) -> AnyView,
         makeBannerWebView: @escaping (HomeBannerItem) -> AnyView,
+        makeNotificationListView: @escaping () -> AnyView,
         makeAuthView: @escaping () -> AnyView,
         resetTrigger: Int = 0
     ) {
@@ -35,6 +38,7 @@ struct HomeRootView: View {
         self.makeStoreDetailView = makeStoreDetailView
         self.makeStoreSearchView = makeStoreSearchView
         self.makeBannerWebView = makeBannerWebView
+        self.makeNotificationListView = makeNotificationListView
         self.makeAuthView = makeAuthView
         self.resetTrigger = resetTrigger
     }
@@ -62,6 +66,8 @@ struct HomeRootView: View {
                 presentedSearchQuery = query
             case .bannerWeb(let banner):
                 presentedBanner = banner
+            case .notificationList:
+                isNotificationListPresented = true
             case .locationSearch:
                 isLocationSearchPresented = true
             case .none:
@@ -88,6 +94,9 @@ struct HomeRootView: View {
             } else {
                 EmptyView()
             }
+        }
+        .navigationDestination(isPresented: notificationListPresentedBinding) {
+            makeNotificationListView()
         }
         .navigationDestination(isPresented: locationSearchPresentedBinding) {
             LocationSearchView(
@@ -134,8 +143,14 @@ struct HomeRootView: View {
             presentedStoreID = nil
             presentedSearchQuery = nil
             presentedBanner = nil
+            isNotificationListPresented = false
             isLocationSearchPresented = false
             router.clearPendingRoute()
+            Task { await presenter.send(.notificationUnreadCountReloadRequested) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pikkoAppNotificationUnreadCountDidChange)) { notification in
+            let count = notification.userInfo?[AppNotificationUserInfoKey.unreadCount] as? Int ?? 0
+            Task { await presenter.send(.notificationUnreadCountChanged(count)) }
         }
     }
 
@@ -181,6 +196,19 @@ struct HomeRootView: View {
                 if !isPresented {
                     presentedBanner = nil
                     router.clearPendingRoute()
+                }
+            }
+        )
+    }
+
+    private var notificationListPresentedBinding: Binding<Bool> {
+        Binding(
+            get: { isNotificationListPresented },
+            set: { isPresented in
+                if !isPresented {
+                    isNotificationListPresented = false
+                    router.clearPendingRoute()
+                    Task { await presenter.send(.notificationUnreadCountReloadRequested) }
                 }
             }
         )

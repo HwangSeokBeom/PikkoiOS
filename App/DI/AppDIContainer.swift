@@ -24,12 +24,22 @@ final class AppDIContainer {
     let storeRepository: StoreRepository
     let reviewRepository: ReviewRepository
     let bannerRepository: BannerRepository
+    let videoRepository: VideoRepository
     let communityRepository: CommunityRepository
     let chatRepository: ChatRepository
     let chatLocalDataSource: any ChatLocalDataSourceProtocol
     let orderRepository: OrderRepository
     let orderMapper: OrderMapper
     let paymentGateway: any PaymentGateway
+    let appNotificationRepository: AppNotificationRepository
+    let appNotificationService: DefaultAppNotificationService
+    let appNotificationRouter: AppNotificationRouter
+    let pendingNotificationRouteStore: PendingNotificationRouteStore
+    let activeChatRoomTracker: ActiveChatRoomTracker
+    let activeCommunityPostTracker: ActiveCommunityPostTracker
+    let orderStatusSnapshotStore: OrderStatusSnapshotStore
+    let communityNotificationSnapshotStore: CommunityNotificationSnapshotStore
+    let notificationDiagnosticsStore: NotificationDiagnosticsStore
 
     init(
         environment: AppEnvironment = .current,
@@ -45,6 +55,21 @@ final class AppDIContainer {
     ) {
         let resolvedConfiguration = appConfiguration ?? AppConfiguration(environment: environment)
         let resolvedUserDefaultsStore = userDefaultsStore ?? UserDefaultsStore()
+        let resolvedNotificationRepository = UserDefaultsAppNotificationRepository(store: resolvedUserDefaultsStore)
+        let resolvedPendingNotificationRouteStore = PendingNotificationRouteStore()
+        let resolvedNotificationRouter = AppNotificationRouter(pendingRouteStore: resolvedPendingNotificationRouteStore)
+        let resolvedActiveChatRoomTracker = ActiveChatRoomTracker()
+        let resolvedActiveCommunityPostTracker = ActiveCommunityPostTracker()
+        let resolvedNotificationDiagnosticsStore = NotificationDiagnosticsStore()
+        let resolvedNotificationService = DefaultAppNotificationService(
+            repository: resolvedNotificationRepository,
+            router: resolvedNotificationRouter,
+            activeChatRoomTracker: resolvedActiveChatRoomTracker,
+            activeCommunityPostTracker: resolvedActiveCommunityPostTracker,
+            diagnosticsStore: resolvedNotificationDiagnosticsStore
+        )
+        let resolvedOrderStatusSnapshotStore = UserDefaultsOrderStatusSnapshotStore(store: resolvedUserDefaultsStore)
+        let resolvedCommunityNotificationSnapshotStore = UserDefaultsCommunityNotificationSnapshotStore(store: resolvedUserDefaultsStore)
         let resolvedTokenStore = tokenStore ?? KeychainTokenStore(
             service: (Bundle.main.bundleIdentifier ?? "com.pikko.ios") + ".tokens"
         )
@@ -72,6 +97,7 @@ final class AppDIContainer {
         let reviewMapper = ReviewMapper(fileURLResolver: resolvedFileURLResolver)
         let bannerMapper = BannerMapper(fileURLResolver: resolvedFileURLResolver)
         let communityMapper = CommunityMapper(fileURLResolver: resolvedFileURLResolver)
+        let videoMapper = VideoMapper(fileURLResolver: resolvedFileURLResolver)
         let chatMapper = ChatMapper(fileURLResolver: resolvedFileURLResolver)
         let checkoutMapper = CheckoutMapper()
         let orderMapper = OrderMapper(fileURLResolver: resolvedFileURLResolver)
@@ -94,6 +120,10 @@ final class AppDIContainer {
         let resolvedCommunityRepository = CommunityRepositoryImpl(
             remoteDataSource: CommunityRemoteDataSource(apiClient: resolvedAPIClient),
             mapper: communityMapper
+        )
+        let resolvedVideoRepository = VideoRepositoryImpl(
+            remoteDataSource: VideoRemoteDataSource(apiClient: resolvedAPIClient),
+            mapper: videoMapper
         )
         let resolvedChatRepository = DefaultChatRepository(
             remoteDataSource: ChatRemoteDataSource(apiClient: resolvedAPIClient),
@@ -144,12 +174,22 @@ final class AppDIContainer {
         self.storeRepository = resolvedStoreRepository
         self.reviewRepository = resolvedReviewRepository
         self.bannerRepository = resolvedBannerRepository
+        self.videoRepository = resolvedVideoRepository
         self.communityRepository = resolvedCommunityRepository
         self.chatRepository = resolvedChatRepository
         self.chatLocalDataSource = resolvedChatLocalDataSource
         self.orderRepository = resolvedOrderRepository
         self.orderMapper = orderMapper
         self.paymentGateway = PortOnePaymentGateway()
+        self.appNotificationRepository = resolvedNotificationRepository
+        self.appNotificationService = resolvedNotificationService
+        self.appNotificationRouter = resolvedNotificationRouter
+        self.pendingNotificationRouteStore = resolvedPendingNotificationRouteStore
+        self.activeChatRoomTracker = resolvedActiveChatRoomTracker
+        self.activeCommunityPostTracker = resolvedActiveCommunityPostTracker
+        self.orderStatusSnapshotStore = resolvedOrderStatusSnapshotStore
+        self.communityNotificationSnapshotStore = resolvedCommunityNotificationSnapshotStore
+        self.notificationDiagnosticsStore = resolvedNotificationDiagnosticsStore
     }
 
     func makeAppState() -> AppState {
@@ -159,7 +199,12 @@ final class AppDIContainer {
             sessionSnapshotStore: sessionSnapshotStore
         )
         let cartStore = CartStore(cartRepository: cartRepository)
-        return AppState(sessionStore: sessionStore, cartStore: cartStore)
+        let appState = AppState(sessionStore: sessionStore, cartStore: cartStore)
+        appNotificationRouter.attach(appState: appState)
+        appNotificationService.currentUserIDProvider = { [weak sessionStore] in
+            sessionStore?.currentUserID
+        }
+        return appState
     }
 
     func makeAppBootstrapper(appState: AppState) -> AppBootstrapper {

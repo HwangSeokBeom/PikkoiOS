@@ -6,6 +6,9 @@ struct CommunityDetailBuilder {
     private let communityRepository: CommunityRepository
     private let locationService: any LocationServiceProtocol
     private let sessionStore: SessionStore
+    private let notificationService: AppNotificationService
+    private let communityNotificationSnapshotStore: CommunityNotificationSnapshotStore
+    private let activeCommunityPostTracker: ActiveCommunityPostTracking
     private let imageLoader: any AuthorizedImageLoading
     private let makeAuthView: (AuthPresentationContext, @escaping () -> Void) -> AnyView
     private let makeCommunityComposerView: (CommunityComposerMode, CommunityComposerInitialDraft?, @escaping (String) -> Void) -> AnyView
@@ -17,6 +20,9 @@ struct CommunityDetailBuilder {
         communityRepository: CommunityRepository,
         locationService: any LocationServiceProtocol,
         sessionStore: SessionStore,
+        notificationService: AppNotificationService = NoopAppNotificationService(),
+        communityNotificationSnapshotStore: CommunityNotificationSnapshotStore = InMemoryCommunityNotificationSnapshotStore(),
+        activeCommunityPostTracker: ActiveCommunityPostTracking = ActiveCommunityPostTracker(),
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping (AuthPresentationContext, @escaping () -> Void) -> AnyView,
         makeCommunityComposerView: @escaping (CommunityComposerMode, CommunityComposerInitialDraft?, @escaping (String) -> Void) -> AnyView,
@@ -27,6 +33,9 @@ struct CommunityDetailBuilder {
         self.communityRepository = communityRepository
         self.locationService = locationService
         self.sessionStore = sessionStore
+        self.notificationService = notificationService
+        self.communityNotificationSnapshotStore = communityNotificationSnapshotStore
+        self.activeCommunityPostTracker = activeCommunityPostTracker
         self.imageLoader = imageLoader
         self.makeAuthView = makeAuthView
         self.makeCommunityComposerView = makeCommunityComposerView
@@ -46,7 +55,10 @@ struct CommunityDetailBuilder {
             postID: postID,
             interactor: interactor,
             router: router,
-            sessionStore: sessionStore
+            sessionStore: sessionStore,
+            notificationService: notificationService,
+            communityNotificationSnapshotStore: communityNotificationSnapshotStore,
+            activeCommunityPostTracker: activeCommunityPostTracker
         )
 
         return CommunityDetailRootView(

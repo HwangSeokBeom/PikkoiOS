@@ -27,7 +27,7 @@ struct AuthorizedFileURLResolver: AuthorizedFileURLResolving, Sendable {
             throw NetworkError.configuration(configuration.baseURLError ?? .missingBaseURL)
         }
 
-        return try urlBuilder.makeURL(
+        return try makeRelativeURL(
             baseURL: try urlBuilder.makeOriginURL(baseURL: baseURL),
             path: normalize(path: trimmedPath)
         )
@@ -56,5 +56,15 @@ struct AuthorizedFileURLResolver: AuthorizedFileURLResolving, Sendable {
         }
 
         return "/\(path)"
+    }
+
+    private func makeRelativeURL(baseURL: URL, path: String) throws -> URL {
+        let origin = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let normalizedPath = path.hasPrefix("/") ? path : "/\(path)"
+        guard let url = URL(string: "\(origin)\(normalizedPath)") else {
+            throw NetworkError.invalidRequest
+        }
+
+        return url
     }
 }

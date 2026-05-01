@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct HomeCategorySectionView: View {
     let categories: [HomeCategoryItem]
@@ -17,8 +18,8 @@ struct HomeCategorySectionView: View {
                                 .fill(selectedCategoryID == category.id ? PikkoColor.sage50 : PikkoColor.gray100)
                                 .frame(width: 44, height: 44)
                                 .overlay {
-                                    Text(category.icon)
-                                        .font(.system(size: 22))
+                                    HomeCategoryIcon(category: category)
+                                        .frame(width: 28, height: 28)
                                 }
 
                             Text(category.title)
@@ -49,5 +50,25 @@ struct HomeCategorySectionView: View {
                 .stroke(PikkoColor.line.opacity(0.7), lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+}
+
+private struct HomeCategoryIcon: View {
+    let category: HomeCategoryItem
+
+    var body: some View {
+        if let uiImage = UIImage(named: category.imageName) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .scaledToFit()
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: category.fallbackSystemImage)
+                .resizable()
+                .scaledToFit()
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(PikkoColor.accentStrong)
+                .accessibilityHidden(true)
+        }
     }
 }

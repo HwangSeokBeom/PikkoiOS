@@ -82,6 +82,13 @@ final class HomePresenterTests: XCTestCase {
         XCTAssertTrue(presenter.viewState.nearbyStores.isEmpty)
     }
 
+    func testHomeViewStateDoesNotExposeVideoSectionState() {
+        let keys = Mirror(reflecting: HomeViewState()).children.compactMap(\.label)
+
+        XCTAssertFalse(keys.contains("videos"))
+        XCTAssertFalse(keys.contains("videoSectionMessage"))
+    }
+
     func testNearbySortButtonKeepsNearbyTabAndTogglesSortOrder() async {
         let interactor = StubHomeInteractor(
             loadHomeResult: .success(
@@ -295,6 +302,50 @@ final class HomePresenterTests: XCTestCase {
         XCTAssertEqual(router.locationPickerRouteCallCount, 1)
     }
 
+    func testNotificationButtonRoutesNotificationList() async {
+        let router = SpyHomeRouter()
+        let presenter = HomePresenter(
+            interactor: StubHomeInteractor(
+                loadHomeResult: .success(
+                    HomeContent(
+                        locationLabel: "문래역, 영등포구",
+                        popularKeywords: [],
+                        banners: [],
+                        popularStores: [],
+                        nearbyStoresPage: CursorPage(items: [], nextCursor: nil)
+                    )
+                )
+            ),
+            router: router
+        )
+
+        await presenter.send(.notificationButtonTapped)
+
+        XCTAssertEqual(router.notificationListRouteCallCount, 1)
+    }
+
+    func testHomePresenterLoadsNotificationUnreadCountOnAppear() async {
+        let presenter = HomePresenter(
+            interactor: StubHomeInteractor(
+                loadHomeResult: .success(
+                    HomeContent(
+                        locationLabel: "문래역, 영등포구",
+                        popularKeywords: [],
+                        banners: [],
+                        popularStores: [],
+                        nearbyStoresPage: CursorPage(items: [], nextCursor: nil)
+                    )
+                ),
+                notificationUnreadCount: 7
+            ),
+            router: SpyHomeRouter()
+        )
+
+        await presenter.send(.onAppear)
+
+        XCTAssertEqual(presenter.viewState.notificationUnreadCount, 7)
+    }
+
     func testCurrentLocationRequestReloadsHomeWithSelectedLocation() async {
         let interactor = StubHomeInteractor(
             loadHomeResult: .success(
@@ -492,13 +543,16 @@ private final class StubHomeInteractor: HomeInteracting {
     private(set) var currentLocationRequestCallCount = 0
     private let loadHomeResult: Result<HomeContent, Error>
     private let currentLocationResult: HomeLocationRequestResult
+    private let notificationUnreadCountValue: Int
 
     init(
         loadHomeResult: Result<HomeContent, Error>,
-        currentLocationResult: HomeLocationRequestResult = .available
+        currentLocationResult: HomeLocationRequestResult = .available,
+        notificationUnreadCount: Int = 0
     ) {
         self.loadHomeResult = loadHomeResult
         self.currentLocationResult = currentLocationResult
+        self.notificationUnreadCountValue = notificationUnreadCount
     }
 
     func loadHome(category: String?) async throws -> HomeContent {
@@ -512,6 +566,10 @@ private final class StubHomeInteractor: HomeInteracting {
 
     func updateLikeStatus(storeID: String, isLiked: Bool) async throws -> Bool {
         isLiked
+    }
+
+    func notificationUnreadCount() -> Int {
+        notificationUnreadCountValue
     }
 
     func requestCurrentLocationForHome() async -> HomeLocationRequestResult {
@@ -531,11 +589,13 @@ private final class SpyHomeRouter: HomeRouting {
     private(set) var locationPickerRouteCallCount = 0
     private(set) var locationPermissionSettingsRouteCallCount = 0
     private(set) var locationSearchRouteCallCount = 0
+    private(set) var notificationListRouteCallCount = 0
 
     func routeToAuth() {}
     func routeToLocationPicker() { locationPickerRouteCallCount += 1 }
     func routeToLocationPermissionSettings() { locationPermissionSettingsRouteCallCount += 1 }
     func routeToLocationSearch() { locationSearchRouteCallCount += 1 }
+    func routeToNotificationList() { notificationListRouteCallCount += 1 }
     func routeToSearch(query: String) { routedSearchQuery = query }
     func routeToBanner(_ banner: HomeBannerItem) { routedBanner = banner }
     func routeToStoreDetail(storeID: String) {}

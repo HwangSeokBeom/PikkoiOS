@@ -4,33 +4,44 @@ struct HomeHeaderSectionView: View {
     let locationLabel: String
     @Binding var searchText: String
     let popularKeywords: [String]
+    let notificationUnreadCount: Int
     let onLocationTap: () -> Void
+    let onNotificationTap: () -> Void
     let onSearchSubmit: () -> Void
     let onPopularKeywordTap: (String) -> Void
+    @State private var hasLoggedBellPlacement = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button(action: onLocationTap) {
-                HStack(spacing: 6) {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(PikkoColor.gray600)
+            HStack(alignment: .center, spacing: PikkoSpacing.sm) {
+                Button(action: onLocationTap) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(PikkoColor.gray600)
 
-                    Text(locationLabel)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(PikkoColor.primaryText)
-                        .lineLimit(1)
+                        Text(locationLabel)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(PikkoColor.primaryText)
+                            .lineLimit(1)
 
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(PikkoColor.gray500)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(PikkoColor.gray500)
 
-                    Spacer()
+                        Spacer(minLength: PikkoSpacing.xs)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                NotificationBellButton(
+                    unreadCount: notificationUnreadCount,
+                    action: onNotificationTap
+                )
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
 
             SearchBar(
                 text: $searchText,
@@ -73,6 +84,11 @@ struct HomeHeaderSectionView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+        .onAppear {
+            guard !hasLoggedBellPlacement else { return }
+            hasLoggedBellPlacement = true
+            Logger(category: "NotificationBell").debugVerbose("[NotificationBell] configured placement=homeRightItem")
         }
     }
 

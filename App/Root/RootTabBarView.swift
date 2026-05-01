@@ -1,39 +1,44 @@
 import SwiftUI
 
 enum RootTabBarMetrics {
-    static let contentHeight: CGFloat = 58
-    static let floatingCenterOverlap: CGFloat = 18
+    static let contentHeight: CGFloat = 72
+    static let floatingOverlap: CGFloat = 22
+    static let floatingCenterOverlap: CGFloat = floatingOverlap
     static let minimumContentGap: CGFloat = 28
-    static let scrollContentBottomInset: CGFloat = contentHeight + floatingCenterOverlap + minimumContentGap
+    static let scrollContentBottomInset: CGFloat = contentHeight + floatingOverlap + minimumContentGap
 }
 
 struct RootTabBarView: View {
     private enum Layout {
         static let height: CGFloat = RootTabBarMetrics.contentHeight
-        static let floatingOffset: CGFloat = -6
-        static let itemsTopPadding: CGFloat = 8
-        static let itemsBottomPadding: CGFloat = 2
-        static let centerSlotWidth: CGFloat = 62
-        static let itemHeight: CGFloat = 40
+        static let floatingTopOffset: CGFloat = -72
+        static let floatingTrailingPadding: CGFloat = 18
+        static let itemsTopPadding: CGFloat = 10
+        static let itemsBottomPadding: CGFloat = 8
+        static let itemHeight: CGFloat = 50
     }
 
     let selectedTab: RootTab
     let onSelect: (RootTab) -> Void
     let onQuickAction: () -> Void
+    @State private var floatingButtonFrame: CGRect = .zero
+    @State private var profileItemFrame: CGRect = .zero
+    private let layoutLogger = Logger(category: "TabBarLayout")
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack(alignment: .topTrailing) {
             tabBarBackground
 
             FloatingQuickActionView(action: onQuickAction)
-                .offset(y: Layout.floatingOffset)
+                .padding(.trailing, Layout.floatingTrailingPadding)
+                .offset(y: Layout.floatingTopOffset)
+                .background(frameReader(FloatingButtonFramePreferenceKey.self))
                 .zIndex(1)
 
             HStack(spacing: 0) {
                 item(for: .home)
                 item(for: .order)
-                Color.clear
-                    .frame(width: Layout.centerSlotWidth)
+                item(for: .video)
                 item(for: .community)
                 item(for: .profile)
             }
@@ -43,6 +48,15 @@ struct RootTabBarView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(height: Layout.height)
+        .coordinateSpace(name: "RootTabBarView")
+        .onPreferenceChange(FloatingButtonFramePreferenceKey.self) { frame in
+            floatingButtonFrame = frame
+            logLayoutIfReady(floatingFrame: frame, profileFrame: profileItemFrame)
+        }
+        .onPreferenceChange(ProfileItemFramePreferenceKey.self) { frame in
+            profileItemFrame = frame
+            logLayoutIfReady(floatingFrame: floatingButtonFrame, profileFrame: frame)
+        }
     }
 
     private var tabBarBackground: some View {
@@ -78,5 +92,44 @@ struct RootTabBarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .background(profileFrameReader(for: tab))
+    }
+
+    private func frameReader<Key: PreferenceKey>(_ key: Key.Type) -> some View where Key.Value == CGRect {
+        GeometryReader { proxy in
+            Color.clear.preference(key: key, value: proxy.frame(in: .named("RootTabBarView")))
+        }
+    }
+
+    @ViewBuilder
+    private func profileFrameReader(for tab: RootTab) -> some View {
+        if tab == .profile {
+            frameReader(ProfileItemFramePreferenceKey.self)
+        }
+    }
+
+    private func logLayoutIfReady(floatingFrame: CGRect, profileFrame: CGRect) {
+        guard !floatingFrame.isEmpty, !profileFrame.isEmpty else { return }
+        let adjustedFloatingFrame = floatingFrame.offsetBy(dx: 0, dy: Layout.floatingTopOffset)
+        let overlapsProfile = adjustedFloatingFrame.intersects(profileFrame)
+        layoutLogger.debug(
+            "[TabBarLayout] adjusted floatingButton frame=\(adjustedFloatingFrame) profileItemFrame=\(profileFrame) overlapsProfile=\(overlapsProfile)"
+        )
+    }
+}
+
+private struct FloatingButtonFramePreferenceKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
+    }
+}
+
+private struct ProfileItemFramePreferenceKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
     }
 }

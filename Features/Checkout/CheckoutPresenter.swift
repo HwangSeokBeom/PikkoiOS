@@ -457,8 +457,9 @@ final class CheckoutPresenter: ObservableObject {
             if statusCode == "404" {
                 await paymentReceiptCache.markUnavailable(orderCode: orderCode)
             }
+            let cacheState = statusCode == "404" ? "unavailable" : "none"
             Logger.shared.warning(
-                "[PaymentReceipt] failed selectedKey=\(orderCode) statusCode=\(statusCode) fallback=receiptUnavailable message=\(error.localizedDescription) body=<unavailable>"
+                "[PaymentReceipt] unavailable orderCode=\(orderCode) statusCode=\(statusCode) message=\(paymentReceiptFailureMessage(from: error)) cacheState=\(cacheState)"
             )
             return false
         }
@@ -469,6 +470,30 @@ final class CheckoutPresenter: ObservableObject {
             return "404"
         }
         return "unknown"
+    }
+
+    private func paymentReceiptFailureMessage(from error: Error) -> String {
+        if let checkoutError = error as? CheckoutFeatureError {
+            switch checkoutError {
+            case .validation(let message),
+                 .businessAuthorization(let message),
+                 .notFound(let message),
+                 .unavailable(let message):
+                return message
+            case .validationIssues:
+                return "결제 정보를 다시 확인해 주세요."
+            case .authenticationRequired:
+                return "로그인 후 결제를 확인할 수 있어요."
+            case .configurationRequired:
+                return "앱 설정을 확인해 주세요."
+            }
+        }
+        if let localizedError = error as? LocalizedError,
+           let description = localizedError.errorDescription,
+           !description.isEmpty {
+            return description
+        }
+        return error.localizedDescription
     }
 
     private func applyFailedValidationState(

@@ -40,6 +40,8 @@ final class APIClient: APIClientProtocol {
                 return try decode(
                     ResponseDTO.self,
                     from: data,
+                    response: httpResponse,
+                    request: request,
                     statusCode: httpResponse.statusCode,
                     endpoint: endpoint
                 )
@@ -66,6 +68,7 @@ final class APIClient: APIClientProtocol {
                 logDomainFailureIfNeeded(
                     endpoint: endpoint,
                     request: request,
+                    response: httpResponse,
                     statusCode: httpResponse.statusCode,
                     serverMessage: serverMessage,
                     data: data
@@ -75,8 +78,13 @@ final class APIClient: APIClientProtocol {
                         "[Auth] social login failed provider=kakao endpoint=\(endpoint.path) statusCode=\(httpResponse.statusCode) serverMessage=\(serverMessage)"
                     )
                 }
+                if httpResponse.statusCode == 403, isVideoStreamEndpoint(endpoint) {
+                    Logger.shared.warning(
+                        "[Network] forbidden endpoint=\(endpoint.method.rawValue) \(endpoint.path) action=showError keepSession=true"
+                    )
+                }
                 switch mappedError {
-                case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired, .forbidden:
+                case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired:
                     await tokenRefreshCoordinator.invalidateSession()
                 default:
                     break
@@ -118,6 +126,14 @@ final class APIClient: APIClientProtocol {
         request: URLRequest
     ) {
 #if DEBUG
+        if endpoint.path == "/v1/notifications/push",
+           endpoint.method == .post {
+            Logger.shared.debug(
+                "[PushRequest] endpoint=POST /v1/notifications/push bodyKeys=\(jsonBodyKeys(from: request.httpBody).joined(separator: ",")) hasAuthorization=\(request.value(forHTTPHeaderField: "Authorization")?.isEmpty == false) hasSesacKey=\(request.value(forHTTPHeaderField: "SesacKey")?.isEmpty == false)"
+            )
+            return
+        }
+
         guard endpoint.path == "/v1/users/login/kakao",
               endpoint.method == .post else {
             return
@@ -162,6 +178,12 @@ final class APIClient: APIClientProtocol {
         }
     }
 
+    private func isVideoStreamEndpoint<ResponseDTO: Decodable & Sendable>(_ endpoint: Endpoint<ResponseDTO>) -> Bool {
+        endpoint.method == .get
+            && endpoint.path.hasPrefix("/v1/videos/")
+            && endpoint.path.hasSuffix("/stream")
+    }
+
     private func logFailurePayloadIfNeeded<ResponseDTO: Decodable & Sendable>(
         endpoint: Endpoint<ResponseDTO>,
         statusCode: Int,
@@ -170,7 +192,7 @@ final class APIClient: APIClientProtocol {
 #if DEBUG
         guard endpoint.authorizationPolicy.requiresAuthenticatedSession else { return }
         let payloadSnippet = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8>"
-        Logger.shared.warning(
+        Logger.shared.debugVerbose(
             "[Network] response failed statusCode=\(statusCode) endpoint=\(endpoint.method.rawValue) \(endpoint.path) body=\(payloadSnippet)"
         )
 #endif
@@ -179,6 +201,7 @@ final class APIClient: APIClientProtocol {
     private func logDomainFailureIfNeeded<ResponseDTO: Decodable & Sendable>(
         endpoint: Endpoint<ResponseDTO>,
         request: URLRequest,
+        response: HTTPURLResponse,
         statusCode: Int,
         serverMessage: String,
         data: Data
@@ -194,17 +217,28 @@ final class APIClient: APIClientProtocol {
             Logger.shared.warning(
                 "[PaymentValidation] failed orderCode=\(orderCode) statusCode=\(statusCode) message=\(serverMessage) body=\(maskedPaymentValidationBody(from: request.httpBody))"
             )
-        } else if endpoint.path.hasPrefix("/v1/payments/") {
-            let selectedKey = endpoint.path.replacingOccurrences(of: "/v1/payments/", with: "")
-            Logger.shared.warning(
-                "[PaymentReceipt] failed selectedKey=\(selectedKey) statusCode=\(statusCode) fallback=receiptUnavailable message=\(serverMessage) body=\(payloadSnippet)"
-            )
         } else if endpoint.method == .put, endpoint.path.hasPrefix("/v1/orders/") {
             Logger.shared.warning(
                 "[OrderStatus] failed orderCode=\(endpoint.path.replacingOccurrences(of: "/v1/orders/", with: "")) statusCode=\(statusCode) serverMessage=\(serverMessage) body=\(requestBody) responseBody=\(payloadSnippet)"
             )
+        } else if endpoint.path == "/v1/notifications/push" {
+            Logger.shared.warning(
+                "[PushRequest] failed endpoint=POST /v1/notifications/push statusCode=\(statusCode) serverMessage=\(serverMessage) bodyKeys=\(jsonBodyKeys(from: request.httpBody).joined(separator: ","))"
+            )
+        } else if endpoint.path == "/v1/videos" {
+            Logger.shared.error(
+                "[VideoAPI] list failed status=\(statusCode) contentType=\(response.value(forHTTPHeaderField: "Content-Type") ?? "nil") contentLength=\(data.count) firstBytesHex=\(firstBytesHex(data)) endpoint=\(endpoint.method.rawValue) \(endpoint.path) hasAuthorization=\(request.value(forHTTPHeaderField: "Authorization")?.isEmpty == false) hasSesacKey=\(request.value(forHTTPHeaderField: "SesacKey")?.isEmpty == false) decoding=non2xx"
+            )
         }
 #endif
+    }
+
+    private func jsonBodyKeys(from data: Data?) -> [String] {
+        guard let data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return []
+        }
+        return object.keys.sorted()
     }
 
     private func maskedPaymentValidationBody(from data: Data?) -> String {
@@ -227,6 +261,8 @@ final class APIClient: APIClientProtocol {
     private func decode<ResponseDTO: Decodable & Sendable>(
         _ type: ResponseDTO.Type,
         from data: Data,
+        response: HTTPURLResponse,
+        request: URLRequest,
         statusCode: Int,
         endpoint: Endpoint<ResponseDTO>
     ) throws -> ResponseDTO {
@@ -238,14 +274,90 @@ final class APIClient: APIClientProtocol {
             throw NetworkError.decoding
         }
 
+#if DEBUG
+        logSuccessfulPayloadShapeIfNeeded(endpoint: endpoint, statusCode: statusCode, data: data)
+#endif
+
         do {
             return try NetworkCoding.makeJSONDecoder().decode(ResponseDTO.self, from: data)
         } catch {
-            let payloadSnippet = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8>"
-            Logger.shared.error(
-                "Decoding failed for \(endpoint.method.rawValue) \(endpoint.path) into \(String(describing: ResponseDTO.self)). payload=\(payloadSnippet)"
+            logDecodingFailure(
+                error: error,
+                data: data,
+                response: response,
+                request: request,
+                endpoint: endpoint,
+                responseType: ResponseDTO.self
             )
             throw NetworkError.decoding
         }
+    }
+
+#if DEBUG
+    private func logSuccessfulPayloadShapeIfNeeded<ResponseDTO: Decodable & Sendable>(
+        endpoint: Endpoint<ResponseDTO>,
+        statusCode: Int,
+        data: Data
+    ) {
+        guard isVideoStreamEndpoint(endpoint),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+
+        Logger.shared.debug(
+            "[VideoAPI] raw stream response status=\(statusCode) keys=\(object.keys.sorted().joined(separator: ","))"
+        )
+    }
+#endif
+
+    private func logDecodingFailure<ResponseDTO: Decodable & Sendable>(
+        error: Error,
+        data: Data,
+        response: HTTPURLResponse,
+        request: URLRequest,
+        endpoint: Endpoint<ResponseDTO>,
+        responseType: ResponseDTO.Type
+    ) {
+        let decodingSummary = decodingErrorSummary(error)
+
+        if endpoint.path == "/v1/videos" {
+            Logger.shared.error(
+                "[VideoAPI] list failed status=\(response.statusCode) contentType=\(response.value(forHTTPHeaderField: "Content-Type") ?? "nil") contentLength=\(data.count) firstBytesHex=\(firstBytesHex(data)) endpoint=\(endpoint.method.rawValue) \(endpoint.path) hasAuthorization=\(request.value(forHTTPHeaderField: "Authorization")?.isEmpty == false) hasSesacKey=\(request.value(forHTTPHeaderField: "SesacKey")?.isEmpty == false) decoding=\(decodingSummary)"
+            )
+            return
+        }
+
+        let payloadSnippet = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8>"
+        Logger.shared.error(
+            "Decoding failed for \(endpoint.method.rawValue) \(endpoint.path) into \(String(describing: responseType)). decoding=\(decodingSummary) payload=\(payloadSnippet)"
+        )
+    }
+
+    private func decodingErrorSummary(_ error: Error) -> String {
+        guard let decodingError = error as? DecodingError else {
+            return error.localizedDescription
+        }
+
+        switch decodingError {
+        case .typeMismatch(let type, let context):
+            return "typeMismatch type=\(type) path=\(codingPathString(context.codingPath)) description=\(context.debugDescription)"
+        case .valueNotFound(let type, let context):
+            return "valueNotFound type=\(type) path=\(codingPathString(context.codingPath)) description=\(context.debugDescription)"
+        case .keyNotFound(let key, let context):
+            return "keyNotFound key=\(key.stringValue) path=\(codingPathString(context.codingPath)) description=\(context.debugDescription)"
+        case .dataCorrupted(let context):
+            return "dataCorrupted path=\(codingPathString(context.codingPath)) description=\(context.debugDescription)"
+        @unknown default:
+            return decodingError.localizedDescription
+        }
+    }
+
+    private func codingPathString(_ codingPath: [CodingKey]) -> String {
+        let path = codingPath.map(\.stringValue).joined(separator: ".")
+        return path.isEmpty ? "<root>" : path
+    }
+
+    private func firstBytesHex(_ data: Data) -> String {
+        data.prefix(64).map { String(format: "%02x", $0) }.joined()
     }
 }

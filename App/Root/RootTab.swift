@@ -3,6 +3,7 @@ import Foundation
 enum RootTab: String, CaseIterable, Hashable, Identifiable {
     case home
     case order
+    case video
     case community
     case profile
 
@@ -16,6 +17,8 @@ enum RootTab: String, CaseIterable, Hashable, Identifiable {
             return "홈"
         case .order:
             return "주문"
+        case .video:
+            return "영상"
         case .community:
             return "커뮤니티"
         case .profile:
@@ -29,6 +32,8 @@ enum RootTab: String, CaseIterable, Hashable, Identifiable {
             return "house.fill"
         case .order:
             return "list.clipboard.fill"
+        case .video:
+            return "play.rectangle.fill"
         case .community:
             return "person.3.fill"
         case .profile:
@@ -42,6 +47,8 @@ enum RootTab: String, CaseIterable, Hashable, Identifiable {
             return "house"
         case .order:
             return "list.clipboard"
+        case .video:
+            return "play.rectangle"
         case .community:
             return "person.3"
         case .profile:

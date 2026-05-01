@@ -26,7 +26,7 @@ final class OrderDetailFeatureTests: XCTestCase {
         XCTAssertNil(presenter.viewState.emptyState)
     }
 
-    func testPendingOrderShowsCancelAvailability() async {
+    func testPendingPaidOrderShowsCancelButtonButCannotExecuteWithoutServerCancelAPI() async {
         let presenter = OrderDetailPresenter(
             initialOrderID: "order-1",
             interactor: SpyOrderDetailInteractor(
@@ -41,6 +41,11 @@ final class OrderDetailFeatureTests: XCTestCase {
 
         XCTAssertEqual(presenter.viewState.orderStatus, .pending)
         XCTAssertTrue(presenter.viewState.canCancelOrder)
+        XCTAssertFalse(presenter.viewState.canExecuteCancelOrder)
+        XCTAssertEqual(
+            presenter.viewState.cancelDisabledReasonText,
+            "결제 취소 API가 필요해요. 매장에 문의해 주세요."
+        )
     }
 
     func testCompletedOrderHidesCancelAvailability() async {
@@ -60,7 +65,7 @@ final class OrderDetailFeatureTests: XCTestCase {
         XCTAssertFalse(presenter.viewState.canCancelOrder)
     }
 
-    func testCancelConfirmedShowsServerErrorWhenRequestFails() async {
+    func testCancelConfirmedShowsPolicyMessageWithoutCallingUnsupportedServerPath() async {
         let presenter = OrderDetailPresenter(
             initialOrderID: "order-1",
             interactor: SpyOrderDetailInteractor(
@@ -78,9 +83,10 @@ final class OrderDetailFeatureTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.orderStatus, .pending)
         XCTAssertFalse(presenter.viewState.isCancelling)
         XCTAssertTrue(presenter.viewState.canCancelOrder)
+        XCTAssertFalse(presenter.viewState.canExecuteCancelOrder)
         XCTAssertEqual(
             presenter.viewState.cancelErrorMessage,
-            "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요."
+            "결제 취소 API가 필요해요. 매장에 문의해 주세요."
         )
     }
 
@@ -203,6 +209,10 @@ private struct SpyOrderDetailInteractor: OrderDetailInteracting {
         case .failure(let error):
             throw error
         }
+    }
+
+    func cancelPendingOrderLocally(orderCode: String) async throws -> OrderDetail {
+        try await cancelOrder(orderCode: orderCode)
     }
 }
 

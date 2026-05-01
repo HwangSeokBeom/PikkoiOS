@@ -7,6 +7,8 @@ final class ChatPresenter: ObservableObject {
 
     private let interactor: ChatInteracting
     private let router: ChatRouting
+    private let notificationService: AppNotificationService
+    private let activeChatRoomTracker: ActiveChatRoomTracking
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private let timeFormatter: DateFormatter
     private let dateFormatter: DateFormatter
@@ -22,9 +24,16 @@ final class ChatPresenter: ObservableObject {
     private var currentContext: ChatRoomContext?
     private var cancellables = Set<AnyCancellable>()
 
-    init(interactor: ChatInteracting, router: ChatRouting) {
+    init(
+        interactor: ChatInteracting,
+        router: ChatRouting,
+        notificationService: AppNotificationService = NoopAppNotificationService(),
+        activeChatRoomTracker: ActiveChatRoomTracking = ActiveChatRoomTracker()
+    ) {
         self.interactor = interactor
         self.router = router
+        self.notificationService = notificationService
+        self.activeChatRoomTracker = activeChatRoomTracker
         self.relativeDateFormatter.locale = Locale(identifier: "ko_KR")
         self.relativeDateFormatter.unitsStyle = .short
 
@@ -42,7 +51,8 @@ final class ChatPresenter: ObservableObject {
     }
 
     deinit {
-        Logger.shared.debug("[ChatViewModel] deinit")
+        guard hasLoaded else { return }
+        Logger.shared.debugVerbose("[ChatViewModel] deinit")
     }
 
     func send(_ action: ChatAction) async {
@@ -93,6 +103,7 @@ final class ChatPresenter: ObservableObject {
             selectedRoom = nil
             messages = []
             realtimeRoomID = nil
+            activeChatRoomTracker.activeRoomId = nil
             interactor.stopRealtime()
             viewState.mode = .roomList
             viewState.title = "채팅"
@@ -250,6 +261,7 @@ final class ChatPresenter: ObservableObject {
         do {
             try await interactor.startRealtime(scope: scope) { [weak self] message in
                 guard let self, self.viewState.selectedRoomID == message.roomID else { return }
+                self.handleIncomingMessageNotification(message)
                 self.merge(message)
                 self.updateRoomList(with: message)
                 self.applyMessages()
@@ -278,6 +290,7 @@ final class ChatPresenter: ObservableObject {
 
         Logger.shared.debug("[ChatViewModel] disconnectSocket reason=viewDisappear roomId=\(realtimeRoomID ?? "-")")
         realtimeRoomID = nil
+        activeChatRoomTracker.activeRoomId = nil
         interactor.stopRealtime()
     }
 
@@ -343,9 +356,23 @@ final class ChatPresenter: ObservableObject {
             let serverChatID = message.effectiveServerChatID ?? message.id
             Logger.shared.debug("[ChatSend] postSuccess localTemporaryId=\(localTemporaryID) serverChatId=\(serverChatID)")
             if messages.contains(where: { $0.effectiveServerChatID == serverChatID }) {
-                Logger.shared.debug("[ChatMerge] skipDuplicate serverChatId=\(serverChatID) source=post")
+#if DEBUG
+                if ChatDebugOptions.isMergeLoggingEnabled {
+                    DebugLogDeduplicator.shared.printOnce(
+                        key: "ChatMerge.skipDuplicate.\(serverChatID).post",
+                        message: "[ChatMerge] skipDuplicate serverChatId=\(serverChatID) source=post"
+                    )
+                }
+#endif
             } else {
-                Logger.shared.debug("[ChatMerge] replaceOptimistic localTemporaryId=\(localTemporaryID) serverChatId=\(serverChatID) source=post")
+#if DEBUG
+                if ChatDebugOptions.isMergeLoggingEnabled {
+                    DebugLogDeduplicator.shared.printOnce(
+                        key: "ChatMerge.replaceOptimistic.\(localTemporaryID).\(serverChatID).post",
+                        message: "[ChatMerge] replaceOptimistic localTemporaryId=\(localTemporaryID) serverChatId=\(serverChatID) source=post"
+                    )
+                }
+#endif
             }
             messages = try await interactor.replacePendingMessage(localID: localTemporaryID, with: message, scope: scope)
             updateRoomList(with: message)
@@ -401,6 +428,7 @@ final class ChatPresenter: ObservableObject {
         viewState.messages = []
         viewState.selectedRoomID = nil
         currentContext = nil
+        activeChatRoomTracker.activeRoomId = nil
         viewState.emptyTitle = viewState.rooms.isEmpty ? "아직 채팅방이 없어요" : nil
         viewState.emptyMessage = viewState.rooms.isEmpty ? "상대방과 대화를 시작하면 여기에 표시돼요." : nil
         viewState.primaryActionTitle = viewState.rooms.isEmpty ? "다시 불러오기" : nil
@@ -410,7 +438,11 @@ final class ChatPresenter: ObservableObject {
     private func applyMessages() {
         let countBefore = messages.count
         messages = ChatMessageMergePolicy.deduplicated(messages, currentUserID: interactor.currentUserID)
-        Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(messages.count)")
+#if DEBUG
+        if ChatDebugOptions.isMergeLoggingEnabled, countBefore != messages.count {
+            Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(messages.count)")
+        }
+#endif
         viewState.rooms = []
         viewState.messages = makeMessageRows(messages)
         viewState.emptyTitle = viewState.messages.isEmpty ? "아직 대화가 없어요" : nil
@@ -513,6 +545,7 @@ final class ChatPresenter: ObservableObject {
                     return
                 }
                 self.updateRoomList(with: message)
+                self.handleIncomingMessageNotification(message)
                 if self.viewState.mode == .roomList {
                     Task {
                         await self.refreshLocalConversationSummariesForVisibleList()
@@ -532,6 +565,7 @@ final class ChatPresenter: ObservableObject {
 
     private func applyContext(_ context: ChatRoomContext) {
         currentContext = context
+        activeChatRoomTracker.activeRoomId = context.roomID
         viewState.title = context.displayTitle
         Logger.shared.debug(
             "[ChatNavigation] source=\(context.entryPoint.logValue) roomId=\(context.roomID) storeId=\(context.storeID ?? "-") opponentId=\(context.opponentID ?? "-") title=\(context.displayTitle)"
@@ -544,6 +578,18 @@ final class ChatPresenter: ObservableObject {
                 "[ChatRoomContext] collision active localCacheKey=\(context.localCacheScope.localCacheKey) roomId=\(context.roomID) currentStoreId=\(context.storeID ?? "-") mappedStoreIds=\(context.collidingStoreIDs.joined(separator: ","))"
             )
         }
+    }
+
+    private func handleIncomingMessageNotification(_ message: ChatMessage) {
+        guard message.sender.id != interactor.currentUserID else { return }
+        notificationService.handleChatMessageReceived(
+            roomId: message.roomID,
+            storeId: currentContext?.storeID,
+            title: currentContext?.displayTitle,
+            messageId: message.effectiveServerChatID,
+            senderId: message.sender.id,
+            preview: message.content
+        )
     }
 
     private func currentScope(roomID: String) -> ChatRoomScope {
@@ -573,9 +619,15 @@ final class ChatPresenter: ObservableObject {
     ) -> [ChatListEntry] {
         let storeScopedEntries = localConversationSummaries.map(ChatListEntry.storeScoped)
         let serverEntries = serverRooms.map(ChatListEntry.server)
-        Logger.shared.debug(
-            "[ChatList] merge storeScopedCount=\(storeScopedEntries.count) serverRoomCount=\(serverEntries.count) policy=sectioned"
-        )
+#if DEBUG
+        if ChatDebugOptions.isChatListMergeLoggingEnabled {
+            DebugLogDeduplicator.shared.printWhenChanged(
+                key: "ChatList.merge",
+                value: "\(storeScopedEntries.count)|\(serverEntries.count)|sectioned",
+                message: "[ChatList] merge storeScopedCount=\(storeScopedEntries.count) serverRoomCount=\(serverEntries.count) policy=sectioned"
+            )
+        }
+#endif
         return storeScopedEntries + serverEntries
     }
 

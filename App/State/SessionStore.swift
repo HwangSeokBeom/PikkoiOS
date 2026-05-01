@@ -168,9 +168,21 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    func updateDeviceToken(_ deviceToken: String?) {
-        self.deviceToken = deviceToken
-        userDefaultsStore.set(deviceToken, forKey: StorageKey.deviceToken)
+    func updateDeviceToken(_ deviceToken: String?, source: String = "unknown") {
+        let normalizedToken = deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedToken?.isEmpty == false else {
+            return
+        }
+
+        if self.deviceToken == normalizedToken {
+            Logger(category: "FCM").debug("[FCM] token save skipped reason=unchanged source=\(source)")
+            return
+        }
+
+        self.deviceToken = normalizedToken
+        userDefaultsStore.set(normalizedToken, forKey: StorageKey.deviceToken)
+        clearSyncedDeviceTokenState()
+        Logger(category: "FCM").debug("[FCM] token saved locally source=\(source) \(SensitiveLogRedactor.summary(for: normalizedToken))")
     }
 
     func markCurrentDeviceTokenSynced() {
@@ -238,6 +250,7 @@ final class SessionStore: ObservableObject {
                 queue: .main
             ) { [weak self] notification in
                 let fcmToken = notification.userInfo?[FCMTokenNotificationUserInfoKey.token] as? String
+                let source = notification.userInfo?[FCMTokenNotificationUserInfoKey.source] as? String ?? "unknown"
 
                 Task { @MainActor [weak self] in
                     guard let self,
@@ -246,7 +259,7 @@ final class SessionStore: ObservableObject {
                         return
                     }
 
-                    self.updateDeviceToken(fcmToken)
+                    self.updateDeviceToken(fcmToken, source: source)
                 }
             }
         )
@@ -276,6 +289,7 @@ extension SessionStore: DeviceTokenProviding {
 
 enum FCMTokenNotificationUserInfoKey {
     static let token = "token"
+    static let source = "source"
 }
 
 extension Notification.Name {

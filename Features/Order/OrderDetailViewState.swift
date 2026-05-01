@@ -30,10 +30,9 @@ struct OrderDetailViewState: Equatable {
     var cancelSuccessMessage: String?
     var reviewActionTitle: String?
     var isReviewActionEnabled = false
-
-    var canCancelOrder: Bool {
-        orderStatus?.isCancellable == true && !isCancelling
-    }
+    var canCancelOrder = false
+    var canExecuteCancelOrder = false
+    var cancelDisabledReasonText: String?
 }
 
 struct OrderDetailItemViewState: Equatable, Identifiable {

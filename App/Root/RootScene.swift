@@ -43,6 +43,10 @@ struct RootScene: View {
             guard sessionStore.isAuthenticated else { return }
             await featureBuilderFactory.syncCurrentDeviceTokenIfNeeded()
         }
+        .onChange(of: sessionStore.isAuthenticated) { _, isAuthenticated in
+            guard isAuthenticated else { return }
+            featureBuilderFactory.routePendingNotificationIfNeeded()
+        }
     }
 }
 

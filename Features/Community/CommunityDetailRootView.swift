@@ -100,6 +100,9 @@ struct CommunityDetailRootView: View {
         .task {
             await presenter.send(.onAppear)
         }
+        .onDisappear {
+            Task { await presenter.send(.onDisappear) }
+        }
     }
 }
 

@@ -16,6 +16,9 @@ struct OrderWithStatusResponseDTO: Decodable, Sendable {
     let paymentVerificationState: String?
     let receiptURL: String?
     let receiptExists: Bool?
+    let paymentObjectExists: Bool
+    let receiptObjectExists: Bool
+    let paymentReceiptObjectExists: Bool
     let review: OrderReviewReferenceDTO?
     let store: StoreSummaryDTOOrder
     let orderMenuList: [OrderMenuQuantityResponseDTO]
@@ -55,6 +58,7 @@ struct OrderWithStatusResponseDTO: Decodable, Sendable {
         case currentOrderStatusCamel = "currentOrderStatus"
         case orderStatus = "order_status"
         case orderStatusCamel = "orderStatus"
+        case status
         case orderStatusTimeline = "order_status_timeline"
         case paidAt
         case paidAtSnake = "paid_at"
@@ -74,6 +78,9 @@ struct OrderWithStatusResponseDTO: Decodable, Sendable {
         paymentVerificationState: String? = nil,
         receiptURL: String? = nil,
         receiptExists: Bool? = nil,
+        paymentObjectExists: Bool = false,
+        receiptObjectExists: Bool = false,
+        paymentReceiptObjectExists: Bool = false,
         review: OrderReviewReferenceDTO?,
         store: StoreSummaryDTOOrder,
         orderMenuList: [OrderMenuQuantityResponseDTO],
@@ -94,6 +101,9 @@ struct OrderWithStatusResponseDTO: Decodable, Sendable {
         self.paymentVerificationState = paymentVerificationState
         self.receiptURL = receiptURL
         self.receiptExists = receiptExists
+        self.paymentObjectExists = paymentObjectExists
+        self.receiptObjectExists = receiptObjectExists
+        self.paymentReceiptObjectExists = paymentReceiptObjectExists
         self.review = review
         self.store = store
         self.orderMenuList = orderMenuList
@@ -102,6 +112,55 @@ struct OrderWithStatusResponseDTO: Decodable, Sendable {
         self.paidAt = paidAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    init(
+        orderID: String,
+        orderCode: String,
+        totalPrice: Decimal,
+        paymentLookupKey: String? = nil,
+        paymentID: String? = nil,
+        merchantUID: String? = nil,
+        impUID: String? = nil,
+        paymentStatus: String? = nil,
+        receiptURL: String? = nil,
+        receiptExists: Bool? = nil,
+        paymentObjectExists: Bool = false,
+        receiptObjectExists: Bool = false,
+        paymentReceiptObjectExists: Bool = false,
+        review: OrderReviewReferenceDTO?,
+        store: StoreSummaryDTOOrder,
+        orderMenuList: [OrderMenuQuantityResponseDTO],
+        currentOrderStatus: String,
+        orderStatusTimeline: [OrderStatusTimelineResponseDTO],
+        paidAt: String?,
+        createdAt: String,
+        updatedAt: String
+    ) {
+        self.init(
+            orderID: orderID,
+            orderCode: orderCode,
+            totalPrice: totalPrice,
+            paymentLookupKey: paymentLookupKey,
+            paymentID: paymentID,
+            merchantUID: merchantUID,
+            impUID: impUID,
+            paymentStatus: paymentStatus,
+            paymentVerificationState: nil,
+            receiptURL: receiptURL,
+            receiptExists: receiptExists,
+            paymentObjectExists: paymentObjectExists,
+            receiptObjectExists: receiptObjectExists,
+            paymentReceiptObjectExists: paymentReceiptObjectExists,
+            review: review,
+            store: store,
+            orderMenuList: orderMenuList,
+            currentOrderStatus: currentOrderStatus,
+            orderStatusTimeline: orderStatusTimeline,
+            paidAt: paidAt,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
     }
 
     init(
@@ -136,6 +195,9 @@ struct OrderWithStatusResponseDTO: Decodable, Sendable {
             paymentVerificationState: nil,
             receiptURL: receiptURL,
             receiptExists: receiptExists,
+            paymentObjectExists: false,
+            receiptObjectExists: false,
+            paymentReceiptObjectExists: false,
             review: review,
             store: store,
             orderMenuList: orderMenuList,
@@ -152,6 +214,9 @@ struct OrderWithStatusResponseDTO: Decodable, Sendable {
         let payment = try container.decodeIfPresent(OrderPaymentLookupDTO.self, forKey: .payment)
         let receipt = try container.decodeIfPresent(OrderPaymentLookupDTO.self, forKey: .receipt)
         let paymentReceipt = try container.decodeIfPresent(OrderPaymentLookupDTO.self, forKey: .paymentReceipt)
+        paymentObjectExists = payment != nil
+        receiptObjectExists = receipt != nil
+        paymentReceiptObjectExists = paymentReceipt != nil
 
         orderID = try container.decode(String.self, forKey: .orderID)
         orderCode = try container.decode(String.self, forKey: .orderCode)
@@ -190,15 +255,19 @@ struct OrderWithStatusResponseDTO: Decodable, Sendable {
             ?? payment?.receiptExists
             ?? receipt?.receiptExists
             ?? paymentReceipt?.receiptExists
+            ?? (receipt != nil || paymentReceipt != nil ? true : nil)
         review = try container.decodeIfPresent(OrderReviewReferenceDTO.self, forKey: .review)
         store = try container.decode(StoreSummaryDTOOrder.self, forKey: .store)
         orderMenuList = try container.decodeIfPresent([OrderMenuQuantityResponseDTO].self, forKey: .orderMenuList) ?? []
         currentOrderStatus = try container.decodeTrimmedString(
-            forKeys: [.currentOrderStatus, .currentOrderStatusCamel, .orderStatus, .orderStatusCamel]
+            forKeys: [.currentOrderStatus, .currentOrderStatusCamel, .orderStatus, .orderStatusCamel, .status]
         ) ?? "UNKNOWN"
         orderStatusTimeline = try container.decodeIfPresent([OrderStatusTimelineResponseDTO].self, forKey: .orderStatusTimeline) ?? []
         paidAt = try container.decodeIfPresent(String.self, forKey: .paidAt)
             ?? container.decodeIfPresent(String.self, forKey: .paidAtSnake)
+            ?? payment?.paidAt
+            ?? receipt?.paidAt
+            ?? paymentReceipt?.paidAt
         createdAt = try container.decode(String.self, forKey: .createdAt)
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
     }
@@ -213,6 +282,7 @@ struct OrderPaymentLookupDTO: Decodable, Sendable {
     let paymentVerificationState: String?
     let receiptURL: String?
     let receiptExists: Bool?
+    let paidAt: String?
 
     private enum CodingKeys: String, CodingKey {
         case paymentLookupKey = "payment_lookup_key"
@@ -225,12 +295,15 @@ struct OrderPaymentLookupDTO: Decodable, Sendable {
         case impUIDCamel = "impUid"
         case paymentStatus = "payment_status"
         case paymentStatusCamel = "paymentStatus"
+        case status
         case paymentVerificationState = "payment_verification_state"
         case paymentVerificationStateCamel = "paymentVerificationState"
         case receiptURL = "receipt_url"
         case receiptURLCamel = "receiptUrl"
         case receiptExists = "receipt_exists"
         case receiptExistsCamel = "receiptExists"
+        case paidAt
+        case paidAtSnake = "paid_at"
     }
 
     init(from decoder: Decoder) throws {
@@ -240,11 +313,13 @@ struct OrderPaymentLookupDTO: Decodable, Sendable {
         merchantUID = try container.decodeTrimmedString(forKeys: [.merchantUID, .merchantUIDCamel])
         impUID = try container.decodeTrimmedString(forKeys: [.impUID, .impUIDCamel])
         paymentStatus = try container.decodeTrimmedString(forKeys: [.paymentStatus, .paymentStatusCamel])
+            ?? container.decodeTrimmedString(forKeys: [.status])
         paymentVerificationState = try container.decodeTrimmedString(
             forKeys: [.paymentVerificationState, .paymentVerificationStateCamel]
         )
         receiptURL = try container.decodeTrimmedString(forKeys: [.receiptURL, .receiptURLCamel])
         receiptExists = try container.decodeFlexibleBool(forKeys: [.receiptExists, .receiptExistsCamel])
+        paidAt = try container.decodeTrimmedString(forKeys: [.paidAt, .paidAtSnake])
     }
 }
 

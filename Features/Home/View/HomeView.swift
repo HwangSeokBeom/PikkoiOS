@@ -62,8 +62,12 @@ struct HomeView: View {
                                 locationLabel: presenter.viewState.locationLabel,
                                 searchText: searchTextBinding,
                                 popularKeywords: presenter.viewState.popularKeywords,
+                                notificationUnreadCount: presenter.viewState.notificationUnreadCount,
                                 onLocationTap: {
                                     Task { await presenter.send(.locationTapped) }
+                                },
+                                onNotificationTap: {
+                                    Task { await presenter.send(.notificationButtonTapped) }
                                 },
                                 onSearchSubmit: {
                                     Task { await presenter.send(.searchSubmitted) }

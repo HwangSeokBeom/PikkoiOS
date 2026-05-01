@@ -32,13 +32,21 @@ final class HomePresenter: ObservableObject {
     func send(_ action: HomeAction) async {
         switch action {
         case .onAppear:
+            reloadNotificationUnreadCount()
             guard !hasLoaded else { return }
             await loadHome(isRefresh: false)
         case .refreshRequested:
+            reloadNotificationUnreadCount()
             guard !isConfigurationBlocked else { return }
             await loadHome(isRefresh: true)
         case .loginRequiredTapped:
             router.routeToAuth()
+        case .notificationButtonTapped:
+            router.routeToNotificationList()
+        case .notificationUnreadCountChanged(let count):
+            updateNotificationUnreadCount(count)
+        case .notificationUnreadCountReloadRequested:
+            reloadNotificationUnreadCount()
         case .locationTapped:
             router.routeToLocationPicker()
         case .currentLocationRequested:
@@ -216,6 +224,18 @@ final class HomePresenter: ObservableObject {
         viewState.nearbyStoresSectionMessage = nearbyStoresFallbackMessage(from: content)
         viewState.nextCursor = content.nearbyStoresPage.nextCursor
         viewState.emptyState = nil
+    }
+
+    private func reloadNotificationUnreadCount() {
+        let count = interactor.notificationUnreadCount()
+        Logger(category: "NotificationBell").debugVerbose("[NotificationBell] unreadCount loaded count=\(count)")
+        updateNotificationUnreadCount(count)
+    }
+
+    private func updateNotificationUnreadCount(_ count: Int) {
+        let normalizedCount = max(0, count)
+        viewState.notificationUnreadCount = normalizedCount
+        Logger(category: "NotificationBell").debugVerbose("[NotificationBell] badge updated count=\(normalizedCount)")
     }
 
     private func applyAuthenticationRequiredState() {

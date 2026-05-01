@@ -1,0 +1,282 @@
+import Foundation
+
+struct VideoListResponseDTO: Decodable, Sendable {
+    let data: [VideoResponseDTO]
+    let nextCursor: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case data
+        case videos
+        case items
+        case results
+        case nextCursor = "next_cursor"
+    }
+
+    init(data: [VideoResponseDTO], nextCursor: String?) {
+        self.data = data
+        self.nextCursor = Self.normalizedCursor(nextCursor)
+    }
+
+    init(from decoder: Decoder) throws {
+        if let rootArray = try? decoder.singleValueContainer().decode([VideoResponseDTO].self) {
+            self.init(data: rootArray, nextCursor: nil)
+            return
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let data = try container.decodeIfPresent([VideoResponseDTO].self, forKey: .data)
+            ?? container.decodeIfPresent([VideoResponseDTO].self, forKey: .videos)
+            ?? container.decodeIfPresent([VideoResponseDTO].self, forKey: .items)
+            ?? container.decodeIfPresent([VideoResponseDTO].self, forKey: .results)
+            ?? []
+        let nextCursor = try container.decodeIfPresent(String.self, forKey: .nextCursor)
+        self.init(data: data, nextCursor: nextCursor)
+    }
+
+    private static func normalizedCursor(_ cursor: String?) -> String? {
+        guard let cursor = cursor?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !cursor.isEmpty,
+              cursor != "0" else {
+            return nil
+        }
+
+        return cursor
+    }
+}
+
+struct VideoResponseDTO: Decodable, Sendable {
+    let videoId: String
+    let fileName: String
+    let title: String
+    let description: String
+    let duration: Double
+    let thumbnailURLPath: String
+    let availableQualities: [String]
+    let viewCount: Int
+    let likeCount: Int
+    let isLiked: Bool
+    let createdAt: String
+
+    private enum CodingKeys: String, CodingKey {
+        case videoIdSnake = "video_id"
+        case videoIdCamel = "videoId"
+        case id
+        case underscoreId = "_id"
+        case fileName = "file_name"
+        case title
+        case description
+        case duration
+        case thumbnailURLPath = "thumbnail_url"
+        case availableQualities = "available_qualities"
+        case viewCount = "view_count"
+        case likeCount = "like_count"
+        case isLiked = "is_liked"
+        case createdAt = "createdAt"
+        case createdAtSnake = "created_at"
+    }
+
+    init(
+        videoId: String,
+        fileName: String,
+        title: String,
+        description: String,
+        duration: Double,
+        thumbnailURLPath: String,
+        availableQualities: [String],
+        viewCount: Int,
+        likeCount: Int,
+        isLiked: Bool,
+        createdAt: String
+    ) {
+        self.videoId = videoId
+        self.fileName = fileName
+        self.title = title
+        self.description = description
+        self.duration = duration
+        self.thumbnailURLPath = thumbnailURLPath
+        self.availableQualities = availableQualities
+        self.viewCount = viewCount
+        self.likeCount = likeCount
+        self.isLiked = isLiked
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let videoId = Self.normalizedIdentifier(from: container)
+        self.init(
+            videoId: videoId,
+            fileName: try container.decodeIfPresent(String.self, forKey: .fileName) ?? videoId,
+            title: try container.decodeIfPresent(String.self, forKey: .title) ?? "",
+            description: try container.decodeIfPresent(String.self, forKey: .description) ?? "",
+            duration: try container.decodeIfPresent(Double.self, forKey: .duration) ?? 0,
+            thumbnailURLPath: try container.decodeIfPresent(String.self, forKey: .thumbnailURLPath) ?? "",
+            availableQualities: try container.decodeIfPresent([String].self, forKey: .availableQualities) ?? [],
+            viewCount: try container.decodeIfPresent(Int.self, forKey: .viewCount) ?? 0,
+            likeCount: try container.decodeIfPresent(Int.self, forKey: .likeCount) ?? 0,
+            isLiked: try container.decodeIfPresent(Bool.self, forKey: .isLiked) ?? false,
+            createdAt: try container.decodeIfPresent(String.self, forKey: .createdAt)
+                ?? container.decodeIfPresent(String.self, forKey: .createdAtSnake)
+                ?? ""
+        )
+    }
+
+    private static func normalizedIdentifier(from container: KeyedDecodingContainer<CodingKeys>) -> String {
+        for key in [CodingKeys.videoIdSnake, .videoIdCamel, .id, .underscoreId] {
+            if let value = decodeIdentifier(from: container, forKey: key) {
+                return value
+            }
+        }
+
+        return ""
+    }
+
+    private static func decodeIdentifier(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> String? {
+        if let value = try? container.decodeIfPresent(String.self, forKey: key) {
+            let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return normalizedValue.isEmpty ? nil : normalizedValue
+        }
+
+        if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return String(value)
+        }
+
+        return nil
+    }
+}
+
+struct StreamUrlResponseDTO: Decodable, Sendable {
+    let videoId: String
+    let streamURLPath: String
+    let defaultQuality: String?
+    let qualities: [VideoStreamQualityDTO]
+    let subtitles: [VideoSubtitleDTO]
+
+    private enum CodingKeys: String, CodingKey {
+        case videoId = "video_id"
+        case videoIdCamel = "videoId"
+        case streamURLPath = "stream_url"
+        case streamURLCamel = "streamUrl"
+        case url
+        case defaultQuality = "default_quality"
+        case defaultQualityCamel = "defaultQuality"
+        case qualities
+        case subtitles
+    }
+
+    init(
+        videoId: String,
+        streamURLPath: String,
+        defaultQuality: String? = nil,
+        qualities: [VideoStreamQualityDTO],
+        subtitles: [VideoSubtitleDTO]
+    ) {
+        self.videoId = videoId
+        self.streamURLPath = streamURLPath
+        self.defaultQuality = defaultQuality
+        self.qualities = qualities
+        self.subtitles = subtitles
+        Self.logDecodedStream(
+            videoId: videoId,
+            streamURLPath: streamURLPath,
+            qualities: qualities
+        )
+    }
+
+    init(
+        videoId: String,
+        streamURLPath: String,
+        qualities: [VideoStreamQualityDTO],
+        subtitles: [VideoSubtitleDTO]
+    ) {
+        self.init(
+            videoId: videoId,
+            streamURLPath: streamURLPath,
+            defaultQuality: nil,
+            qualities: qualities,
+            subtitles: subtitles
+        )
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            videoId: try container.decodeIfPresent(String.self, forKey: .videoId)
+                ?? container.decodeIfPresent(String.self, forKey: .videoIdCamel)
+                ?? "",
+            streamURLPath: try container.decodeIfPresent(String.self, forKey: .streamURLPath)
+                ?? container.decodeIfPresent(String.self, forKey: .streamURLCamel)
+                ?? container.decodeIfPresent(String.self, forKey: .url)
+                ?? "",
+            defaultQuality: try container.decodeIfPresent(String.self, forKey: .defaultQuality)
+                ?? container.decodeIfPresent(String.self, forKey: .defaultQualityCamel),
+            qualities: try container.decodeIfPresent([VideoStreamQualityDTO].self, forKey: .qualities) ?? [],
+            subtitles: try container.decodeIfPresent([VideoSubtitleDTO].self, forKey: .subtitles) ?? []
+        )
+    }
+
+    private static func logDecodedStream(
+        videoId: String,
+        streamURLPath: String,
+        qualities: [VideoStreamQualityDTO]
+    ) {
+        let logger = Logger(category: "VideoStreamDTO")
+        let streamDescriptor = VideoURLLogDescriptor(rawValue: streamURLPath)
+        logger.debug(
+            "[VideoStreamDTO] videoID=\(videoId) streamURLRawExists=\(!streamURLPath.isEmpty) streamURLPath=\(streamDescriptor.path) rawQueryExists=\(streamDescriptor.queryExists) queryKeys=\(streamDescriptor.queryKeys) rawQueryKeyCount=\(streamDescriptor.queryKeyCount) rawQueryLength=\(streamDescriptor.rawQueryLength) percentEncodedQueryLength=\(streamDescriptor.percentEncodedQueryLength) tokenLength=\(streamDescriptor.tokenValueLength)"
+        )
+        logger.debug(
+            "[VideoStreamDTO] quality=auto rawPath=\(streamDescriptor.path) queryExists=\(streamDescriptor.queryExists) queryKeys=\(streamDescriptor.queryKeys) queryKeyCount=\(streamDescriptor.queryKeyCount)"
+        )
+
+        for quality in qualities {
+            let descriptor = VideoURLLogDescriptor(rawValue: quality.urlPath)
+            logger.debug(
+                "[VideoStreamDTO] quality=\(quality.quality) rawPath=\(descriptor.path) queryExists=\(descriptor.queryExists) queryKeys=\(descriptor.queryKeys) queryKeyCount=\(descriptor.queryKeyCount)"
+            )
+        }
+    }
+}
+
+struct VideoStreamQualityDTO: Decodable, Sendable {
+    let quality: String
+    let urlPath: String
+
+    private enum CodingKeys: String, CodingKey {
+        case quality
+        case urlPath = "url"
+    }
+}
+
+struct VideoSubtitleDTO: Decodable, Sendable {
+    let language: String
+    let name: String
+    let isDefault: Bool
+    let urlPath: String
+
+    private enum CodingKeys: String, CodingKey {
+        case language
+        case name
+        case isDefault = "is_default"
+        case urlPath = "url"
+    }
+}
+
+struct VideoLikeRequestDTO: Encodable, Sendable {
+    let likeStatus: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case likeStatus = "like_status"
+    }
+}
+
+struct VideoLikeResponseDTO: Decodable, Sendable {
+    let likeStatus: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case likeStatus = "like_status"
+    }
+}

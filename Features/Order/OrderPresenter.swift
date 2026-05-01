@@ -8,7 +8,9 @@ final class OrderPresenter: ObservableObject {
     private let interactor: OrderInteracting
     private let router: OrderRouting
     private let paymentReceiptCache: PaymentReceiptCache
-    private let transitionPolicy = OrderStatusTransitionPolicy()
+    private let transitionResolver = OrderStatusTransitionResolver()
+    private let cancelPolicyResolver = OrderCancelPolicyResolver()
+    private let reviewEligibilityResolver = OrderReviewEligibilityResolver()
     private let currencyFormatter = CurrencyFormatter()
     private let dateParser = DateParser()
 
@@ -20,6 +22,14 @@ final class OrderPresenter: ObservableObject {
     private var paymentReceiptRequestsInFlight = Set<String>()
     private var inFlightOrderStatusUpdateOrderCodes = Set<String>()
     private var lastSuccessfulOrderStatusByOrderCode: [String: OrderStatus] = [:]
+    private var lastLoggedOrderViewStateByOrderCode: [String: OrderViewStateLogSnapshot] = [:]
+    private var lastLoggedReviewEligibilityByOrderCode: [String: ReviewEligibilityLogSnapshot] = [:]
+    private var lastLoggedOrderMappingByOrderCode: [String: OrderMappingLogSnapshot] = [:]
+    private var lastLoggedPaymentAutoFetchDecisionByOrderCode: [String: PaymentAutoFetchLogSnapshot] = [:]
+    private var lastLoggedReviewEligibilitySummary: ReviewEligibilitySummaryLogSnapshot?
+    private var noPaymentEvidenceCache: [String: Date] = [:]
+    private var currentReviewEligibilitySummary = ReviewEligibilitySummary()
+    private var orderListRequestID = 0
     private var cancellables = Set<AnyCancellable>()
 
     init(
@@ -56,7 +66,7 @@ final class OrderPresenter: ObservableObject {
         case .filterTapped(let filter):
             guard viewState.selectedFilter != filter else { return }
             viewState.selectedFilter = filter
-            applyOrders(resetErrorMessage: false)
+            applyOrders(resetErrorMessage: false, reason: "filter")
             await attemptAutoNavigationIfNeeded()
 
         case .orderTapped(let orderID):
@@ -99,6 +109,8 @@ final class OrderPresenter: ObservableObject {
     private func loadOrders(mode: LoadingMode) async -> Bool {
         guard !isRequestInFlight else { return false }
         isRequestInFlight = true
+        orderListRequestID += 1
+        let requestID = orderListRequestID
         setLoadingFlags(for: mode, isLoading: true)
         if mode != .loadMore {
             viewState.errorMessage = nil
@@ -110,8 +122,8 @@ final class OrderPresenter: ObservableObject {
                 cursor: mode == .loadMore ? viewState.nextCursor : nil,
                 filter: viewState.selectedFilter
             )
-            await merge(page: page, mode: mode)
-            applyOrders(resetErrorMessage: true)
+            await merge(page: page, mode: mode, requestID: requestID)
+            applyOrders(resetErrorMessage: true, reason: mode.logReason)
             await attemptAutoNavigationIfNeeded()
         } catch {
             apply(error: error, mode: mode)
@@ -125,7 +137,7 @@ final class OrderPresenter: ObservableObject {
         return true
     }
 
-    private func merge(page: CursorPage<OrderSummary>, mode: LoadingMode) async {
+    private func merge(page: CursorPage<OrderSummary>, mode: LoadingMode, requestID: Int) async {
         switch mode {
         case .initial, .refresh:
             allOrders = deduplicated(page.items)
@@ -139,12 +151,16 @@ final class OrderPresenter: ObservableObject {
         viewState.canLoadMore = viewState.nextCursor != nil
         viewState.emptyState = nil
         viewState.requiresAuthentication = false
-        await preparePaymentVerificationStates(for: allOrders)
+        await preparePaymentVerificationStates(for: allOrders, requestID: requestID, source: "ordersDTO")
     }
 
-    private func applyOrders(resetErrorMessage: Bool) {
+    private func applyOrders(resetErrorMessage: Bool, reason: String) {
         let filteredOrders = allOrders.filter { viewState.selectedFilter.includes(status: $0.status) }
-        viewState.orders = filteredOrders.map(mapListItem)
+        currentReviewEligibilitySummary = ReviewEligibilitySummary()
+        let mappedOrders = filteredOrders.map(mapListItem)
+        logOrderViewStateDiff(mappedOrders, reason: reason)
+        logReviewEligibilitySummary(total: mappedOrders.count)
+        viewState.orders = mappedOrders
 
         if resetErrorMessage {
             viewState.errorMessage = nil
@@ -228,12 +244,47 @@ final class OrderPresenter: ObservableObject {
             paymentVerificationState: paymentVerificationState
         )
         let allowedNextStatus = transitionDecision.allowedNextStatus
-        let isCancelEnabled = transitionPolicy.canCancel(status: currentStatus)
-        let isReviewWritable = transitionPolicy.reviewWritable(status: currentStatus, reviewID: order.reviewID)
-        let reviewDisabledReasonText = transitionPolicy.reviewDisabledReason(status: currentStatus, reviewID: order.reviewID)
-
-        Logger.shared.debug(
-            "[OrderViewState] cell orderCode=\(order.orderCode) status=\(currentStatus.apiValue) next=\(allowedNextStatus?.apiValue ?? "nil") isStatusChangeEnabled=\(transitionDecision.isStatusChangeEnabled) isCancelEnabled=\(isCancelEnabled) isReviewWritable=\(isReviewWritable)"
+        let cancelPolicy = cancelPolicyResolver.policy(
+            rawStatus: order.status,
+            mappedStatus: currentStatus,
+            paid: isPaymentVerified,
+            paymentLookupKey: order.paymentLookupKey,
+            paymentID: order.paymentID,
+            merchantUID: order.merchantUID,
+            impUID: order.impUID
+        )
+        let canShowCancelButton = cancelPolicy.canShowCancelButton
+        let isCancelEnabled = cancelPolicy.canExecuteCancel
+        let reviewEligibility = reviewEligibilityResolver.decision(
+            storeID: order.storeID,
+            status: currentStatus,
+            paymentVerificationState: paymentVerificationState,
+            reviewID: order.reviewID
+        )
+        currentReviewEligibilitySummary.record(decision: reviewEligibility)
+        logReviewEligibility(
+            order: order,
+            status: currentStatus,
+            paymentVerificationState: paymentVerificationState,
+            decision: reviewEligibility
+        )
+        let displayStatusTitle = statusTitle(
+            for: currentStatus,
+            paymentVerificationState: paymentVerificationState
+        )
+        logOrderState(
+            order: order,
+            mappedStatus: currentStatus,
+            paymentVerificationState: paymentVerificationState,
+            canCancel: canShowCancelButton,
+            canChangeStatus: transitionDecision.isStatusChangeEnabled,
+            reviewEligibilityReason: reviewEligibility.reason
+        )
+        logOrderCancelPolicy(
+            order: order,
+            mappedStatus: currentStatus,
+            paymentVerificationState: paymentVerificationState,
+            policy: cancelPolicy
         )
 
         return OrderListItemViewState(
@@ -242,9 +293,9 @@ final class OrderPresenter: ObservableObject {
             storeName: order.storeName,
             storeImagePath: order.storeImagePath,
             status: currentStatus,
-            statusTitle: currentStatus.displayTitle,
+            statusTitle: displayStatusTitle,
             currentStatus: currentStatus,
-            currentStatusTitle: currentStatus.displayTitle,
+            currentStatusTitle: displayStatusTitle,
             statusSteps: makeProgressSteps(for: currentStatus),
             primaryItemText: primaryItemText,
             itemRows: order.itemSummaries.map(makeMenuItemRow),
@@ -257,7 +308,7 @@ final class OrderPresenter: ObservableObject {
                 return String(format: "%.1f", value)
             },
             isHighlighted: order.id == viewState.highlightedOrderID,
-            canCancel: isCancelEnabled,
+            canCancel: canShowCancelButton,
             isCancelling: viewState.cancellingOrderIDs.contains(order.id),
             isStatusUpdating: inFlightOrderStatusUpdateOrderCodes.contains(order.orderCode),
             paymentVerificationState: paymentVerificationState,
@@ -268,12 +319,16 @@ final class OrderPresenter: ObservableObject {
             isStatusChangeEnabled: transitionDecision.isStatusChangeEnabled,
             statusChangeMessage: transitionDecision.disabledReasonText,
             disabledReasonText: transitionDecision.disabledReasonText,
-            canRefreshPaymentReceipt: paymentVerificationState.shouldShowRefreshAction,
+            cancelDisabledReasonText: cancelPolicy.userMessage,
+            canRefreshPaymentReceipt: canRefreshPaymentReceipt(
+                for: order,
+                paymentVerificationState: paymentVerificationState
+            ),
             isCancelEnabled: isCancelEnabled,
-            isReviewWritable: isReviewWritable,
-            reviewDisabledReasonText: reviewDisabledReasonText,
+            isReviewWritable: reviewEligibility.isWritable,
+            reviewDisabledReasonText: reviewEligibility.disabledReasonText,
             isPastOrder: currentStatus.isTerminal,
-            canWriteReview: isReviewWritable
+            canWriteReview: reviewEligibility.isWritable
         )
     }
 
@@ -287,19 +342,148 @@ final class OrderPresenter: ObservableObject {
         )
     }
 
+    private func statusTitle(
+        for status: OrderStatus,
+        paymentVerificationState: PaymentVerificationState
+    ) -> String {
+        guard !paymentVerificationState.isVerified,
+              !status.isTerminal else {
+            return status.displayTitle
+        }
+        return "결제 확인중"
+    }
+
+    private func canRefreshPaymentReceipt(
+        for order: OrderSummary,
+        paymentVerificationState: PaymentVerificationState
+    ) -> Bool {
+        guard paymentVerificationState.shouldShowRefreshAction else {
+            return false
+        }
+        return order.paymentEvidenceSource != "none"
+    }
+
+    private func logOrderState(
+        order: OrderSummary,
+        mappedStatus: OrderStatus,
+        paymentVerificationState: PaymentVerificationState,
+        canCancel: Bool,
+        canChangeStatus: Bool,
+        reviewEligibilityReason: String
+    ) {
+        Logger.shared.debug(
+            "[OrderState] orderCode=\(order.orderCode) rawOrderStatus=\(order.status.apiValue) mappedOrderStatus=\(mappedStatus.apiValue) paid=\(paymentVerificationState.isVerified) paidAtExists=\(order.paidAt != nil) receiptExists=\(order.receiptExists) receiptUrlExists=\(order.receiptURL != nil) paymentEvidenceSource=\(order.paymentEvidenceSource) canCancel=\(canCancel) canChangeStatus=\(canChangeStatus) reviewEligibilityReason=\(reviewEligibilityReason)"
+        )
+    }
+
+    private func logOrderCancelPolicy(
+        order: OrderSummary,
+        mappedStatus: OrderStatus,
+        paymentVerificationState: PaymentVerificationState,
+        policy: OrderCancelPolicy
+    ) {
+        Logger.shared.debug(
+            "[OrderCancelPolicy] orderCode=\(order.orderCode) rawStatus=\(order.status.apiValue) mappedStatus=\(mappedStatus.apiValue) paid=\(paymentVerificationState.isVerified) evidence=\(order.paymentEvidenceSource) paymentId=\(maskedPaymentLookupValue(order.paymentID)) impUid=\(maskedPaymentLookupValue(order.impUID)) merchantUid=\(maskedPaymentLookupValue(order.merchantUID)) canShowCancelButton=\(policy.canShowCancelButton) canExecuteCancel=\(policy.canExecuteCancel) reason=\(policy.reason.rawValue) cancelEndpointAvailable=\(policy.cancelEndpointAvailable) hasPaymentIdentifier=\(policy.hasPaymentIdentifier) debugReason=\(policy.debugReason)"
+        )
+        Logger.shared.debug(
+            "[OrderCancelRender] orderCode=\(order.orderCode) rawStatus=\(order.status.apiValue) paid=\(paymentVerificationState.isVerified) canShowCancelButton=\(policy.canShowCancelButton) strategy=\(policy.strategy.rawValue)"
+        )
+    }
+
+    private func logOrderViewStateDiff(_ orders: [OrderListItemViewState], reason: String) {
+        let nextSnapshots = Dictionary(
+            uniqueKeysWithValues: orders.map { order in
+                (
+                    order.orderCode,
+                    OrderViewStateLogSnapshot(
+                        status: order.status,
+                        allowedNextStatus: order.allowedNextStatus,
+                        isStatusChangeEnabled: order.isStatusChangeEnabled,
+                        isReviewWritable: order.isReviewWritable
+                    )
+                )
+            }
+        )
+        let changedOrderCodes = orders.compactMap { order -> String? in
+            guard let previous = lastLoggedOrderViewStateByOrderCode[order.orderCode] else {
+                return nil
+            }
+            return previous != nextSnapshots[order.orderCode] ? order.orderCode : nil
+        }
+
+        if !changedOrderCodes.isEmpty {
+            Logger.shared.debug(
+                "[OrderViewState] diff reason=\(reason) changedOrderCodes=\(changedOrderCodes) total=\(orders.count)"
+            )
+        }
+
+        lastLoggedOrderViewStateByOrderCode = nextSnapshots
+    }
+
+    private func logReviewEligibility(
+        order: OrderSummary,
+        status: OrderStatus,
+        paymentVerificationState: PaymentVerificationState,
+        decision: OrderReviewEligibilityDecision
+    ) {
+        let snapshot = ReviewEligibilityLogSnapshot(
+            storeID: order.storeID,
+            status: status,
+            paymentVerificationState: paymentVerificationState,
+            alreadyReviewed: decision.alreadyReviewed,
+            matchedReviewID: decision.matchedReviewID,
+            isWritable: decision.isWritable,
+            reason: decision.reason
+        )
+        let previous = lastLoggedReviewEligibilityByOrderCode[order.orderCode]
+        guard previous != snapshot else {
+            Logger.shared.debugVerbose(
+                "[ReviewEligibility] orderCode=\(order.orderCode) storeId=\(order.storeID.isEmpty ? "nil" : order.storeID) status=\(status.apiValue) paymentState=\(paymentVerificationState.logValue) alreadyReviewed=\(decision.alreadyReviewed) matchedReviewId=\(decision.matchedReviewID ?? "nil") isWritable=\(decision.isWritable) reason=\(decision.reason)"
+            )
+            return
+        }
+
+        lastLoggedReviewEligibilityByOrderCode[order.orderCode] = snapshot
+        guard let previous else {
+            Logger.shared.debugVerbose(
+                "[ReviewEligibility] orderCode=\(order.orderCode) storeId=\(order.storeID.isEmpty ? "nil" : order.storeID) status=\(status.apiValue) paymentState=\(paymentVerificationState.logValue) alreadyReviewed=\(decision.alreadyReviewed) matchedReviewId=\(decision.matchedReviewID ?? "nil") isWritable=\(decision.isWritable) reason=\(decision.reason)"
+            )
+            return
+        }
+        Logger.shared.debug(
+            "[ReviewEligibility] changed orderCode=\(order.orderCode) previousWritable=\(previous.isWritable) isWritable=\(decision.isWritable) reason=\(decision.reason) matchedReviewId=\(decision.matchedReviewID ?? "nil")"
+        )
+    }
+
+    private func logReviewEligibilitySummary(total: Int) {
+        let snapshot = ReviewEligibilitySummaryLogSnapshot(
+            total: total,
+            writable: currentReviewEligibilitySummary.writable,
+            alreadyReviewed: currentReviewEligibilitySummary.alreadyReviewed,
+            notPickedUp: currentReviewEligibilitySummary.notPickedUp
+        )
+        guard lastLoggedReviewEligibilitySummary != snapshot else {
+            Logger.shared.debugVerbose(
+                "[ReviewEligibility] summary total=\(snapshot.total) writable=\(snapshot.writable) alreadyReviewed=\(snapshot.alreadyReviewed) notPickedUp=\(snapshot.notPickedUp)"
+            )
+            return
+        }
+        lastLoggedReviewEligibilitySummary = snapshot
+        Logger.shared.debug(
+            "[ReviewEligibility] summary total=\(snapshot.total) writable=\(snapshot.writable) alreadyReviewed=\(snapshot.alreadyReviewed) notPickedUp=\(snapshot.notPickedUp)"
+        )
+    }
+
     private func transitionDecision(
         orderCode: String,
         currentStatus: OrderStatus,
         paymentVerificationState: PaymentVerificationState
     ) -> OrderStatusTransitionDecision {
-        let decision = transitionPolicy.decision(
+        _ = orderCode
+        return transitionResolver.decision(
             currentStatus: currentStatus,
             paymentVerificationState: paymentVerificationState
         )
-        Logger.shared.debug(
-            "[OrderStatus] allowedTransition orderCode=\(orderCode) currentStatus=\(currentStatus.apiValue) allowedNextStatus=\(decision.allowedNextStatus?.apiValue ?? "nil") paymentVerificationState=\(paymentVerificationState.logValue)"
-        )
-        return decision
     }
 
     private func makeProgressSteps(for status: OrderStatus) -> [OrderProgressStepViewState] {
@@ -337,30 +521,87 @@ final class OrderPresenter: ObservableObject {
     }
 
     private func cancelOrder(orderID: String) async {
-        guard let order = allOrders.first(where: { $0.id == orderID }),
-              transitionPolicy.canCancel(status: effectiveStatus(for: order)),
-              !viewState.cancellingOrderIDs.contains(orderID) else { return }
+        guard let order = allOrders.first(where: { $0.id == orderID }) else { return }
+        let paymentVerificationState = paymentVerificationStates[order.orderCode] ?? .unchecked
+        let effectiveStatus = effectiveStatus(for: order)
+        let cancelPolicy = cancelPolicyResolver.policy(
+            rawStatus: order.status,
+            mappedStatus: effectiveStatus,
+            paid: paymentVerificationState.isVerified,
+            paymentLookupKey: order.paymentLookupKey,
+            paymentID: order.paymentID,
+            merchantUID: order.merchantUID,
+            impUID: order.impUID
+        )
+        Logger.shared.debug(
+            "[OrderCancel] tapped orderCode=\(order.orderCode) strategy=\(cancelPolicy.strategy.rawValue)"
+        )
+        guard cancelPolicy.canExecuteCancel else {
+            Logger.shared.debug(
+                "[OrderCancel] request method=none path=none orderCode=\(order.orderCode) strategy=\(cancelPolicy.strategy.rawValue)"
+            )
+            Logger.shared.warning(
+                "[OrderCancel] failed orderCode=\(order.orderCode) statusCode=none serverMessage=\(cancelPolicy.userMessage ?? "unsupported") strategy=\(cancelPolicy.strategy.rawValue)"
+            )
+            viewState.errorMessage = cancelPolicy.userMessage ?? "현재 주문은 앱에서 취소할 수 없어요."
+            applyOrders(resetErrorMessage: false, reason: "cancelBlocked")
+            return
+        }
+        guard !viewState.cancellingOrderIDs.contains(orderID) else { return }
 
         viewState.cancellingOrderIDs.insert(orderID)
         viewState.errorMessage = nil
         viewState.successMessage = nil
-        applyOrders(resetErrorMessage: false)
+        applyOrders(resetErrorMessage: false, reason: "cancelStart")
 
         do {
-            let detail = try await interactor.cancelOrder(orderCode: order.orderCode)
-            applyStatus(orderCode: order.orderCode, status: .cancelled)
+            let detail: OrderDetail
+            switch cancelPolicy.strategy {
+            case .serverOrderCancel:
+                Logger.shared.debug(
+                    "[OrderCancel] request method=none path=none orderCode=\(order.orderCode) strategy=\(cancelPolicy.strategy.rawValue)"
+                )
+                detail = try await interactor.cancelOrder(orderCode: order.orderCode)
+            case .serverPaymentCancel:
+                Logger.shared.debug(
+                    "[OrderCancel] request method=none path=none orderCode=\(order.orderCode) strategy=\(cancelPolicy.strategy.rawValue)"
+                )
+                detail = try await interactor.cancelOrder(orderCode: order.orderCode)
+            case .localPendingCancel:
+                detail = try await interactor.cancelPendingOrderLocally(orderCode: order.orderCode)
+            case .unsupported:
+                throw OrderFeatureError.unavailable(message: cancelPolicy.userMessage ?? "현재 주문은 앱에서 취소할 수 없어요.")
+            }
             if detail.orderID != detail.orderCode || detail.storeID.isEmpty == false {
                 upsert(detail: detail)
             }
-            viewState.successMessage = "주문이 취소되었어요."
+            Logger.shared.debug("[OrderCancel] success orderCode=\(order.orderCode)")
+            _ = await loadOrders(mode: .refresh)
+            viewState.successMessage = cancelPolicy.strategy == .serverPaymentCancel
+                ? "주문과 결제가 취소되었어요."
+                : "주문이 취소되었어요."
         } catch {
             let featureError = (error as? OrderFeatureError)
                 ?? .unavailable(message: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
-            viewState.errorMessage = featureError.userMessage
+            Logger.shared.warning(
+                "[OrderCancel] failed orderCode=\(order.orderCode) statusCode=unknown serverMessage=\(featureError.userMessage) strategy=\(cancelPolicy.strategy.rawValue)"
+            )
+            _ = await loadOrders(mode: .refresh)
+            viewState.errorMessage = cancelFailureUserMessage(from: featureError, fallback: cancelPolicy.userMessage)
         }
 
         viewState.cancellingOrderIDs.remove(orderID)
-        applyOrders(resetErrorMessage: false)
+        applyOrders(resetErrorMessage: false, reason: "cancelEnd")
+    }
+
+    private func cancelFailureUserMessage(from error: OrderFeatureError, fallback: String?) -> String {
+        if error.userMessage.contains("결제가 완료된 주문만") {
+            return "아직 결제 확인이 완료되지 않아 취소할 수 없어요."
+        }
+        if error.userMessage.contains("transport") {
+            return "네트워크 연결을 확인한 뒤 다시 시도해주세요."
+        }
+        return fallback ?? "주문 취소에 실패했어요. 잠시 후 다시 시도해주세요."
     }
 
     private func handleStatusSelection(orderCode: String, currentStatus: OrderStatus, nextStatus: OrderStatus) {
@@ -377,7 +618,7 @@ final class OrderPresenter: ObservableObject {
                 "[OrderStatus] requestSkipped reason=staleCell orderCode=\(orderCode) selectedCurrentStatus=\(currentStatus.apiValue) serverCurrentStatus=\(effectiveCurrentStatus.apiValue) attemptedNextStatus=\(nextStatus.apiValue)"
             )
             viewState.errorMessage = "주문 상태가 변경되어 최신 상태를 기준으로 다시 확인해 주세요."
-            applyOrders(resetErrorMessage: false)
+            applyOrders(resetErrorMessage: false, reason: "staleStatusSelection")
             return
         }
         if inFlightOrderStatusUpdateOrderCodes.contains(orderCode) {
@@ -401,14 +642,13 @@ final class OrderPresenter: ObservableObject {
         ).allowedNextStatus
         let isValidSelection = allowedNextStatus == nextStatus
         Logger.shared.debug(
-            "[OrderStatus] selectionChanged orderCode=\(orderCode) currentStatus=\(effectiveCurrentStatus.apiValue) selectedNextStatus=\(nextStatus.apiValue) isValidSelection=\(isValidSelection)"
+            "[OrderStatus] selectionChanged orderCode=\(orderCode) currentStatus=\(effectiveCurrentStatus.apiValue) selectedNextStatus=\(nextStatus.apiValue) allowedNextStatus=\(allowedNextStatus?.apiValue ?? "nil") isValidSelection=\(isValidSelection)"
         )
-        if effectiveCurrentStatus.requiresPaymentVerification(to: nextStatus),
-           !currentPaymentVerificationState.isVerified {
+        if !currentPaymentVerificationState.isVerified {
             Logger.shared.debug(
                 "[OrderStatus] requestSkipped reason=notPaymentVerified orderCode=\(orderCode) currentStatus=\(effectiveCurrentStatus.apiValue) attemptedNextStatus=\(nextStatus.apiValue)"
             )
-            viewState.errorMessage = "결제 검증 완료 후 상태 변경이 가능합니다."
+            viewState.errorMessage = "결제 완료 확인 후 상태를 변경할 수 있어요."
             return
         }
         guard allowedNextStatus == nextStatus else {
@@ -436,7 +676,7 @@ final class OrderPresenter: ObservableObject {
             Logger.shared.warning(
                 "[OrderStatus] requestSkipped reason=staleCell orderCode=\(orderCode) selectedCurrentStatus=\(selectedCurrentStatus.apiValue) serverCurrentStatus=\(effectiveCurrentStatus.apiValue) attemptedNextStatus=\(nextStatus.apiValue)"
             )
-            applyOrders(resetErrorMessage: false)
+            applyOrders(resetErrorMessage: false, reason: "staleStatusConfirm")
             viewState.errorMessage = "주문 상태가 변경되어 최신 상태를 기준으로 다시 확인해 주세요."
             return
         }
@@ -471,13 +711,11 @@ final class OrderPresenter: ObservableObject {
         Logger.shared.debug(
             "[OrderStatus] eligibility orderCode=\(orderCode) rawPaymentVerificationState=\(order.paymentVerificationState ?? "unchecked") mergedPaymentVerificationState=\(currentPaymentVerificationState.logValue) isPaymentVerified=\(currentPaymentVerificationState.isVerified) currentStatus=\(effectiveCurrentStatus.apiValue) allowedNextStatus=\(allowedNextStatus?.apiValue ?? "nil")"
         )
-        if let serverAllowedNextStatus = effectiveCurrentStatus.allowedNextStatus,
-           effectiveCurrentStatus.requiresPaymentVerification(to: serverAllowedNextStatus),
-           !currentPaymentVerificationState.isVerified {
+        if !currentPaymentVerificationState.isVerified {
             Logger.shared.debug(
                 "[OrderStatus] requestSkipped reason=notPaymentVerified orderCode=\(orderCode) currentStatus=\(effectiveCurrentStatus.apiValue) attemptedNextStatus=\(nextStatus.apiValue)"
             )
-            viewState.errorMessage = "결제 검증 완료 후 상태 변경이 가능합니다."
+            viewState.errorMessage = "결제 완료 확인 후 상태를 변경할 수 있어요."
             return
         }
         guard allowedNextStatus == nextStatus else {
@@ -495,16 +733,16 @@ final class OrderPresenter: ObservableObject {
         viewState.statusUpdatingOrderCodes.insert(orderCode)
         viewState.errorMessage = nil
         viewState.successMessage = nil
-        applyOrders(resetErrorMessage: false)
+        applyOrders(resetErrorMessage: false, reason: "statusChangeStart")
 
         do {
             Logger.shared.debug(
-                "[OrderStatus] request PUT orderCode=\(orderCode) body={\"nextStatus\":\"\(nextStatus.apiValue)\"}"
+                "[OrderStatus] submit orderCode=\(orderCode) nextStatus=\(nextStatus.apiValue)"
             )
             try await interactor.updateOrderStatus(orderCode: orderCode, status: nextStatus)
             lastSuccessfulOrderStatusByOrderCode[orderCode] = nextStatus
             applyStatus(orderCode: orderCode, status: nextStatus)
-            applyOrders(resetErrorMessage: false)
+            applyOrders(resetErrorMessage: false, reason: "statusOptimistic")
             Logger.shared.debug(
                 "[OrderStatus] success orderCode=\(orderCode) previousStatus=\(effectiveCurrentStatus.apiValue) nextStatus=\(nextStatus.apiValue)"
             )
@@ -523,12 +761,14 @@ final class OrderPresenter: ObservableObject {
                 paymentVerificationStates[orderCode] = .failed(featureError.userMessage)
             }
             _ = await loadOrders(mode: .refresh)
-            viewState.errorMessage = featureError.userMessage
+            viewState.errorMessage = featureError.userMessage.contains("결제가 완료된 주문만")
+                ? "결제 완료 확인 후 상태를 변경할 수 있어요."
+                : featureError.userMessage
         }
 
         inFlightOrderStatusUpdateOrderCodes.remove(orderCode)
         viewState.statusUpdatingOrderCodes.remove(orderCode)
-        applyOrders(resetErrorMessage: false)
+        applyOrders(resetErrorMessage: false, reason: "statusChangeEnd")
     }
 
     private func effectiveStatus(for order: OrderSummary) -> OrderStatus {
@@ -539,10 +779,6 @@ final class OrderPresenter: ObservableObject {
         return lastSuccessfulStatus
     }
 
-    private func statusSource(for order: OrderSummary) -> String {
-        effectiveStatus(for: order) == order.status ? "server" : "lastSuccessfulLocal"
-    }
-
     private func orderStatusFailureStatusCode(from error: OrderFeatureError) -> String {
         if error.userMessage.contains("요청한 주문 상태로 변경할 수 없습니다") {
             return "400"
@@ -550,16 +786,51 @@ final class OrderPresenter: ObservableObject {
         return "unknown"
     }
 
-    private func preparePaymentVerificationStates(for orders: [OrderSummary]) async {
+    private func logOrderMappingChange(
+        orderCode: String,
+        previous: OrderMappingLogSnapshot?,
+        snapshot: OrderMappingLogSnapshot,
+        receiptExists: Bool,
+        mergeSource: String
+    ) {
+        guard let previous else {
+            Logger.shared.debugVerbose(
+                "[OrderMapping] statusMerge orderCode=\(orderCode) dtoStatus=\(snapshot.dtoStatus.apiValue) localOverrideStatus=\(snapshot.localOverrideStatus?.apiValue ?? "nil") finalStatus=\(snapshot.finalStatus.apiValue) cachedPaymentState=\(snapshot.cachedPaymentState) finalPaymentState=\(snapshot.finalPaymentState) finalReceiptExists=\(receiptExists) source=\(mergeSource) statusSource=\(snapshot.statusSource)"
+            )
+            return
+        }
+
+        guard previous != snapshot else {
+            Logger.shared.debugVerbose(
+                "[OrderMapping] statusMerge orderCode=\(orderCode) dtoStatus=\(snapshot.dtoStatus.apiValue) localOverrideStatus=\(snapshot.localOverrideStatus?.apiValue ?? "nil") finalStatus=\(snapshot.finalStatus.apiValue) cachedPaymentState=\(snapshot.cachedPaymentState) finalPaymentState=\(snapshot.finalPaymentState) finalReceiptExists=\(receiptExists) source=\(mergeSource) statusSource=\(snapshot.statusSource)"
+            )
+            return
+        }
+
+        if previous.finalStatus != snapshot.finalStatus
+            || previous.finalPaymentState != snapshot.finalPaymentState
+            || previous.cachedPaymentState != snapshot.cachedPaymentState {
+            Logger.shared.debug(
+                "[OrderMapping] changed orderCode=\(orderCode) previousStatus=\(previous.finalStatus.apiValue) finalStatus=\(snapshot.finalStatus.apiValue) previousPaymentState=\(previous.finalPaymentState) finalPaymentState=\(snapshot.finalPaymentState)"
+            )
+        } else {
+            Logger.shared.debugVerbose(
+                "[OrderMapping] statusMerge orderCode=\(orderCode) dtoStatus=\(snapshot.dtoStatus.apiValue) localOverrideStatus=\(snapshot.localOverrideStatus?.apiValue ?? "nil") finalStatus=\(snapshot.finalStatus.apiValue) cachedPaymentState=\(snapshot.cachedPaymentState) finalPaymentState=\(snapshot.finalPaymentState) finalReceiptExists=\(receiptExists) source=\(mergeSource) statusSource=\(snapshot.statusSource)"
+            )
+        }
+    }
+
+    private func preparePaymentVerificationStates(for orders: [OrderSummary], requestID: Int, source: String) async {
         let orderCodes = Set(orders.map(\.orderCode))
         paymentVerificationStates = paymentVerificationStates.filter { orderCodes.contains($0.key) }
         lastSuccessfulOrderStatusByOrderCode = lastSuccessfulOrderStatusByOrderCode.filter { orderCodes.contains($0.key) }
+        lastLoggedOrderMappingByOrderCode = lastLoggedOrderMappingByOrderCode.filter { orderCodes.contains($0.key) }
+        noPaymentEvidenceCache = noPaymentEvidenceCache.filter { orderCodes.contains($0.key) && !$0.value.isExpired }
+        var changedStatusCount = 0
+        var changedPaymentCount = 0
         for order in orders {
             let existingState = paymentVerificationStates[order.orderCode]
             let cacheState = await paymentReceiptCache.state(for: order.orderCode)
-            Logger.shared.debug(
-                "[OrderMapping] receiptCache orderCode=\(order.orderCode) cacheState=\(cacheState?.logValue ?? "none")"
-            )
             let merged = mergedPaymentVerificationState(
                 for: order,
                 existingState: existingState,
@@ -573,13 +844,35 @@ final class OrderPresenter: ObservableObject {
             if finalStatus == order.status {
                 lastSuccessfulOrderStatusByOrderCode[order.orderCode] = nil
             }
-            Logger.shared.debug(
-                "[OrderMapping] merged orderCode=\(order.orderCode) orderStatus=\(order.status.apiValue) finalPaymentVerificationState=\(merged.state.logValue) finalReceiptExists=\(merged.receiptExists) source=\(merged.source) orderStatusSource=server"
+            let snapshot = OrderMappingLogSnapshot(
+                dtoStatus: order.status,
+                localOverrideStatus: lastSuccessfulOrderStatusByOrderCode[order.orderCode],
+                finalStatus: finalStatus,
+                cachedPaymentState: cacheState?.logValue ?? "none",
+                finalPaymentState: merged.state.logValue
             )
-            Logger.shared.debug(
-                "[OrderMapping] statusMerge orderCode=\(order.orderCode) dtoStatus=\(order.status.apiValue) cachedPaymentState=\(cacheState?.logValue ?? "none") finalStatus=\(finalStatus.apiValue) finalPaymentState=\(merged.state.logValue) statusSource=\(statusSource(for: order))"
+            let previous = lastLoggedOrderMappingByOrderCode[order.orderCode]
+            if let previous {
+                if previous.finalStatus != snapshot.finalStatus {
+                    changedStatusCount += 1
+                }
+                if previous.finalPaymentState != snapshot.finalPaymentState
+                    || previous.cachedPaymentState != snapshot.cachedPaymentState {
+                    changedPaymentCount += 1
+                }
+            }
+            logOrderMappingChange(
+                orderCode: order.orderCode,
+                previous: previous,
+                snapshot: snapshot,
+                receiptExists: merged.receiptExists,
+                mergeSource: merged.source
             )
+            lastLoggedOrderMappingByOrderCode[order.orderCode] = snapshot
         }
+        Logger.shared.debug(
+            "[OrderMapping] summary requestID=\(requestID) total=\(orders.count) changedStatusCount=\(changedStatusCount) changedPaymentCount=\(changedPaymentCount) source=\(source)"
+        )
     }
 
     private func refreshPaymentReceiptIfNeeded(orderCode: String, force: Bool) async {
@@ -588,26 +881,36 @@ final class OrderPresenter: ObservableObject {
 
         let currentState = paymentVerificationStates[orderCode] ?? .unchecked
         guard force || !currentState.isVerified else { return }
-        let lookup = resolvePaymentReceiptLookup(for: order)
         let cacheState = await paymentReceiptCache.state(for: orderCode)
         let decision = autoFetchDecision(for: order, cacheState: cacheState, force: force)
-        Logger.shared.debug(
-            "[PaymentReceipt] autoFetch decision orderCode=\(order.orderCode) paidAtExists=\(order.paidAt != nil) receiptExists=\(order.receiptExists) cacheState=\(cacheState?.logValue ?? "none") shouldFetch=\(decision.shouldFetch) reason=\(decision.reason)"
+        let decisionSnapshot = PaymentAutoFetchLogSnapshot(
+            paidAtExists: order.paidAt != nil,
+            receiptExists: order.receiptExists,
+            receiptURLExists: order.receiptURL != nil,
+            cacheState: cacheState?.logValue ?? "none",
+            shouldFetch: decision.shouldFetch,
+            reason: decision.reason
         )
 
         if !decision.shouldFetch {
+            logPaymentAutoFetchSkip(order: order, snapshot: decisionSnapshot)
+            if decision.reason == "noPaymentEvidence" {
+                noPaymentEvidenceCache[orderCode] = Date().addingTimeInterval(120)
+            }
             if currentState == .unchecked {
                 if case .unavailable = cacheState {
                     paymentVerificationStates[orderCode] = .failed(receiptUnavailableMessage)
+                    applyOrders(resetErrorMessage: false, reason: "paymentReceiptSkipped")
                 }
-                applyOrders(resetErrorMessage: false)
             }
             return
         }
 
+        let lookup = resolvePaymentReceiptLookup(for: order)
+        logPaymentAutoFetchDecision(order: order, snapshot: decisionSnapshot)
         paymentReceiptRequestsInFlight.insert(orderCode)
         paymentVerificationStates[orderCode] = .checking
-        applyOrders(resetErrorMessage: false)
+        applyOrders(resetErrorMessage: false, reason: "paymentReceiptStart")
         Logger.shared.debug(
             "[PaymentReceipt] request orderCode=\(order.orderCode) selectedKey=\(maskedPaymentLookupValue(lookup.selectedKey))"
         )
@@ -624,17 +927,26 @@ final class OrderPresenter: ObservableObject {
             )
         } catch {
             let statusCode = paymentReceiptStatusCode(from: error)
+            let message = paymentReceiptFailureMessage(from: error)
             if statusCode == "404" {
                 await paymentReceiptCache.markUnavailable(orderCode: orderCode)
             }
+            let cacheStateText = statusCode == "404" ? "unavailable" : "none"
             Logger.shared.warning(
-                "[PaymentReceipt] failed selectedKey=\(lookup.selectedKey) statusCode=\(statusCode) fallback=receiptUnavailable"
+                "[PaymentReceipt] unavailable orderCode=\(orderCode) statusCode=\(statusCode) message=\(message) cacheState=\(cacheStateText)"
             )
-            paymentVerificationStates[orderCode] = .failed(receiptUnavailableMessage)
+            if paymentVerificationState(from: order).isVerified {
+                paymentVerificationStates[orderCode] = .verified
+                Logger.shared.debug(
+                    "[PaymentReceipt] receiptLookupFailedButOrderPaid orderCode=\(orderCode) statusCode=\(statusCode) evidence=\(order.paymentEvidenceSource)"
+                )
+            } else {
+                paymentVerificationStates[orderCode] = .failed(receiptUnavailableMessage)
+            }
         }
 
         paymentReceiptRequestsInFlight.remove(orderCode)
-        applyOrders(resetErrorMessage: false)
+        applyOrders(resetErrorMessage: false, reason: "paymentReceiptEnd")
     }
 
     private func paymentVerificationState(from receipt: PaymentReceipt) -> PaymentVerificationState {
@@ -696,20 +1008,12 @@ final class OrderPresenter: ObservableObject {
     }
 
     private func paymentVerificationState(from order: OrderSummary) -> PaymentVerificationState {
-        let rawState = order.paymentVerificationState?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        switch rawState {
-        case "verified":
+        if order.paymentCompletionEvidence.isCompleted {
             return .verified
-        case "notverified", "not_verified", "failed", "failure":
-            return .notVerified
-        default:
-            break
         }
-
-        if order.paymentStatus?.lowercased() == "paid", order.paidAt != nil {
-            return .verified
+        if order.paymentEvidenceSource == "paymentVerificationState"
+            || order.paymentEvidenceSource == "paymentStatus" {
+            return .notVerified
         }
         return .unchecked
     }
@@ -720,10 +1024,14 @@ final class OrderPresenter: ObservableObject {
         force: Bool
     ) -> PaymentReceiptAutoFetchDecision {
         if force {
+            noPaymentEvidenceCache[order.orderCode] = nil
             return PaymentReceiptAutoFetchDecision(shouldFetch: true, reason: "forceRefresh")
         }
         if case .unavailable = cacheState {
             return PaymentReceiptAutoFetchDecision(shouldFetch: false, reason: "receiptUnavailableCached")
+        }
+        if noPaymentEvidenceCache[order.orderCode]?.isExpired == false {
+            return PaymentReceiptAutoFetchDecision(shouldFetch: false, reason: "noPaymentEvidence")
         }
         if order.receiptExists || order.receiptURL != nil {
             return PaymentReceiptAutoFetchDecision(shouldFetch: true, reason: "receiptHintPresent")
@@ -731,10 +1039,24 @@ final class OrderPresenter: ObservableObject {
         if order.paidAt != nil {
             return PaymentReceiptAutoFetchDecision(shouldFetch: true, reason: "paidAtExists")
         }
+        if hasPaymentLookupEvidence(order) {
+            return PaymentReceiptAutoFetchDecision(shouldFetch: true, reason: "paymentLookupPresent")
+        }
         if order.paymentStatus?.lowercased() == "paid" {
             return PaymentReceiptAutoFetchDecision(shouldFetch: true, reason: "paymentStatusPaid")
         }
         return PaymentReceiptAutoFetchDecision(shouldFetch: false, reason: "noPaymentEvidence")
+    }
+
+    private func hasPaymentLookupEvidence(_ order: OrderSummary) -> Bool {
+        [
+            order.paymentLookupKey,
+            order.paymentID,
+            order.merchantUID,
+            order.impUID
+        ].contains { value in
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
     }
 
     private func resolvePaymentReceiptLookup(for order: OrderSummary) -> PaymentReceiptLookup {
@@ -755,6 +1077,34 @@ final class OrderPresenter: ObservableObject {
         return PaymentReceiptLookup(selectedKey: selectedKey, reason: selected.reason)
     }
 
+    private func logPaymentAutoFetchDecision(order: OrderSummary, snapshot: PaymentAutoFetchLogSnapshot) {
+        let previous = lastLoggedPaymentAutoFetchDecisionByOrderCode[order.orderCode]
+        lastLoggedPaymentAutoFetchDecisionByOrderCode[order.orderCode] = snapshot
+        guard previous != snapshot else {
+            Logger.shared.debugVerbose(
+                "[PaymentReceipt] autoFetch decision orderCode=\(order.orderCode) paidAtExists=\(snapshot.paidAtExists) receiptExists=\(snapshot.receiptExists) receiptUrlExists=\(snapshot.receiptURLExists) cacheState=\(snapshot.cacheState) shouldFetch=\(snapshot.shouldFetch) reason=\(snapshot.reason)"
+            )
+            return
+        }
+        Logger.shared.debug(
+            "[PaymentReceipt] autoFetch decision orderCode=\(order.orderCode) paidAtExists=\(snapshot.paidAtExists) receiptExists=\(snapshot.receiptExists) receiptUrlExists=\(snapshot.receiptURLExists) cacheState=\(snapshot.cacheState) shouldFetch=\(snapshot.shouldFetch) reason=\(snapshot.reason)"
+        )
+    }
+
+    private func logPaymentAutoFetchSkip(order: OrderSummary, snapshot: PaymentAutoFetchLogSnapshot) {
+        let previous = lastLoggedPaymentAutoFetchDecisionByOrderCode[order.orderCode]
+        lastLoggedPaymentAutoFetchDecisionByOrderCode[order.orderCode] = snapshot
+        guard previous != snapshot else {
+            Logger.shared.debugVerbose(
+                "[PaymentReceipt] skip orderCode=\(order.orderCode) reason=\(snapshot.reason)"
+            )
+            return
+        }
+        Logger.shared.debug(
+            "[PaymentReceipt] skip orderCode=\(order.orderCode) reason=\(snapshot.reason)"
+        )
+    }
+
     private func maskedPaymentLookupValue(_ value: String?) -> String {
         guard let value,
               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -770,7 +1120,22 @@ final class OrderPresenter: ObservableObject {
         if case .notFound = error as? OrderFeatureError {
             return "404"
         }
+        if case .notFound = error as? NetworkError {
+            return "404"
+        }
         return "unknown"
+    }
+
+    private func paymentReceiptFailureMessage(from error: Error) -> String {
+        if let featureError = error as? OrderFeatureError {
+            return featureError.userMessage
+        }
+        if let localizedError = error as? LocalizedError,
+           let description = localizedError.errorDescription,
+           !description.isEmpty {
+            return description
+        }
+        return error.localizedDescription
     }
 
     private func upsert(detail: OrderDetail) {
@@ -892,7 +1257,7 @@ final class OrderPresenter: ObservableObject {
             receiptExists: existing.receiptExists
         )
         viewState.cancellingOrderIDs.remove(existing.id)
-        applyOrders(resetErrorMessage: false)
+        applyOrders(resetErrorMessage: false, reason: "statusNotification")
     }
 
     private func applyStatus(orderCode: String, status: OrderStatus) {
@@ -965,6 +1330,17 @@ private extension OrderPresenter {
         case initial
         case refresh
         case loadMore
+
+        var logReason: String {
+            switch self {
+            case .initial:
+                return "initial"
+            case .refresh:
+                return "refresh"
+            case .loadMore:
+                return "loadMore"
+            }
+        }
     }
 
     struct PaymentReceiptLookup {
@@ -980,6 +1356,69 @@ private extension OrderPresenter {
 
     struct PaymentReceiptAutoFetchDecision {
         let shouldFetch: Bool
+        let reason: String
+    }
+
+    struct PaymentAutoFetchLogSnapshot: Equatable {
+        let paidAtExists: Bool
+        let receiptExists: Bool
+        let receiptURLExists: Bool
+        let cacheState: String
+        let shouldFetch: Bool
+        let reason: String
+    }
+
+    struct OrderMappingLogSnapshot: Equatable {
+        let dtoStatus: OrderStatus
+        let localOverrideStatus: OrderStatus?
+        let finalStatus: OrderStatus
+        let cachedPaymentState: String
+        let finalPaymentState: String
+
+        var statusSource: String {
+            localOverrideStatus == nil ? "server" : "localOverride"
+        }
+    }
+
+    struct ReviewEligibilitySummary {
+        var writable = 0
+        var alreadyReviewed = 0
+        var notPickedUp = 0
+
+        mutating func record(decision: OrderReviewEligibilityDecision) {
+            if decision.isWritable {
+                writable += 1
+            }
+            if decision.alreadyReviewed {
+                alreadyReviewed += 1
+            }
+            if decision.reason == "notPickedUp" {
+                notPickedUp += 1
+            }
+        }
+    }
+
+    struct ReviewEligibilitySummaryLogSnapshot: Equatable {
+        let total: Int
+        let writable: Int
+        let alreadyReviewed: Int
+        let notPickedUp: Int
+    }
+
+    struct OrderViewStateLogSnapshot: Equatable {
+        let status: OrderStatus
+        let allowedNextStatus: OrderStatus?
+        let isStatusChangeEnabled: Bool
+        let isReviewWritable: Bool
+    }
+
+    struct ReviewEligibilityLogSnapshot: Equatable {
+        let storeID: String
+        let status: OrderStatus
+        let paymentVerificationState: PaymentVerificationState
+        let alreadyReviewed: Bool
+        let matchedReviewID: String?
+        let isWritable: Bool
         let reason: String
     }
 }
@@ -998,5 +1437,11 @@ private extension PaymentVerificationState {
         case .failed:
             return "failed"
         }
+    }
+}
+
+private extension Date {
+    var isExpired: Bool {
+        self <= Date()
     }
 }

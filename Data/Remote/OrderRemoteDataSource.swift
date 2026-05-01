@@ -37,18 +37,11 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
             method: .get,
             authorizationPolicy: .accessToken
         )
-        do {
-            let response = try await apiClient.execute(endpoint)
-            Logger.shared.debug(
-                "[PaymentReceipt] success orderCode=\(orderCode) receiptExists=true paymentStatus=\(response.status) paidAtExists=\(response.paidAt != nil)"
-            )
-            return response
-        } catch {
-            Logger.shared.warning(
-                "[PaymentReceipt] failed selectedKey=\(orderCode) statusCode=unknown fallback=receiptUnavailable message=\(error.localizedDescription) body=<unavailable>"
-            )
-            throw error
-        }
+        let response = try await apiClient.execute(endpoint)
+        Logger.shared.debug(
+            "[PaymentReceipt] success orderCode=\(orderCode) receiptExists=true paymentStatus=\(response.status) paidAtExists=\(response.paidAt != nil)"
+        )
+        return response
     }
 
     func validatePayment(_ request: PaymentValidationRequestDTO) async throws -> ReceiptOrderResponseDTO {

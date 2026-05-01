@@ -4,6 +4,9 @@ enum HomeAction {
     case onAppear
     case refreshRequested
     case loginRequiredTapped
+    case notificationButtonTapped
+    case notificationUnreadCountChanged(Int)
+    case notificationUnreadCountReloadRequested
     case locationTapped
     case currentLocationRequested
     case manualLocationSelectionTapped

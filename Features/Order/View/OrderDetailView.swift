@@ -49,19 +49,20 @@ struct OrderDetailView: View {
                         summaryCard
                     }
                     .padding(PikkoSpacing.xl)
-                    .padding(.bottom, RootTabBarMetrics.scrollContentBottomInset)
+                    .padding(.bottom, PikkoSpacing.lg + RootTabBarMetrics.scrollContentBottomInset)
                 }
+                .contentMargins(.bottom, RootTabBarMetrics.scrollContentBottomInset, for: .scrollIndicators)
             }
         }
         .navigationTitle("주문 상세")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("주문 취소 안내", isPresented: $isCancelConfirmationPresented) {
+        .alert("주문을 취소할까요?", isPresented: $isCancelConfirmationPresented) {
             Button("아니요", role: .cancel) {}
             Button("주문 취소", role: .destructive) {
                 Task { await presenter.send(.cancelConfirmed) }
             }
         } message: {
-            Text("주문을 취소 상태로 변경합니다. 취소 후에는 조리 진행을 다시 시작할 수 없습니다.")
+            Text("취소 후에는 주문현황에서 제외돼요.")
         }
     }
 
@@ -232,11 +233,19 @@ struct OrderDetailView: View {
                 detailRow(title: "요청 메모", value: memoText, valueLineLimit: 4)
             }
 
-            if presenter.viewState.orderStatus?.isCancellable == true {
+            if presenter.viewState.canCancelOrder || presenter.viewState.cancelDisabledReasonText != nil {
                 Divider()
                     .padding(.top, PikkoSpacing.sm)
 
-                cancelOrderButton
+                if presenter.viewState.canCancelOrder {
+                    cancelOrderButton
+                } else if let cancelDisabledReasonText = presenter.viewState.cancelDisabledReasonText {
+                    Text(cancelDisabledReasonText)
+                        .font(PikkoTypography.caption)
+                        .foregroundStyle(PikkoColor.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, PikkoSpacing.xs)
+                }
             }
         }
         .padding(PikkoSpacing.xl)
@@ -307,7 +316,7 @@ struct OrderDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
         }
         .buttonStyle(.plain)
-        .disabled(!presenter.viewState.canCancelOrder)
+        .disabled(!presenter.viewState.canExecuteCancelOrder || presenter.viewState.isCancelling)
         .padding(.top, PikkoSpacing.xs)
     }
 

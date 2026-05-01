@@ -1,7 +1,9 @@
 import AVKit
+import FirebaseMessaging
 import PhotosUI
 import SwiftUI
 import UIKit
+import UserNotifications
 
 struct ProfileRootView: View {
     @StateObject private var presenter: ProfilePresenter
@@ -13,11 +15,14 @@ struct ProfileRootView: View {
     private let makeLikedPostsView: () -> AnyView
     private let makeMyReviewsView: (String) -> AnyView
     private let makeChatListView: () -> AnyView
+    private let makeNotificationListView: () -> AnyView
     private let makeUserSearchView: () -> AnyView
     private let makeDeveloperDiagnosticsView: () -> AnyView
     @State private var isChatListPresented = false
+    @State private var isNotificationListPresented = false
     @State private var isUserSearchPresented = false
     @State private var isDeveloperDiagnosticsPresented = false
+    @State private var unreadNotificationCount = 0
 
     init(
         presenter: ProfilePresenter,
@@ -28,8 +33,10 @@ struct ProfileRootView: View {
         makeLikedPostsView: @escaping () -> AnyView,
         makeMyReviewsView: @escaping (String) -> AnyView,
         makeChatListView: @escaping () -> AnyView,
+        makeNotificationListView: @escaping () -> AnyView,
         makeUserSearchView: @escaping () -> AnyView,
-        makeDeveloperDiagnosticsView: @escaping () -> AnyView
+        makeDeveloperDiagnosticsView: @escaping () -> AnyView,
+        initialUnreadNotificationCount: Int = 0
     ) {
         _presenter = StateObject(wrappedValue: presenter)
         _router = StateObject(wrappedValue: router)
@@ -39,8 +46,10 @@ struct ProfileRootView: View {
         self.makeLikedPostsView = makeLikedPostsView
         self.makeMyReviewsView = makeMyReviewsView
         self.makeChatListView = makeChatListView
+        self.makeNotificationListView = makeNotificationListView
         self.makeUserSearchView = makeUserSearchView
         self.makeDeveloperDiagnosticsView = makeDeveloperDiagnosticsView
+        _unreadNotificationCount = State(initialValue: initialUnreadNotificationCount)
     }
 
     var body: some View {
@@ -115,6 +124,13 @@ struct ProfileRootView: View {
                         Task {
                             await presenter.send(.likedStoresTapped)
                         }
+                    }
+
+                    SecondaryButton(
+                        title: unreadNotificationCount > 0 ? "알림 \(unreadNotificationCount)" : "알림",
+                        systemImage: unreadNotificationCount > 0 ? "bell.badge" : "bell"
+                    ) {
+                        isNotificationListPresented = true
                     }
 
                     SecondaryButton(
@@ -203,6 +219,9 @@ struct ProfileRootView: View {
         .navigationDestination(isPresented: $isChatListPresented) {
             makeChatListView()
         }
+        .navigationDestination(isPresented: $isNotificationListPresented) {
+            makeNotificationListView()
+        }
         .navigationDestination(isPresented: $isUserSearchPresented) {
             makeUserSearchView()
         }
@@ -237,6 +256,9 @@ struct ProfileRootView: View {
         }
         .task {
             await presenter.send(.onAppear)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pikkoAppNotificationUnreadCountDidChange)) { notification in
+            unreadNotificationCount = notification.userInfo?[AppNotificationUserInfoKey.unreadCount] as? Int ?? 0
         }
     }
 
@@ -1178,12 +1200,98 @@ private struct DeveloperLogListResponseDTO: Decodable, Sendable {
 private struct PushNotificationDebugRequestDTO: Encodable, Sendable {
     let userID: String
     let title: String
-    let subtitle: String?
+    let subtitle: String
     let body: String
 
     private enum CodingKeys: String, CodingKey {
         case userID = "user_id"
         case title, subtitle, body
+    }
+
+    static let requiredBodyKeys = ["user_id", "title", "subtitle", "body"]
+
+    var bodyKeys: [String] {
+        Self.requiredBodyKeys
+    }
+
+    func missingRequiredFields() -> [String] {
+        var fields: [String] = []
+        if userID.trimmed.isEmpty { fields.append("user_id") }
+        if title.trimmed.isEmpty { fields.append("title") }
+        if subtitle.trimmed.isEmpty { fields.append("subtitle") }
+        if body.trimmed.isEmpty { fields.append("body") }
+        return fields
+    }
+}
+
+private struct LocalNotificationBannerTester: Sendable {
+    func scheduleCommunityComment(title: String, body: String, badge: Int?) async throws -> String {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        Logger(category: "LocalNotification").debug("[LocalNotification] request permissionStatus=\(Self.authorizationStatusText(settings.authorizationStatus))")
+
+        switch settings.authorizationStatus {
+        case .notDetermined:
+            let granted = try await center.requestAuthorization(options: [.alert, .badge, .sound])
+            Logger(category: "LocalNotification").debug("[LocalNotification] permission requested granted=\(granted)")
+            guard granted else {
+                Logger(category: "LocalNotification").warning("[LocalNotification] skipped reason=permissionDenied")
+                throw DeveloperDiagnosticsError.notificationPermissionDenied
+            }
+        case .denied:
+            Logger(category: "LocalNotification").warning("[LocalNotification] skipped reason=permissionDenied")
+            throw DeveloperDiagnosticsError.notificationPermissionDenied
+        default:
+            break
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = title.trimmed.nilIfEmpty ?? "새 댓글이 달렸어요"
+        content.body = body.trimmed.nilIfEmpty ?? "로컬 배너 테스트입니다."
+        content.sound = .default
+        if let badge {
+            content.badge = NSNumber(value: badge)
+        }
+        content.userInfo = [
+            "source": "localNotification",
+            "debug_type": "local_banner",
+            "type": "community_comment"
+        ]
+
+        let id = "debug-local-community-comment-\(Int(Date().timeIntervalSince1970))"
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
+        try await center.add(request)
+        Logger(category: "LocalNotification").debug("[LocalNotification] scheduled id=\(id) title=\(content.title)")
+        return id
+    }
+
+    private static func authorizationStatusText(_ status: UNAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined:
+            return "notDetermined"
+        case .denied:
+            return "denied"
+        case .authorized:
+            return "authorized"
+        case .provisional:
+            return "provisional"
+        case .ephemeral:
+            return "ephemeral"
+        @unknown default:
+            return "unknown"
+        }
+    }
+}
+
+private enum DeveloperDiagnosticsError: LocalizedError {
+    case notificationPermissionDenied
+
+    var errorDescription: String? {
+        switch self {
+        case .notificationPermissionDenied:
+            return "알림 권한이 거부되어 로컬 배너를 표시할 수 없어요."
+        }
     }
 }
 
@@ -1441,8 +1549,7 @@ private struct DeveloperDiagnosticsClient: Sendable {
         )
     }
 
-    func sendPush(userID: String, title: String, subtitle: String?, body: String) async throws {
-        let request = PushNotificationDebugRequestDTO(userID: userID, title: title, subtitle: subtitle, body: body)
+    func sendPush(_ request: PushNotificationDebugRequestDTO) async throws {
         _ = try await apiClient.execute(
             Endpoint<EmptyResponse>(
                 path: "/v1/notifications/push",
@@ -1631,7 +1738,14 @@ struct DeveloperDiagnosticsRootView: View {
     @ObservedObject private var sessionStore: SessionStore
     private let authRepository: AuthRepository
     private let userDefaultsStore: any UserDefaultsStoring
+    private let notificationService: AppNotificationService
+    @ObservedObject private var notificationDiagnosticsStore: NotificationDiagnosticsStore
+    private let activeChatRoomTracker: ActiveChatRoomTracking
+    private let activeCommunityPostTracker: ActiveCommunityPostTracking
+    private let orderStatusSnapshotStore: OrderStatusSnapshotStore
+    private let communityNotificationSnapshotStore: CommunityNotificationSnapshotStore
     private let imageLoader: any AuthorizedImageLoading
+    private let localNotificationBannerTester = LocalNotificationBannerTester()
 
     @State private var status = "대기 중"
     @State private var serverLogs: [DeveloperLogDTO] = []
@@ -1639,6 +1753,7 @@ struct DeveloperDiagnosticsRootView: View {
     @State private var videos: [VideoDebugDTO] = []
     @State private var videoNextCursor: String?
     @State private var player: AVPlayer?
+    @State private var recentNotificationTestResult = "없음"
     @State private var pushUserID: String
     @State private var pushTitle = "Pikko 테스트"
     @State private var pushSubtitle = "Developer Diagnostics"
@@ -1661,14 +1776,26 @@ struct DeveloperDiagnosticsRootView: View {
         sessionStore: SessionStore,
         authRepository: AuthRepository,
         userDefaultsStore: any UserDefaultsStoring,
+        notificationService: AppNotificationService,
+        notificationDiagnosticsStore: NotificationDiagnosticsStore,
+        activeChatRoomTracker: ActiveChatRoomTracking,
+        activeCommunityPostTracker: ActiveCommunityPostTracking,
+        orderStatusSnapshotStore: OrderStatusSnapshotStore,
+        communityNotificationSnapshotStore: CommunityNotificationSnapshotStore,
         imageLoader: any AuthorizedImageLoading
     ) {
         self.client = client
         _sessionStore = ObservedObject(wrappedValue: sessionStore)
         self.authRepository = authRepository
         self.userDefaultsStore = userDefaultsStore
+        self.notificationService = notificationService
+        _notificationDiagnosticsStore = ObservedObject(wrappedValue: notificationDiagnosticsStore)
+        self.activeChatRoomTracker = activeChatRoomTracker
+        self.activeCommunityPostTracker = activeCommunityPostTracker
+        self.orderStatusSnapshotStore = orderStatusSnapshotStore
+        self.communityNotificationSnapshotStore = communityNotificationSnapshotStore
         self.imageLoader = imageLoader
-        _pushUserID = State(initialValue: userDefaultsStore.string(forKey: StorageKey.pushUserID) ?? "")
+        _pushUserID = State(initialValue: userDefaultsStore.string(forKey: StorageKey.pushUserID) ?? sessionStore.currentUserID ?? "")
         _storeID = State(initialValue: userDefaultsStore.string(forKey: StorageKey.storeID) ?? "")
         _menuID = State(initialValue: userDefaultsStore.string(forKey: StorageKey.menuID) ?? "")
         _orderCode = State(initialValue: userDefaultsStore.string(forKey: StorageKey.orderCode) ?? "")
@@ -1716,15 +1843,103 @@ struct DeveloperDiagnosticsRootView: View {
                 }
             }
 
-            Section("Push") {
+            Section("Server Push") {
                 TextField("user_id", text: $pushUserID)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 TextField("title", text: $pushTitle)
                 TextField("subtitle", text: $pushSubtitle)
                 TextField("body", text: $pushBody)
-                Button("POST /v1/notifications/push") { Task { await sendPush() } }
+                Button("서버 푸시 댓글 알림 발송") { Task { await sendPush() } }
                     .disabled(isRunning)
+            }
+
+            Section("Notification Debug") {
+                labelledValue("permission", notificationDiagnosticsStore.lastAuthorizationStatus)
+                labelledValue("APNs token", notificationDiagnosticsStore.hasAPNsToken ? "있음" : "없음")
+                labelledValue("FCM token", sessionStore.deviceToken == nil ? "없음" : maskedToken(sessionStore.deviceToken))
+                labelledValue("최근 테스트 결과", recentNotificationTestResult)
+                labelledValue("저장 알림", "\(notificationService.fetchNotifications().count)")
+                labelledValue("unread", "\(notificationService.unreadCount())")
+                labelledValue("active chat", activeChatRoomTracker.activeRoomId ?? "-")
+                labelledValue("active post", activeCommunityPostTracker.activePostId ?? "-")
+                labelledValue("order snapshots", "\(orderStatusSnapshotStore.count())")
+                labelledValue("community snapshots", "\(communityNotificationSnapshotStore.count())")
+                labelledValue("last local id", notificationDiagnosticsStore.lastLocalNotificationID ?? "local banner not tested")
+                labelledValue("last server push", notificationDiagnosticsStore.lastServerPushStatus)
+                labelledValue("last server error", notificationDiagnosticsStore.lastServerPushErrorMessage ?? "없음")
+                labelledValue("willPresent", "\(notificationDiagnosticsStore.lastForegroundPresentationSource) \(notificationDiagnosticsStore.lastForegroundPresentationResult)")
+                labelledValue("background tap route", notificationDiagnosticsStore.lastRemoteTapRoute)
+                labelledValue("pending route", notificationDiagnosticsStore.pendingNotificationRoute)
+                Text(notificationDiagnosticsStore.latestRemotePayload?.keys.sorted().joined(separator: ", ") ?? "최근 remote payload 없음 / remote push not tested / local banner tested 여부는 last local id 확인")
+                    .font(PikkoTypography.caption)
+                    .foregroundStyle(PikkoColor.secondaryText)
+                Button("앱 내부 주문 상태 알림 생성") {
+                    let timestamp = debugTimestamp()
+                    let result = notificationService.handleOrderStatusChanged(
+                        orderCode: "DEBUG-ORDER-\(timestamp)",
+                        previousStatus: "PENDING",
+                        currentStatus: "APPROVED",
+                        storeName: "새싹 테스트 가게"
+                    )
+                    recordNotificationTestResult(label: "앱 내부 주문 알림", result: result)
+                }
+                Button("앱 내부 채팅 알림 생성") {
+                    let timestamp = debugTimestamp()
+                    let result = notificationService.handleChatMessageReceived(
+                        roomId: "debug-room",
+                        storeId: storeID.nilIfBlank,
+                        title: "테스트 채팅방",
+                        messageId: "debug-chat-\(timestamp)",
+                        senderId: "debug-user-\(timestamp)",
+                        preview: "테스트 메시지입니다."
+                    )
+                    recordNotificationTestResult(label: "앱 내부 채팅 알림", result: result)
+                }
+                Button("앱 내부 댓글 알림 생성") {
+                    let timestamp = debugTimestamp()
+                    let result = notificationService.handleCommunityComment(
+                        postId: "debug-post",
+                        commentId: "debug-comment-\(timestamp)",
+                        actorUserId: "debug-user-\(timestamp)",
+                        actorName: "테스트",
+                        preview: "테스트 댓글입니다."
+                    )
+                    recordNotificationTestResult(label: "앱 내부 댓글 알림", result: result)
+                }
+                Button("앱 내부 좋아요 알림 생성") {
+                    let timestamp = debugTimestamp()
+                    let result = notificationService.handleCommunityLike(
+                        postId: "debug-post",
+                        commentId: nil,
+                        actorUserId: "debug-user-\(timestamp)",
+                        actorName: "테스트"
+                    )
+                    recordNotificationTestResult(label: "앱 내부 좋아요 알림", result: result)
+                }
+                Button("앱 내부 멘션 알림 생성") {
+                    let timestamp = debugTimestamp()
+                    let result = notificationService.handleCommunityMention(
+                        postId: "debug-post",
+                        commentId: "debug-mention-comment-\(timestamp)",
+                        actorUserId: "debug-user-\(timestamp)",
+                        actorName: "테스트",
+                        preview: "멘션 테스트입니다."
+                    )
+                    recordNotificationTestResult(label: "앱 내부 멘션 알림", result: result)
+                }
+                Button("로컬 시스템 배너 댓글 테스트") {
+                    Task { await sendLocalBanner() }
+                }
+                Button("전체 읽음 처리") {
+                    notificationService.markAllAsRead()
+                }
+                Button("알림 전체 삭제", role: .destructive) {
+                    notificationService.deleteAll()
+                }
+                Button("FCM token 재조회") {
+                    fetchFCMToken()
+                }
             }
 
             Section("Video") {
@@ -1917,6 +2132,52 @@ struct DeveloperDiagnosticsRootView: View {
         }
     }
 
+    private func maskedToken(_ token: String?) -> String {
+        guard let token, !token.isEmpty else { return "없음" }
+        return "\(token.prefix(8))...\(token.suffix(8)) (\(token.count))"
+    }
+
+    private func debugTimestamp() -> String {
+        String(Int(Date().timeIntervalSince1970 * 1000))
+    }
+
+    private func recordNotificationTestResult(label: String, result: AppNotificationSaveResult) {
+        let summary = notificationTestResultSummary(result)
+        recentNotificationTestResult = "\(label) \(summary)"
+        status = "최근 테스트 결과: \(recentNotificationTestResult)"
+        appendLog(
+            method: "NOTIFICATION",
+            path: "AppNotificationRepository",
+            payload: "source=appInternal,label=\(label)",
+            status: summary,
+            response: recentNotificationTestResult
+        )
+    }
+
+    private func notificationTestResultSummary(_ result: AppNotificationSaveResult) -> String {
+        switch result {
+        case .saved(let unreadCount):
+            return "saved unreadCount=\(unreadCount)"
+        case .duplicate:
+            return "duplicate skipped"
+        case .skipped(let reason):
+            return "skipped reason=\(reason)"
+        case .failed(let reason):
+            return "failed reason=\(reason)"
+        }
+    }
+
+    private func fetchFCMToken() {
+        Messaging.messaging().token { token, error in
+            if let error {
+                Logger(category: "FCM").debug("[FCM] diagnostics token fetch failed error=\(error.localizedDescription)")
+                return
+            }
+            Logger(category: "FCM").debug("[FCM] diagnostics token fetch \(PikkoAppDelegate.tokenSummaryForDiagnostics(token))")
+            PikkoAppDelegate.publishFCMTokenForDiagnostics(token)
+        }
+    }
+
     private func run(
         label: String,
         method: String,
@@ -1944,9 +2205,9 @@ struct DeveloperDiagnosticsRootView: View {
             DeveloperDiagnosticEntry(
                 method: method,
                 path: path,
-                payloadSummary: payload,
+                payloadSummary: SensitiveLogRedactor.redact(payload),
                 status: status,
-                responseSummary: response
+                responseSummary: SensitiveLogRedactor.redact(response)
             ),
             at: 0
         )
@@ -1978,15 +2239,65 @@ struct DeveloperDiagnosticsRootView: View {
     }
 
     private func sendPush() async {
-        let subtitle = pushSubtitle.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+        let request = PushNotificationDebugRequestDTO(
+            userID: pushUserID.trimmingCharacters(in: .whitespacesAndNewlines),
+            title: pushTitle.trimmingCharacters(in: .whitespacesAndNewlines),
+            subtitle: pushSubtitle.trimmingCharacters(in: .whitespacesAndNewlines),
+            body: pushBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        let missingFields = request.missingRequiredFields()
+        guard missingFields.isEmpty else {
+            let fields = missingFields.joined(separator: ",")
+            Logger(category: "PushRequest").warning("[PushRequest] skipped missingRequiredFields fields=\(fields)")
+            status = "서버 푸시 스킵: 필수값 누락 \(fields)"
+            notificationDiagnosticsStore.recordServerPushStatus("failed missingRequiredFields", errorMessage: fields)
+            recentNotificationTestResult = "서버 FCM 푸시 failed 필수값 누락 \(fields)"
+            appendLog(
+                method: "POST",
+                path: "/v1/notifications/push",
+                payload: "bodyKeys=\(request.bodyKeys.joined(separator: ","))",
+                status: "스킵",
+                response: "missingRequiredFields=\(fields)"
+            )
+            return
+        }
+
         await run(
-            label: "푸시 전송",
+            label: "서버 푸시 전송",
             method: "POST",
             path: "/v1/notifications/push",
-            payload: "user_id=\(pushUserID), title=\(pushTitle)"
+            payload: "bodyKeys=\(request.bodyKeys.joined(separator: ","))"
         ) {
-            try await client.sendPush(userID: pushUserID, title: pushTitle, subtitle: subtitle, body: pushBody)
-            return "푸시 전송 요청 완료"
+            Logger(category: "PushRequest").debug("[PushRequest] endpoint=POST /v1/notifications/push bodyKeys=\(request.bodyKeys.joined(separator: ",")) hasAuthorization=true hasSesacKey=\(client.appConfiguration.hasValidSeSACKey)")
+            do {
+                try await client.sendPush(request)
+                notificationDiagnosticsStore.recordServerPushStatus("success 2xx")
+                recentNotificationTestResult = "서버 FCM 푸시 success 2xx"
+                return "서버 푸시 전송 요청 완료"
+            } catch {
+                let message = error.localizedDescription
+                notificationDiagnosticsStore.recordServerPushStatus("failed", errorMessage: message)
+                recentNotificationTestResult = "서버 FCM 푸시 failed \(message)"
+                throw error
+            }
+        }
+    }
+
+    private func sendLocalBanner() async {
+        await run(
+            label: "로컬 배너 테스트",
+            method: "LOCAL",
+            path: "UNUserNotificationCenter.add",
+            payload: "source=localNotification,type=community_comment"
+        ) {
+            let id = try await localNotificationBannerTester.scheduleCommunityComment(
+                title: "새 댓글이 달렸어요",
+                body: "로컬 시스템 배너 테스트입니다.",
+                badge: notificationService.unreadCount()
+            )
+            notificationDiagnosticsStore.recordLocalNotification(id: id)
+            recentNotificationTestResult = "로컬 배너 scheduled id=\(id)"
+            return "scheduled id=\(id)"
         }
     }
 
@@ -2005,7 +2316,7 @@ struct DeveloperDiagnosticsRootView: View {
             let url = try await client.fetchVideoStream(videoID: videoID)
             player = AVPlayer(url: url)
             player?.play()
-            return url.absoluteString
+            return VideoURLLogDescriptor(url: url).redactedAbsoluteString
         }
     }
 
@@ -2191,6 +2502,14 @@ struct DeveloperDiagnosticsRootView: View {
 }
 
 private extension String {
+    var trimmed: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+
     var nilIfBlank: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
@@ -2204,6 +2523,12 @@ struct DeveloperDiagnosticsBuilder {
     let sessionStore: SessionStore
     let authRepository: AuthRepository
     let userDefaultsStore: any UserDefaultsStoring
+    let notificationService: AppNotificationService
+    let notificationDiagnosticsStore: NotificationDiagnosticsStore
+    let activeChatRoomTracker: ActiveChatRoomTracking
+    let activeCommunityPostTracker: ActiveCommunityPostTracking
+    let orderStatusSnapshotStore: OrderStatusSnapshotStore
+    let communityNotificationSnapshotStore: CommunityNotificationSnapshotStore
     let imageLoader: any AuthorizedImageLoading
 
     func build() -> DeveloperDiagnosticsRootView {
@@ -2212,6 +2537,12 @@ struct DeveloperDiagnosticsBuilder {
             sessionStore: sessionStore,
             authRepository: authRepository,
             userDefaultsStore: userDefaultsStore,
+            notificationService: notificationService,
+            notificationDiagnosticsStore: notificationDiagnosticsStore,
+            activeChatRoomTracker: activeChatRoomTracker,
+            activeCommunityPostTracker: activeCommunityPostTracker,
+            orderStatusSnapshotStore: orderStatusSnapshotStore,
+            communityNotificationSnapshotStore: communityNotificationSnapshotStore,
             imageLoader: imageLoader
         )
     }

@@ -8,6 +8,8 @@ final class CommunityPresenter: ObservableObject {
     private let interactor: CommunityInteracting
     private let router: CommunityRouting
     private let sessionStore: SessionStore
+    private let notificationService: AppNotificationService
+    private let communityNotificationSnapshotStore: CommunityNotificationSnapshotStore
     private let distanceFormatter = DistanceFormatter()
     private let distanceCalculator = CommunityDistanceCalculator()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
@@ -25,12 +27,16 @@ final class CommunityPresenter: ObservableObject {
         interactor: CommunityInteracting,
         router: CommunityRouting,
         sessionStore: SessionStore,
+        notificationService: AppNotificationService = NoopAppNotificationService(),
+        communityNotificationSnapshotStore: CommunityNotificationSnapshotStore = InMemoryCommunityNotificationSnapshotStore(),
         initialQuery: String? = nil,
         routesSearchSubmissions: Bool = true
     ) {
         self.interactor = interactor
         self.router = router
         self.sessionStore = sessionStore
+        self.notificationService = notificationService
+        self.communityNotificationSnapshotStore = communityNotificationSnapshotStore
         _ = routesSearchSubmissions
         let trimmedInitialQuery = initialQuery?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.activeQuery = {
@@ -201,8 +207,38 @@ final class CommunityPresenter: ObservableObject {
         referenceLocation = content.referenceLocation
         viewState.hasReferenceLocation = content.referenceLocation != nil
         allPosts = content.posts
+        detectCommunityListReactions(in: content.posts)
         viewState.nextCursor = content.nextCursor
         applyFilters()
+    }
+
+    private func detectCommunityListReactions(in posts: [CommunityPostSummary]) {
+        for post in posts {
+            let currentSnapshot = CommunityPostNotificationSnapshot(
+                postId: post.id,
+                commentCount: nil,
+                likeCount: post.likeCount,
+                updatedAt: post.updatedAt ?? post.createdAt ?? Date()
+            )
+            defer {
+                communityNotificationSnapshotStore.saveSnapshot(currentSnapshot)
+            }
+
+            guard post.creator.id == sessionStore.currentUserID,
+                  let previousSnapshot = communityNotificationSnapshotStore.snapshot(for: post.id) else {
+                continue
+            }
+
+            if let previousLikeCount = previousSnapshot.likeCount,
+               post.likeCount > previousLikeCount {
+                notificationService.handleCommunityLike(
+                    postId: post.id,
+                    commentId: nil,
+                    actorUserId: nil,
+                    actorName: nil
+                )
+            }
+        }
     }
 
     private func applyFilters() {

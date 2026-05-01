@@ -153,7 +153,11 @@ struct ChatRootView: View {
                     isRoomDetailVisible = true
                     keyboardObserver.activate()
                     Logger.shared.debug("[ChatView] onAppear id=\(chatViewInstanceID)")
-                    Logger.shared.debug("[ChatComposer] visible=true")
+#if DEBUG
+                    if ChatDebugOptions.isComposerGeometryLoggingEnabled {
+                        Logger.shared.debug("[ChatComposer] visible=true")
+                    }
+#endif
                 }
                 .onDisappear {
                     isRoomDetailVisible = false
@@ -452,10 +456,15 @@ struct ChatRootView: View {
         guard height.isFinite, height > 0 else { return }
         guard abs(measuredComposerHeight - height) > Layout.geometryTolerance else { return }
         measuredComposerHeight = height
+#if DEBUG
+        guard ChatDebugOptions.isComposerGeometryLoggingEnabled else { return }
         Logger.shared.debug("[ChatComposer] measuredHeight=\(height)")
+#endif
     }
 
     private func logComposerKeyboardState() {
+#if DEBUG
+        guard ChatDebugOptions.isComposerGeometryLoggingEnabled else { return }
         Logger.shared.debug(
             "[ChatComposer] keyboardHeight=\(keyboardObserver.keyboardHeight) isKeyboardVisible=\(keyboardObserver.isKeyboardVisible)"
         )
@@ -463,6 +472,7 @@ struct ChatRootView: View {
             "[ChatComposer] bottomPadding=\(composerBottomPadding) customTabBarHeight=\(keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)"
         )
         Logger.shared.debug("[ChatComposer] visible=true")
+#endif
     }
 
     private func logComposerGeometry(
@@ -477,19 +487,23 @@ struct ChatRootView: View {
         let screenFrame = proxy.frame(in: .global)
         let expectedWidth = containerWidth
         let bottomTarget = keyboardVisible ? "keyboard" : "tabBarTop"
-        Logger.shared.debug(
-            "[ChatComposer] geometry reason=\(reason) minY=\(localFrame.minY) maxY=\(localFrame.maxY) width=\(localFrame.width) targetWidth=\(expectedWidth) bottomTarget=\(bottomTarget)"
-        )
-        Logger.shared.debug("[ChatComposer] safeAreaInsets=\(String(describing: proxy.safeAreaInsets))")
-        Logger.shared.debug("[ChatComposer] customTabBarHeight=\(keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)")
-        Logger.shared.debug("[ChatComposer] keyboardVisible=\(keyboardVisible)")
-        Logger.shared.debug(
-            "[ChatComposer] keyboardHeight=\(keyboardObserver.keyboardHeight) isKeyboardVisible=\(keyboardObserver.isKeyboardVisible)"
-        )
-        Logger.shared.debug(
-            "[ChatComposer] bottomPadding=\(composerBottomPadding) customTabBarHeight=\(keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)"
-        )
-        Logger.shared.debug("[ChatComposer] visible=true")
+#if DEBUG
+        if ChatDebugOptions.isComposerGeometryLoggingEnabled {
+            Logger.shared.debug(
+                "[ChatComposer] geometry reason=\(reason) minY=\(localFrame.minY) maxY=\(localFrame.maxY) width=\(localFrame.width) targetWidth=\(expectedWidth) bottomTarget=\(bottomTarget)"
+            )
+            Logger.shared.debug("[ChatComposer] safeAreaInsets=\(String(describing: proxy.safeAreaInsets))")
+            Logger.shared.debug("[ChatComposer] customTabBarHeight=\(keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)")
+            Logger.shared.debug("[ChatComposer] keyboardVisible=\(keyboardVisible)")
+            Logger.shared.debug(
+                "[ChatComposer] keyboardHeight=\(keyboardObserver.keyboardHeight) isKeyboardVisible=\(keyboardObserver.isKeyboardVisible)"
+            )
+            Logger.shared.debug(
+                "[ChatComposer] bottomPadding=\(composerBottomPadding) customTabBarHeight=\(keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)"
+            )
+            Logger.shared.debug("[ChatComposer] visible=true")
+        }
+#endif
 
         validateComposerVisibility(screenFrame: screenFrame)
 
@@ -536,9 +550,12 @@ struct ChatRootView: View {
         let hasInvalidMinX = abs(frame.minX) > Layout.geometryTolerance
         let hasInvalidWidth = abs(frame.width - expectedWidth) > Layout.geometryTolerance
         guard hasInvalidMinX || hasInvalidWidth else {
+#if DEBUG
+            guard ChatDebugOptions.isComposerGeometryLoggingEnabled else { return }
             Logger.shared.debug(
                 "[ChatComposer] geometryValid minX=\(frame.minX) width=\(frame.width) targetWidth=\(expectedWidth) bottomTarget=\(bottomTarget)"
             )
+#endif
             return
         }
 
@@ -548,9 +565,12 @@ struct ChatRootView: View {
     }
 
     private func updateMessageListInsets() {
+#if DEBUG
+        guard ChatDebugOptions.isComposerGeometryLoggingEnabled else { return }
         Logger.shared.debug(
             "[ChatComposer] messageListBottomInset=\(messageListBottomInset) composerMeasuredHeight=\(measuredComposerHeight) keyboardVisible=\(keyboardObserver.isKeyboardVisible)"
         )
+#endif
     }
 
     private func chatListSectionTitle(_ title: String) -> some View {

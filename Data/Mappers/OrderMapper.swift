@@ -197,19 +197,20 @@ struct OrderMapper: Sendable {
         receiptURLExists: Bool,
         paymentVerificationState: String
     ) {
-        Logger.shared.debug(
+        Logger.shared.debugVerbose(
             "[OrderMapping] raw orderCode=\(orderCode) orderStatus=\(orderStatus) paymentStatus=\(paymentStatus ?? "nil") paidAtExists=\(paidAt != nil) receiptExists=\(receiptExists) receiptUrlExists=\(receiptURLExists) paymentVerificationState=\(paymentVerificationState)"
         )
     }
 
     private func logMappedOrderStatus(orderCode: String, status: OrderStatus, source: String) {
-        Logger.shared.debug(
+        Logger.shared.debugVerbose(
             "[OrderMapping] entity orderCode=\(orderCode) orderStatus=\(status.apiValue) statusTitle=\(status.displayTitle) source=\(source)"
         )
     }
 
     private func hasReceipt(_ dto: OrderWithStatusResponseDTO) -> Bool {
-        dto.receiptExists ?? (dto.receiptURL != nil)
+        dto.receiptExists
+            ?? (dto.receiptURL != nil || dto.receiptObjectExists || dto.paymentReceiptObjectExists)
     }
 
     private func paymentVerificationState(_ receipt: PaymentResponseDTO?) -> String? {

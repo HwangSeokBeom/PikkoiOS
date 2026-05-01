@@ -100,7 +100,7 @@ actor TokenRefreshCoordinator {
             default:
                 let mappedError = HTTPStatusMapper.map(statusCode: httpResponse.statusCode, data: data)
                 switch mappedError {
-                case .unauthorized, .authenticationFailed, .forbidden, .refreshTokenExpired, .accessTokenExpired:
+                case .unauthorized, .authenticationFailed, .refreshTokenExpired, .accessTokenExpired:
                     await invalidateSession()
                     throw NetworkError.refreshTokenExpired
                 default:

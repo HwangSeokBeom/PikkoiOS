@@ -7,10 +7,13 @@ struct RootTabView: View {
 
     @State private var homePath = NavigationPath()
     @State private var orderPath = NavigationPath()
+    @State private var videoPath = NavigationPath()
     @State private var communityPath = NavigationPath()
     @State private var profilePath = NavigationPath()
     @State private var homeResetTrigger = 0
+    @State private var videoResetTrigger = 0
     @State private var isQuickActionPresented = false
+    @State private var presentedNotificationRoute: NotificationRoutePresentation?
     @StateObject private var keyboardObserver = RootTabKeyboardObserver()
 
     init(
@@ -33,6 +36,10 @@ struct RootTabView: View {
 
                 RootTabContainerView(path: $orderPath, isActive: appState.selectedTab == .order) {
                     featureBuilderFactory.makeOrderView()
+                }
+
+                RootTabContainerView(path: $videoPath, isActive: appState.selectedTab == .video) {
+                    featureBuilderFactory.makeVideoListView(resetTrigger: videoResetTrigger)
                 }
 
                 RootTabContainerView(path: $communityPath, isActive: appState.selectedTab == .community) {
@@ -68,6 +75,18 @@ struct RootTabView: View {
                 featureBuilderFactory.makeCartView()
             }
         }
+        .sheet(item: $presentedNotificationRoute) { presentation in
+            NavigationStack {
+                destinationView(for: presentation.route)
+            }
+        }
+        .onAppear {
+            featureBuilderFactory.routePendingNotificationIfNeeded()
+            handleNotificationRoute(appState.pendingNotificationRoute)
+        }
+        .onChange(of: appState.pendingNotificationRoute) { _, route in
+            handleNotificationRoute(route)
+        }
     }
 
     private func handleTabSelection(_ tab: RootTab) {
@@ -76,8 +95,63 @@ struct RootTabView: View {
             homeResetTrigger += 1
         }
 
+        if tab == .video {
+            videoPath = NavigationPath()
+            videoResetTrigger += 1
+        }
+
         appState.selectedTab = tab
     }
+
+    @ViewBuilder
+    private func destinationView(for route: AppNotificationRoute) -> some View {
+        switch route {
+        case .orderDetail(let orderCode), .paymentReceipt(let orderCode):
+            featureBuilderFactory.makeOrderDetailView(orderID: orderCode)
+        case .chatRoom(let roomId, _, let title):
+            featureBuilderFactory.makeChatView(target: .room(roomID: roomId, title: title ?? "채팅", target: nil))
+        case .communityPost(let postId, _):
+            featureBuilderFactory.makeCommunityDetailView(postID: postId)
+        case .orderList:
+            featureBuilderFactory.makeOrderView()
+        case .communityList:
+            featureBuilderFactory.makeCommunityView()
+        case .none:
+            EmptyView()
+        }
+    }
+
+    private func handleNotificationRoute(_ route: AppNotificationRoute?) {
+        guard let route else { return }
+
+        switch route {
+        case .orderList:
+            appState.selectedTab = .order
+        case .communityList:
+            appState.selectedTab = .community
+        case .orderDetail:
+            appState.selectedTab = .order
+            presentedNotificationRoute = NotificationRoutePresentation(route: route)
+        case .paymentReceipt:
+            appState.selectedTab = .order
+            presentedNotificationRoute = NotificationRoutePresentation(route: route)
+        case .chatRoom:
+            appState.selectedTab = .profile
+            presentedNotificationRoute = NotificationRoutePresentation(route: route)
+        case .communityPost:
+            appState.selectedTab = .community
+            presentedNotificationRoute = NotificationRoutePresentation(route: route)
+        case .none:
+            break
+        }
+
+        appState.pendingNotificationRoute = nil
+    }
+}
+
+private struct NotificationRoutePresentation: Identifiable {
+    let id = UUID()
+    let route: AppNotificationRoute
 }
 
 @MainActor

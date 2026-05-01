@@ -393,19 +393,19 @@ struct CheckoutInteractor: CheckoutInteracting {
     }
 
     private func logPaymentConfigurationState(blocksPaymentConfiguration: Bool) {
-        Logger.shared.debug(
+        Logger.shared.debugVerbose(
             "[PaymentConfig] infoPlistFile=\(Bundle.main.url(forResource: "Info", withExtension: "plist")?.path ?? "unknown")"
         )
-        Logger.shared.debug(
+        Logger.shared.debugVerbose(
             "[PaymentConfig] bundleIdentifier=\(Bundle.main.bundleIdentifier ?? "unknown")"
         )
-        Logger.shared.debug(
+        Logger.shared.debugVerbose(
             "[PaymentConfig] userCodeState=\(appConfiguration.portOneUserCodeDiagnostic.state) source=\(appConfiguration.portOneUserCodeDiagnostic.source) rawMasked=\(appConfiguration.portOneUserCodeDiagnostic.rawMasked)"
         )
         Logger.shared.debug(
             "[PaymentConfig] environment=\(appConfiguration.environment.rawValue) userCodeState=\(appConfiguration.portOneUserCodeDiagnostic.state)"
         )
-        Logger.shared.debug(
+        Logger.shared.debugVerbose(
             "[PaymentConfig] source=\(appConfiguration.portOneUserCodeDiagnostic.source) rawMasked=\(appConfiguration.portOneUserCodeDiagnostic.rawMasked)"
         )
         Logger.shared.debug("[PaymentConfig] appSchemeState=\(appConfiguration.portOneAppSchemeDiagnostic.state)")

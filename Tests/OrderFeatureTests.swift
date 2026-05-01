@@ -135,32 +135,68 @@ final class OrderFeatureTests: XCTestCase {
         XCTAssertEqual(router.routedOrderIDs, ["order-1"])
     }
 
-    func testPendingOrderExposesCancelFromList() async {
+    func testPendingPaidOrderShowsCancelButDoesNotCallUnsupportedPutWhenSwaggerHasNoCancelEndpoint() async {
         let pendingOrder = makeOrder(id: "order-1", status: .pending)
-        let cancelledDetail = makeDetail(order: pendingOrder, status: .cancelled)
         let presenter = OrderPresenter(
             interactor: SpyOrderInteractor(
                 initialState: makeInitialState(),
-                fetchResults: [.success(CursorPage(items: [pendingOrder], nextCursor: nil))],
-                cancelResults: [pendingOrder.orderCode: .success(cancelledDetail)]
+                fetchResults: [.success(CursorPage(items: [pendingOrder], nextCursor: nil))]
             ),
             router: SpyOrderRouter()
         )
 
         await presenter.send(.onAppear)
-        XCTAssertTrue(presenter.viewState.orders.first?.canCancel ?? false)
+        XCTAssertTrue(presenter.viewState.orders.first?.canCancel == true)
+        XCTAssertFalse(presenter.viewState.orders.first?.isCancelEnabled ?? true)
+        XCTAssertEqual(
+            presenter.viewState.orders.first?.cancelDisabledReasonText,
+            "결제 취소 API가 필요해요. 매장에 문의해 주세요."
+        )
 
         await presenter.send(.cancelConfirmed("order-1"))
 
-        XCTAssertEqual(presenter.viewState.orders.first?.statusTitle, OrderStatus.cancelled.displayTitle)
-        XCTAssertEqual(presenter.viewState.successMessage, "주문이 취소되었어요.")
-        XCTAssertFalse(presenter.viewState.orders.first?.canCancel ?? true)
+        XCTAssertEqual(presenter.viewState.orders.first?.statusTitle, OrderStatus.pending.displayTitle)
+        XCTAssertEqual(
+            presenter.viewState.errorMessage,
+            "결제 취소 API가 필요해요. 매장에 문의해 주세요."
+        )
+        XCTAssertTrue(presenter.viewState.orders.first?.canCancel == true)
         XCTAssertTrue(presenter.viewState.cancellingOrderIDs.isEmpty)
+    }
+
+    func testPendingOrderWithoutPaymentEvidenceExecutesLocalPendingCancel() async {
+        let pendingOrder = makeOrder(id: "order-1", status: .pending, paidAt: nil, receiptURL: nil)
+        let cancelledDetail = makeDetail(order: pendingOrder, status: .cancelled)
+        let presenter = OrderPresenter(
+            interactor: SpyOrderInteractor(
+                initialState: makeInitialState(),
+                fetchResults: [
+                    .success(CursorPage(items: [pendingOrder], nextCursor: nil)),
+                    .success(CursorPage(items: [cancelledDetail.asSummary], nextCursor: nil))
+                ],
+                localCancelResults: [
+                    pendingOrder.orderCode: .success(cancelledDetail)
+                ]
+            ),
+            router: SpyOrderRouter()
+        )
+
+        await presenter.send(.onAppear)
+
+        let item = presenter.viewState.orders.first
+        XCTAssertTrue(item?.canCancel == true)
+        XCTAssertTrue(item?.isCancelEnabled == true)
+        XCTAssertEqual(item?.statusTitle, "결제 확인중")
+
+        await presenter.send(.cancelConfirmed("order-1"))
+
+        XCTAssertEqual(presenter.viewState.successMessage, "주문이 취소되었어요.")
+        XCTAssertEqual(presenter.viewState.orders.first?.status, .cancelled)
     }
 
     func testStatusChangeEligibilityRequiresPaidOrderAndOnlyAllowsNextStep() async {
         let paidPendingOrder = makeOrder(id: "order-1", status: .pending, paidAt: Date())
-        let unpaidPendingOrder = makeOrder(id: "order-2", status: .pending, paidAt: nil)
+        let unpaidPendingOrder = makeOrder(id: "order-2", status: .pending, paidAt: nil, receiptURL: nil)
         let presenter = OrderPresenter(
             interactor: SpyOrderInteractor(
                 initialState: makeInitialState(),
@@ -200,10 +236,10 @@ final class OrderFeatureTests: XCTestCase {
         await presenter.send(.onAppear)
 
         var paidItem = presenter.viewState.orders.first { $0.id == paidPendingOrder.id }
-        XCTAssertEqual(paidItem?.paymentVerificationState, .unchecked)
-        XCTAssertNil(paidItem?.allowedNextStatus)
-        XCTAssertFalse(paidItem?.isPaymentVerified ?? true)
-        XCTAssertEqual(paidItem?.statusChangeMessage, "결제 정보를 확인 중입니다.")
+        XCTAssertEqual(paidItem?.paymentVerificationState, .verified)
+        XCTAssertEqual(paidItem?.allowedNextStatus, .accepted)
+        XCTAssertTrue(paidItem?.isPaymentVerified == true)
+        XCTAssertNil(paidItem?.statusChangeMessage)
 
         await presenter.send(.orderAppeared(paidPendingOrder.id))
 
@@ -211,15 +247,29 @@ final class OrderFeatureTests: XCTestCase {
         XCTAssertEqual(paidItem?.allowedNextStatus, .accepted)
         XCTAssertTrue(paidItem?.isPaymentVerified == true)
         XCTAssertNil(paidItem?.statusChangeMessage)
-        XCTAssertTrue(OrderStatus.pending.canTransition(to: .accepted))
-        XCTAssertFalse(OrderStatus.pending.canTransition(to: .completed))
+        let transitionResolver = OrderStatusTransitionResolver()
+        XCTAssertTrue(
+            transitionResolver.canTransition(
+                currentStatus: .pending,
+                nextStatus: .accepted,
+                paymentVerificationState: .verified
+            )
+        )
+        XCTAssertFalse(
+            transitionResolver.canTransition(
+                currentStatus: .pending,
+                nextStatus: .completed,
+                paymentVerificationState: .verified
+            )
+        )
 
         await presenter.send(.orderAppeared(unpaidPendingOrder.id))
 
         let unpaidItem = presenter.viewState.orders.first { $0.id == unpaidPendingOrder.id }
         XCTAssertNil(unpaidItem?.allowedNextStatus)
         XCTAssertFalse(unpaidItem?.isPaymentVerified ?? true)
-        XCTAssertEqual(unpaidItem?.statusChangeMessage, "결제 검증 완료 후 상태 변경이 가능합니다.")
+        XCTAssertEqual(unpaidItem?.statusTitle, "결제 확인중")
+        XCTAssertEqual(unpaidItem?.statusChangeMessage, "결제 정보 확인 후 상태를 변경할 수 있어요.")
     }
 
     func testPaidOrderWithoutReceiptHintAttemptsPaymentReceiptFetch() async {
@@ -332,6 +382,85 @@ final class OrderFeatureTests: XCTestCase {
         XCTAssertEqual(statusUpdateRequests, [
             OrderStatusUpdateRequest(orderCode: approvedOrder.orderCode, nextStatus: OrderStatus.preparing.apiValue)
         ])
+    }
+
+    func testOrderStatusItemsExposeOnlySequentialNextStatus() async {
+        let approvedOrder = makeOrder(id: "order-1", status: .accepted, paidAt: Date())
+        let preparingOrder = makeOrder(id: "order-2", status: .preparing, paidAt: Date())
+        let readyOrder = makeOrder(id: "order-3", status: .ready, paidAt: Date())
+        let completedOrder = makeOrder(id: "order-4", status: .completed, paidAt: Date())
+        let presenter = OrderPresenter(
+            interactor: SpyOrderInteractor(
+                initialState: makeInitialState(),
+                fetchResults: [
+                    .success(CursorPage(items: [approvedOrder, preparingOrder, readyOrder, completedOrder], nextCursor: nil))
+                ]
+            ),
+            router: SpyOrderRouter()
+        )
+
+        await presenter.send(.onAppear)
+
+        XCTAssertEqual(presenter.viewState.orders.first { $0.id == approvedOrder.id }?.allowedNextStatus, .preparing)
+        XCTAssertEqual(presenter.viewState.orders.first { $0.id == preparingOrder.id }?.allowedNextStatus, .ready)
+        XCTAssertEqual(presenter.viewState.orders.first { $0.id == readyOrder.id }?.allowedNextStatus, .completed)
+        XCTAssertNil(presenter.viewState.orders.first { $0.id == completedOrder.id }?.allowedNextStatus)
+        XCTAssertFalse(presenter.viewState.orders.first { $0.id == completedOrder.id }?.isStatusChangeEnabled ?? true)
+    }
+
+    func testInFlightStatusUpdateBlocksDuplicateConfirmationsForSameOrderCode() async {
+        let approvedOrder = makeOrder(id: "order-1", status: .accepted, paidAt: Date())
+        let preparingOrder = makeOrder(id: "order-1", status: .preparing, paidAt: Date())
+        let interactor = SpyOrderInteractor(
+            initialState: makeInitialState(),
+            fetchResults: [
+                .success(CursorPage(items: [approvedOrder], nextCursor: nil)),
+                .success(CursorPage(items: [preparingOrder], nextCursor: nil))
+            ],
+            statusUpdateDelayNanoseconds: 50_000_000
+        )
+        let presenter = OrderPresenter(interactor: interactor, router: SpyOrderRouter())
+
+        await presenter.send(.onAppear)
+
+        async let first: Void = presenter.send(
+            .statusChangeConfirmed(orderCode: approvedOrder.orderCode, currentStatus: .accepted, nextStatus: .preparing)
+        )
+        async let second: Void = presenter.send(
+            .statusChangeConfirmed(orderCode: approvedOrder.orderCode, currentStatus: .accepted, nextStatus: .preparing)
+        )
+        _ = await (first, second)
+
+        let statusUpdateRequests = await interactor.statusUpdateRequests()
+        XCTAssertEqual(statusUpdateRequests, [
+            OrderStatusUpdateRequest(orderCode: approvedOrder.orderCode, nextStatus: OrderStatus.preparing.apiValue)
+        ])
+    }
+
+    func testPickedUpReviewEligibilityReflectsReviewID() async {
+        let writableOrder = makeOrder(id: "order-1", status: .completed, paidAt: Date())
+        let reviewedOrder = makeOrder(id: "order-2", status: .completed, paidAt: Date(), reviewID: "review-2")
+        let presenter = OrderPresenter(
+            interactor: SpyOrderInteractor(
+                initialState: makeInitialState(),
+                fetchResults: [
+                    .success(CursorPage(items: [writableOrder, reviewedOrder], nextCursor: nil))
+                ]
+            ),
+            router: SpyOrderRouter()
+        )
+
+        await presenter.send(.onAppear)
+
+        let writableItem = presenter.viewState.orders.first { $0.id == writableOrder.id }
+        XCTAssertTrue(writableItem?.isReviewWritable == true)
+        XCTAssertTrue(writableItem?.canWriteReview == true)
+        XCTAssertNil(writableItem?.reviewDisabledReasonText)
+
+        let reviewedItem = presenter.viewState.orders.first { $0.id == reviewedOrder.id }
+        XCTAssertFalse(reviewedItem?.isReviewWritable ?? true)
+        XCTAssertFalse(reviewedItem?.canWriteReview ?? true)
+        XCTAssertEqual(reviewedItem?.reviewDisabledReasonText, "이미 이 주문에 대한 리뷰를 작성했어요.")
     }
 
     func testUnknownCurrentStatusBlocksPutAndRefreshesOrders() async {
@@ -468,8 +597,8 @@ final class OrderFeatureTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.errorMessage, "현재 주문 상태에서 다음 단계만 변경할 수 있어요.")
     }
 
-    func testPendingOrderWithReceiptNotFoundCannotApprove() async {
-        let pendingOrder = makeOrder(id: "order-1", status: .pending, paidAt: Date(), receiptURL: nil)
+    func testPendingOrderWithoutPaymentEvidenceCannotApprove() async {
+        let pendingOrder = makeOrder(id: "order-1", status: .pending, paidAt: nil, receiptURL: nil)
         let interactor = SpyOrderInteractor(
             initialState: makeInitialState(),
             fetchResults: [.success(CursorPage(items: [pendingOrder], nextCursor: nil))],
@@ -486,10 +615,10 @@ final class OrderFeatureTests: XCTestCase {
         let statusUpdateRequests = await interactor.statusUpdateRequests()
         XCTAssertTrue(statusUpdateRequests.isEmpty)
         XCTAssertNil(presenter.viewState.orders.first?.allowedNextStatus)
-        XCTAssertEqual(presenter.viewState.errorMessage, "결제 검증 완료 후 상태 변경이 가능합니다.")
+        XCTAssertEqual(presenter.viewState.errorMessage, "결제 완료 확인 후 상태를 변경할 수 있어요.")
     }
 
-    func testPendingOrderCancelFailureStaysInActiveFilter() async {
+    func testPendingPaidOrderCancelFailureStaysInActiveFilterWhenNoServerCancelAPI() async {
         let pendingOrder = makeOrder(id: "order-1", status: .pending)
         let presenter = OrderPresenter(
             interactor: SpyOrderInteractor(
@@ -505,7 +634,10 @@ final class OrderFeatureTests: XCTestCase {
 
         XCTAssertEqual(presenter.viewState.orders.first?.id, "order-1")
         XCTAssertNil(presenter.viewState.emptyState)
-        XCTAssertEqual(presenter.viewState.errorMessage, "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
+        XCTAssertEqual(
+            presenter.viewState.errorMessage,
+            "결제 취소 API가 필요해요. 매장에 문의해 주세요."
+        )
     }
 
     func testHighlightedOrderAutoRoutesToDetail() async {
@@ -655,7 +787,7 @@ final class OrderFeatureTests: XCTestCase {
         }
     }
 
-    func testRepositoryUsesStatusUpdateAPIForCancellationWhenStatusSupportsCancelled() async throws {
+    func testRepositoryDoesNotUseStatusUpdateAPIForCancellationWithoutSwaggerCancelEndpoint() async throws {
         let localSnapshotStore = makeLocalSnapshotStore()
         let remoteDataSource = StubOrderRemoteDataSource(
             fetchOrdersResult: .failure(NetworkError.transport),
@@ -668,15 +800,19 @@ final class OrderFeatureTests: XCTestCase {
 
         _ = try await repository.createOrder(makeSubmission())
 
-        let detail = try await repository.cancelOrder(orderCode: "D123456")
-
-        XCTAssertEqual(detail.status, .cancelled)
-        XCTAssertEqual(remoteDataSource.updateStatusRequests, [
-            OrderStatusUpdateRequest(orderCode: "D123456", nextStatus: OrderStatus.cancelled.apiValue)
-        ])
+        do {
+            _ = try await repository.cancelOrder(orderCode: "D123456")
+            XCTFail("Expected unsupported cancellation error")
+        } catch let error as NetworkError {
+            XCTAssertEqual(
+                error.localizedDescription,
+                "현재 서버에서 주문 취소를 지원하지 않아요. 매장에 문의해 주세요."
+            )
+        }
+        XCTAssertTrue(remoteDataSource.updateStatusRequests.isEmpty)
     }
 
-    func testRepositoryPersistsCancelledOverrideWhenRemoteRefreshRegresses() async throws {
+    func testRepositoryDoesNotPersistCancelledOverrideWhenCancellationUnsupported() async throws {
         let localSnapshotStore = makeLocalSnapshotStore()
         let remoteDataSource = StubOrderRemoteDataSource(
             fetchOrdersResult: .success(
@@ -689,13 +825,33 @@ final class OrderFeatureTests: XCTestCase {
             localSnapshotStore: localSnapshotStore
         )
 
-        _ = try await repository.cancelOrder(orderCode: "D123456")
+        _ = try? await repository.cancelOrder(orderCode: "D123456")
         let page = try await repository.fetchOrders(cursor: nil, filter: nil)
 
-        XCTAssertEqual(page.items.first?.status, .cancelled)
-        XCTAssertEqual(remoteDataSource.updateStatusRequests, [
-            OrderStatusUpdateRequest(orderCode: "D123456", nextStatus: OrderStatus.cancelled.apiValue)
-        ])
+        XCTAssertEqual(page.items.first?.status, .preparing)
+        XCTAssertTrue(remoteDataSource.updateStatusRequests.isEmpty)
+    }
+
+    func testLocalCancellationStorePersistsAndRemovesStaleCancellationWhenServerProgresses() async {
+        let suiteName = #function + UUID().uuidString
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        userDefaults.removePersistentDomain(forName: suiteName)
+        let store = LocalOrderCancellationStore(store: UserDefaultsStore(userDefaults: userDefaults))
+        let userID = "user-1"
+        let pendingOrder = makeOrder(id: "order-1", status: .pending, paidAt: nil, receiptURL: nil)
+
+        await store.save(order: pendingOrder, userID: userID)
+        let reloadedStore = LocalOrderCancellationStore(store: UserDefaultsStore(userDefaults: userDefaults))
+        let locallyCancelled = await reloadedStore.apply(to: pendingOrder, userID: userID)
+
+        XCTAssertEqual(locallyCancelled.status, .cancelled)
+
+        let progressedOrder = makeOrder(id: "order-1", status: .preparing, paidAt: nil, receiptURL: nil)
+        let serverPreferred = await reloadedStore.apply(to: progressedOrder, userID: userID)
+        let pendingAfterConflict = await reloadedStore.apply(to: pendingOrder, userID: userID)
+
+        XCTAssertEqual(serverPreferred.status, .preparing)
+        XCTAssertEqual(pendingAfterConflict.status, .pending)
     }
 
     private func makeInitialState() -> OrderViewState {
@@ -723,7 +879,9 @@ final class OrderFeatureTests: XCTestCase {
         itemSummaries: [OrderItemSummary]? = nil,
         paidAt: Date? = nil,
         paymentID: String? = nil,
-        receiptURL: URL? = URL(string: "https://example.com/receipt")
+        receiptURL: URL? = URL(string: "https://example.com/receipt"),
+        reviewID: String? = nil,
+        reviewRating: Decimal? = nil
     ) -> OrderSummary {
         OrderSummary(
             id: id,
@@ -745,8 +903,8 @@ final class OrderFeatureTests: XCTestCase {
                 )
             ],
             pickupTime: Date(timeIntervalSince1970: 1_710_000_600),
-            reviewID: nil,
-            reviewRating: nil,
+            reviewID: reviewID,
+            reviewRating: reviewRating,
             paymentID: paymentID,
             receiptURL: receiptURL,
             receiptExists: receiptURL != nil
@@ -957,6 +1115,29 @@ private struct OrderStatusUpdateRequest: Equatable {
     let nextStatus: String
 }
 
+private extension OrderDetail {
+    var asSummary: OrderSummary {
+        OrderSummary(
+            id: orderID,
+            orderCode: orderCode,
+            storeID: storeID,
+            storeName: storeName,
+            storeImagePath: storeImagePath,
+            status: status,
+            createdAt: createdAt,
+            paidAt: paidAt,
+            totalAmount: totalAmount,
+            itemSummaries: items,
+            pickupTime: pickupTime,
+            reviewID: reviewID,
+            reviewRating: reviewRating,
+            paymentStatus: paymentSummary?.statusText,
+            receiptURL: paymentSummary?.receiptURL,
+            receiptExists: paymentSummary?.receiptURL != nil
+        )
+    }
+}
+
 private struct StubOrderAuthorizedFileURLResolver: AuthorizedFileURLResolving {
     func resolveURL(from path: String) throws -> URL {
         URL(string: "https://example.com\(path)")!
@@ -973,8 +1154,10 @@ private struct SpyOrderInteractor: OrderInteracting {
     let initialState: OrderViewState
     let fetchResults: [Result<CursorPage<OrderSummary>, OrderFeatureError>]
     var cancelResults: [String: Result<OrderDetail, OrderFeatureError>] = [:]
+    var localCancelResults: [String: Result<OrderDetail, OrderFeatureError>] = [:]
     var statusUpdateResults: [String: Result<Void, OrderFeatureError>] = [:]
     var paymentReceiptResults: [String: Result<PaymentReceipt, OrderFeatureError>] = [:]
+    var statusUpdateDelayNanoseconds: UInt64 = 0
 
     private let recorder = OrderFetchRecorder()
     private let statusUpdateRecorder = OrderStatusUpdateRecorder()
@@ -1037,8 +1220,45 @@ private struct SpyOrderInteractor: OrderInteracting {
         }
     }
 
+    func cancelPendingOrderLocally(orderCode: String) async throws -> OrderDetail {
+        guard let result = localCancelResults[orderCode] else {
+            return OrderDetail(
+                orderID: orderCode,
+                orderCode: orderCode,
+                storeID: "",
+                storeName: "주문",
+                storeCategory: nil,
+                storeCloseTime: nil,
+                storeImagePath: nil,
+                status: .cancelled,
+                createdAt: Date(timeIntervalSince1970: 1_710_000_000),
+                updatedAt: Date(timeIntervalSince1970: 1_710_000_120),
+                paidAt: nil,
+                pickupTime: nil,
+                totalAmount: 0,
+                items: [],
+                timeline: [
+                    OrderStatusTimelineEntry(id: "cancelled", status: .cancelled, completed: true, changedAt: Date())
+                ],
+                paymentSummary: nil,
+                userMemo: nil,
+                reviewRating: nil
+            )
+        }
+
+        switch result {
+        case .success(let detail):
+            return detail
+        case .failure(let error):
+            throw error
+        }
+    }
+
     func updateOrderStatus(orderCode: String, status: OrderStatus) async throws {
         await statusUpdateRecorder.append(orderCode: orderCode, nextStatus: status.apiValue)
+        if statusUpdateDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: statusUpdateDelayNanoseconds)
+        }
         guard let result = statusUpdateResults[orderCode] else {
             return
         }

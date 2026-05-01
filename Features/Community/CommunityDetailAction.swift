@@ -2,6 +2,7 @@ import Foundation
 
 enum CommunityDetailAction {
     case onAppear
+    case onDisappear
     case retryTapped
     case postEditTapped
     case postDeleteConfirmed

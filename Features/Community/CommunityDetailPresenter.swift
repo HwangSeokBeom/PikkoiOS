@@ -7,6 +7,10 @@ final class CommunityDetailPresenter: ObservableObject {
     private let interactor: CommunityDetailInteracting
     private let router: CommunityDetailRouting
     private let sessionStore: SessionStore
+    private let notificationService: AppNotificationService
+    private let communityNotificationSnapshotStore: CommunityNotificationSnapshotStore
+    private let activeCommunityPostTracker: ActiveCommunityPostTracking
+    private let postID: String
     private let distanceFormatter = DistanceFormatter()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
 
@@ -22,11 +26,18 @@ final class CommunityDetailPresenter: ObservableObject {
         postID: String,
         interactor: CommunityDetailInteracting,
         router: CommunityDetailRouting,
-        sessionStore: SessionStore
+        sessionStore: SessionStore,
+        notificationService: AppNotificationService = NoopAppNotificationService(),
+        communityNotificationSnapshotStore: CommunityNotificationSnapshotStore = InMemoryCommunityNotificationSnapshotStore(),
+        activeCommunityPostTracker: ActiveCommunityPostTracking = ActiveCommunityPostTracker()
     ) {
         self.interactor = interactor
         self.router = router
         self.sessionStore = sessionStore
+        self.notificationService = notificationService
+        self.communityNotificationSnapshotStore = communityNotificationSnapshotStore
+        self.activeCommunityPostTracker = activeCommunityPostTracker
+        self.postID = postID
         self.viewState = CommunityDetailViewState(postID: postID)
         self.relativeDateFormatter.locale = Locale(identifier: "ko_KR")
         self.relativeDateFormatter.unitsStyle = .full
@@ -35,8 +46,13 @@ final class CommunityDetailPresenter: ObservableObject {
     func send(_ action: CommunityDetailAction) async {
         switch action {
         case .onAppear:
+            activeCommunityPostTracker.activePostId = viewState.postID
             guard !hasLoaded else { return }
             await loadInitialContent()
+        case .onDisappear:
+            if activeCommunityPostTracker.activePostId == postID {
+                activeCommunityPostTracker.activePostId = nil
+            }
         case .retryTapped:
             await loadInitialContent()
         case .postEditTapped:
@@ -107,6 +123,7 @@ final class CommunityDetailPresenter: ObservableObject {
         distanceMeters = content.distanceMeters
         comments = content.detail.comments
         nextCommentCursor = nil
+        detectCommunityDetailReactions(detail: content.detail)
 
         viewState.errorMessage = nil
         viewState.hasLoadedContent = true
@@ -158,12 +175,56 @@ final class CommunityDetailPresenter: ObservableObject {
             comments = page.items
             nextCommentCursor = page.nextCursor
             syncDetailComments()
+            if let detail {
+                detectCommunityDetailReactions(detail: detail)
+            }
             viewState.commentSection.isInitialLoading = false
             syncAllViewState()
         } catch {
             nextCommentCursor = nil
             viewState.commentSection.isInitialLoading = false
             applyCommentFailure(error)
+        }
+    }
+
+    private func detectCommunityDetailReactions(detail: CommunityPostDetail) {
+        let postID = detail.summary.id
+        let commentCount = detail.totalCommentCount
+        let likeCount = detail.summary.likeCount
+        let currentSnapshot = CommunityPostNotificationSnapshot(
+            postId: postID,
+            commentCount: commentCount,
+            likeCount: likeCount,
+            updatedAt: detail.summary.updatedAt ?? detail.summary.createdAt ?? Date()
+        )
+        defer {
+            communityNotificationSnapshotStore.saveSnapshot(currentSnapshot)
+        }
+
+        guard detail.summary.creator.id == sessionStore.currentUserID,
+              let previousSnapshot = communityNotificationSnapshotStore.snapshot(for: postID) else {
+            return
+        }
+
+        if let previousCommentCount = previousSnapshot.commentCount,
+           commentCount > previousCommentCount {
+            notificationService.handleCommunityComment(
+                postId: postID,
+                commentId: comments.first?.id,
+                actorUserId: comments.first?.author.id,
+                actorName: comments.first?.author.nick,
+                preview: comments.first?.content
+            )
+        }
+
+        if let previousLikeCount = previousSnapshot.likeCount,
+           likeCount > previousLikeCount {
+            notificationService.handleCommunityLike(
+                postId: postID,
+                commentId: nil,
+                actorUserId: nil,
+                actorName: nil
+            )
         }
     }
 

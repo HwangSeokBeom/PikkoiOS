@@ -6,6 +6,7 @@ protocol OrderInteracting {
     func fetchOrders(cursor: String?, filter: OrderListFilter) async throws -> CursorPage<OrderSummary>
     func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt
     func cancelOrder(orderCode: String) async throws -> OrderDetail
+    func cancelPendingOrderLocally(orderCode: String) async throws -> OrderDetail
     func updateOrderStatus(orderCode: String, status: OrderStatus) async throws
 }
 
@@ -14,15 +15,24 @@ struct OrderInteractor: OrderInteracting {
     private let initialOrderID: String?
     private let orderRepository: OrderRepository
     private let sessionStore: SessionStore
+    private let localCancellationStore: LocalOrderCancellationStore
+    private let notificationService: AppNotificationService
+    private let orderStatusSnapshotStore: OrderStatusSnapshotStore
 
     init(
         initialOrderID: String? = nil,
         orderRepository: OrderRepository,
-        sessionStore: SessionStore
+        sessionStore: SessionStore,
+        notificationService: AppNotificationService = NoopAppNotificationService(),
+        orderStatusSnapshotStore: OrderStatusSnapshotStore = InMemoryOrderStatusSnapshotStore(),
+        localCancellationStore: LocalOrderCancellationStore = .shared
     ) {
         self.initialOrderID = initialOrderID
         self.orderRepository = orderRepository
         self.sessionStore = sessionStore
+        self.notificationService = notificationService
+        self.orderStatusSnapshotStore = orderStatusSnapshotStore
+        self.localCancellationStore = localCancellationStore
     }
 
     func loadInitialState() async -> OrderViewState {
@@ -44,9 +54,34 @@ struct OrderInteractor: OrderInteracting {
 
     func fetchOrders(cursor: String?, filter: OrderListFilter) async throws -> CursorPage<OrderSummary> {
         do {
-            return try await orderRepository.fetchOrders(cursor: cursor, filter: filter == .all ? nil : filter.rawValue)
+            let page = try await orderRepository.fetchOrders(cursor: cursor, filter: filter == .all ? nil : filter.rawValue)
+            let mergedPage = await applyLocalCancellations(to: page)
+            if cursor == nil {
+                detectOrderStatusChanges(in: mergedPage.items)
+            }
+            return mergedPage
         } catch {
             throw map(error: error)
+        }
+    }
+
+    private func detectOrderStatusChanges(in orders: [OrderSummary]) {
+        for order in orders {
+            let currentStatus = order.status.apiValue
+            guard !order.orderCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+
+            if let previousStatus = orderStatusSnapshotStore.status(for: order.orderCode) {
+                if previousStatus != currentStatus {
+                    notificationService.handleOrderStatusChanged(
+                        orderCode: order.orderCode,
+                        previousStatus: previousStatus,
+                        currentStatus: currentStatus,
+                        storeName: order.storeName
+                    )
+                }
+            }
+
+            orderStatusSnapshotStore.saveStatus(currentStatus, for: order.orderCode)
         }
     }
 
@@ -63,6 +98,49 @@ struct OrderInteractor: OrderInteracting {
             return try await orderRepository.cancelOrder(orderCode: orderCode)
         } catch {
             throw map(error: error, fallbackMessage: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
+        }
+    }
+
+    func cancelPendingOrderLocally(orderCode: String) async throws -> OrderDetail {
+        guard let userID = sessionStore.currentUserID else {
+            throw OrderFeatureError.authenticationRequired
+        }
+
+        let page = try await orderRepository.fetchOrders(cursor: nil, filter: nil)
+        guard let order = page.items.first(where: { $0.orderCode == orderCode || $0.id == orderCode }) else {
+            throw OrderFeatureError.notFound
+        }
+        guard order.status == .pending else {
+            throw OrderFeatureError.unavailable(message: "매장 승인 후에는 앱에서 취소할 수 없어요.")
+        }
+        guard !hasPaymentIdentifier(order), !order.isPaymentCompleted else {
+            throw OrderFeatureError.unavailable(message: "결제 취소 API가 필요해요. 매장에 문의해 주세요.")
+        }
+
+        await localCancellationStore.save(order: order, userID: userID)
+        let detail = try await orderRepository.fetchOrderDetail(orderID: order.id)
+        return await localCancellationStore.apply(to: detail, userID: userID)
+    }
+
+    private func applyLocalCancellations(to page: CursorPage<OrderSummary>) async -> CursorPage<OrderSummary> {
+        guard let userID = sessionStore.currentUserID else {
+            return page
+        }
+
+        return CursorPage(
+            items: await localCancellationStore.apply(to: page.items, userID: userID),
+            nextCursor: page.nextCursor
+        )
+    }
+
+    private func hasPaymentIdentifier(_ order: OrderSummary) -> Bool {
+        [
+            order.paymentLookupKey,
+            order.paymentID,
+            order.merchantUID,
+            order.impUID
+        ].contains { value in
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         }
     }
 

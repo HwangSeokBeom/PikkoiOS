@@ -20,6 +20,8 @@ struct PikkoApp: App {
 
         let container = AppDIContainer()
         let appState = container.makeAppState()
+        PikkoAppDelegate.notificationService = container.appNotificationService
+        PikkoAppDelegate.notificationDiagnosticsStore = container.notificationDiagnosticsStore
 
         self.container = container
         self.bootstrapper = container.makeAppBootstrapper(appState: appState)
@@ -78,6 +80,8 @@ struct PikkoApp: App {
 
 final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
     private static var hasConfiguredFirebase = false
+    @MainActor static weak var notificationService: DefaultAppNotificationService?
+    @MainActor static weak var notificationDiagnosticsStore: NotificationDiagnosticsStore?
 
     private var isFirebaseConfigured = false
 
@@ -91,8 +95,14 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
             UNUserNotificationCenter.current().delegate = self
             Messaging.messaging().delegate = self
             requestNotificationPermission(application: application)
+            if let remotePayload = launchOptions?[.remoteNotification] as? [AnyHashable: Any] {
+                let payload = Self.stringPayload(from: remotePayload)
+                Task { @MainActor in
+                    Self.notificationService?.handleRemoteNotificationTapPayload(payload)
+                }
+            }
         } else {
-            print("DEBUG [FCM] notification setup skipped because Firebase is not configured")
+            Self.logDebug("notification setup skipped because Firebase is not configured")
         }
 
         return true
@@ -107,7 +117,10 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         }
 
         Messaging.messaging().apnsToken = deviceToken
-        print("DEBUG [FCM] APNs device token registered")
+        Self.logDebug("APNs device token registered")
+        Task { @MainActor in
+            Self.notificationDiagnosticsStore?.recordAPNsTokenRegistered()
+        }
         fetchFCMTokenAfterAPNsRegistration()
     }
 
@@ -115,25 +128,89 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         _ application: UIApplication,
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
-        print("DEBUG [FCM] APNs device token registration failed error=\(error.localizedDescription)")
+        Self.logDebug("APNs device token registration failed error=\(error.localizedDescription)")
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        let payload = Self.stringPayload(from: userInfo)
+        Task { @MainActor in
+            Self.notificationService?.handleRemoteNotificationPayload(payload)
+            completionHandler(.newData)
+        }
     }
 
     nonisolated func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
         Self.logToken(event: "didReceiveRegistrationToken", token: fcmToken)
-        Self.publishFCMToken(fcmToken)
+        Self.publishFCMToken(fcmToken, source: "messagingDelegate")
     }
 
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound, .badge]
+        let payload = Self.stringPayload(from: notification.request.content.userInfo)
+        let isRemotePush = notification.request.trigger is UNPushNotificationTrigger
+        let notificationIdentifier = notification.request.identifier
+        let source = isRemotePush ? "remote" : "local"
+        Logger(category: "NotificationPresentation").debug("[NotificationPresentation] willPresent source=\(source) keys=\(payload.keys.sorted().joined(separator: ","))")
+        await MainActor.run {
+            Self.notificationDiagnosticsStore?.recordForegroundPresentation(source: source, result: "willPresent")
+        }
+
+        if isRemotePush {
+            await MainActor.run {
+                Self.notificationService?.handleRemoteNotificationPayload(payload)
+            }
+            let shouldSuppressBanner = await MainActor.run {
+                Self.notificationService?.shouldSuppressForegroundBanner(for: payload) ?? false
+            }
+            if shouldSuppressBanner {
+                await MainActor.run {
+                    Self.notificationDiagnosticsStore?.recordForegroundPresentation(source: source, result: "suppressed")
+                }
+                return [.list, .sound, .badge]
+            } else {
+                Logger(category: "NotificationPresentation").debug("[NotificationPresentation] foreground banner presented source=remote")
+                await MainActor.run {
+                    Self.notificationDiagnosticsStore?.recordForegroundPresentation(source: source, result: "presented")
+                }
+                return [.banner, .list, .sound, .badge]
+            }
+        } else {
+            Logger(category: "NotificationPresentation").debug("[NotificationPresentation] foreground banner presented source=local")
+            Logger(category: "LocalNotification").debug("[LocalNotification] delivered foreground=true id=\(notificationIdentifier) keys=\(payload.keys.sorted().joined(separator: ",")) source=localNotification")
+            await MainActor.run {
+                Self.notificationDiagnosticsStore?.recordForegroundPresentation(source: source, result: "presented")
+                Self.notificationDiagnosticsStore?.recordLocalNotification(id: notificationIdentifier)
+            }
+            return [.banner, .list, .sound, .badge]
+        }
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let payload = Self.stringPayload(from: response.notification.request.content.userInfo)
+        let isRemotePush = response.notification.request.trigger is UNPushNotificationTrigger
+        if isRemotePush {
+            Self.logDebug("notification tap source=remote keys=\(payload.keys.sorted().joined(separator: ","))")
+            await MainActor.run {
+                Self.notificationService?.handleRemoteNotificationTapPayload(payload)
+            }
+        } else {
+            Logger(category: "LocalNotification").debug("[LocalNotification] tapped id=\(response.notification.request.identifier) keys=\(payload.keys.sorted().joined(separator: ","))")
+        }
     }
 
     static func configureFirebaseIfNeeded(shouldLogConfigured: Bool) -> Bool {
         if !hasConfiguredFirebase {
             guard Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil else {
-                print("DEBUG [FCM] Firebase configure skipped missing GoogleService-Info.plist")
+                logDebug("Firebase configure skipped missing GoogleService-Info.plist")
                 return false
             }
 
@@ -142,26 +219,33 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         }
 
         guard hasConfiguredFirebase, FirebaseApp.app() != nil else {
-            print("DEBUG [FCM] Firebase configure failed app=nil")
+            logDebug("Firebase configure failed app=nil")
             return false
         }
 
         if shouldLogConfigured {
-            print("DEBUG [FCM] Firebase configured")
+            logDebug("Firebase configured")
         }
         return true
     }
 
     private func requestNotificationPermission(application: UIApplication) {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
-            print("DEBUG [FCM] notification permission granted=\(granted)")
+            Self.logDebug("notification permission granted=\(granted)")
 
             if let error {
-                print("DEBUG [FCM] notification permission error=\(error.localizedDescription)")
+                Self.logDebug("notification permission error=\(error.localizedDescription)")
             }
 
             DispatchQueue.main.async {
                 application.registerForRemoteNotifications()
+            }
+        }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            let statusText = Self.authorizationStatusText(settings.authorizationStatus)
+            Self.logDebug("notification authorization status=\(statusText)")
+            Task { @MainActor in
+                Self.notificationDiagnosticsStore?.recordAuthorizationStatus(statusText)
             }
         }
     }
@@ -169,16 +253,16 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
     private func fetchFCMTokenAfterAPNsRegistration() {
         Messaging.messaging().token { token, error in
             if let error {
-                print("DEBUG [FCM] token fetch after APNs failed error=\(error.localizedDescription)")
+                Self.logDebug("token fetch after APNs failed error=\(error.localizedDescription)")
                 return
             }
 
             Self.logToken(event: "token fetch after APNs success", token: token)
-            Self.publishFCMToken(token)
+            Self.publishFCMToken(token, source: "manualFetch")
         }
     }
 
-    nonisolated private static func publishFCMToken(_ token: String?) {
+    nonisolated private static func publishFCMToken(_ token: String?, source: String) {
         guard let token = token?.trimmingCharacters(in: .whitespacesAndNewlines),
               !token.isEmpty else {
             return
@@ -187,20 +271,23 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         NotificationCenter.default.post(
             name: .pikkoFCMTokenDidRefresh,
             object: nil,
-            userInfo: [FCMTokenNotificationUserInfoKey.token: token]
+            userInfo: [
+                FCMTokenNotificationUserInfoKey.token: token,
+                FCMTokenNotificationUserInfoKey.source: source
+            ]
         )
     }
 
-    nonisolated private static func logToken(event: String, token: String?) {
-        print("DEBUG [FCM] \(event) \(tokenSummary(token))")
+    nonisolated static func publishFCMTokenForDiagnostics(_ token: String?) {
+        publishFCMToken(token, source: "diagnosticsManualFetch")
+    }
 
-#if DEBUG
-        if ProcessInfo.processInfo.environment["PIKKO_DEBUG_LOG_FULL_FCM_TOKEN"] == "1",
-           let token,
-           !token.isEmpty {
-            print("DEBUG [FCM] \(event) fullToken=\(token)")
-        }
-#endif
+    nonisolated private static func logToken(event: String, token: String?) {
+        logDebug("\(event) \(tokenSummary(token))")
+    }
+
+    nonisolated private static func logDebug(_ message: String) {
+        Logger(category: "FCM").debugVerbose("[FCM] \(message)")
     }
 
     nonisolated private static func tokenSummary(_ token: String?) -> String {
@@ -208,5 +295,45 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         let prefix = String(token.prefix(8))
         let suffix = String(token.suffix(8))
         return "exists=\(!token.isEmpty) prefix=\(prefix) suffix=\(suffix) length=\(token.count)"
+    }
+
+    nonisolated static func tokenSummaryForDiagnostics(_ token: String?) -> String {
+        tokenSummary(token)
+    }
+
+    nonisolated private static func authorizationStatusText(_ status: UNAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined:
+            return "notDetermined"
+        case .denied:
+            return "denied"
+        case .authorized:
+            return "authorized"
+        case .provisional:
+            return "provisional"
+        case .ephemeral:
+            return "ephemeral"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
+    nonisolated private static func stringPayload(from userInfo: [AnyHashable: Any]) -> [String: String] {
+        var values: [String: String] = [:]
+        for (key, value) in userInfo {
+            guard let key = key as? String else { continue }
+            if let string = value as? String {
+                values[key] = string
+            } else if let number = value as? NSNumber {
+                values[key] = number.stringValue
+            } else if let dictionary = value as? [String: Any] {
+                for (nestedKey, nestedValue) in dictionary {
+                    if let string = nestedValue as? String {
+                        values[nestedKey] = string
+                    }
+                }
+            }
+        }
+        return values
     }
 }

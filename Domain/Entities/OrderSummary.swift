@@ -103,34 +103,11 @@ enum OrderStatus: Equatable, Sendable {
         }
     }
 
-    static var selectableStatuses: [OrderStatus] {
-        [.pending, .accepted, .preparing, .ready, .completed]
-    }
-
-    var allowedNextStatus: OrderStatus? {
-        switch self {
-        case .pending:
-            return .accepted
-        case .accepted:
-            return .preparing
-        case .preparing:
-            return .ready
-        case .ready:
-            return .completed
-        case .completed, .cancelled, .rejected, .failed, .unknown:
-            return nil
-        }
-    }
-
     var canEvaluateStatusTransition: Bool {
         if case .unknown = self {
             return false
         }
         return true
-    }
-
-    func canTransition(to nextStatus: OrderStatus) -> Bool {
-        allowedNextStatus == nextStatus
     }
 
     func isEarlierProgressStep(than status: OrderStatus) -> Bool {
@@ -156,9 +133,9 @@ enum OrderStatus: Equatable, Sendable {
 
     var isCancellable: Bool {
         switch self {
-        case .pending, .accepted:
+        case .pending:
             return true
-        case .preparing, .ready, .completed, .cancelled, .rejected, .failed, .unknown:
+        case .accepted, .preparing, .ready, .completed, .cancelled, .rejected, .failed, .unknown:
             return false
         }
     }
@@ -188,6 +165,20 @@ enum OrderStatus: Equatable, Sendable {
             return false
         }
     }
+
+    var isPaymentCompletionEvidence: Bool {
+        switch self {
+        case .accepted, .preparing, .ready, .completed:
+            return true
+        case .pending, .cancelled, .rejected, .failed, .unknown:
+            return false
+        }
+    }
+}
+
+struct OrderPaymentCompletionEvidence: Equatable, Sendable {
+    let isCompleted: Bool
+    let source: String
 }
 
 struct OrderSummary: Equatable, Sendable, Identifiable {
@@ -214,11 +205,55 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
     let receiptExists: Bool
 
     var canCancel: Bool {
-        status.isCancellable
+        status.isCancellable && isPaymentCompleted
     }
 
     var isPaymentCompleted: Bool {
-        paidAt != nil
+        paymentCompletionEvidence.isCompleted
+    }
+
+    var paymentEvidenceSource: String {
+        paymentCompletionEvidence.source
+    }
+
+    var paymentCompletionEvidence: OrderPaymentCompletionEvidence {
+        let normalizedVerificationState = paymentVerificationState.normalizedPaymentState
+        if normalizedVerificationState == "verified" {
+            return OrderPaymentCompletionEvidence(isCompleted: true, source: "paymentVerificationState")
+        }
+        if ["notverified", "not_verified", "failed", "failure"].contains(normalizedVerificationState) {
+            return OrderPaymentCompletionEvidence(isCompleted: false, source: "paymentVerificationState")
+        }
+
+        let normalizedPaymentStatus = paymentStatus.normalizedPaymentState
+        if ["paid", "completed", "complete", "succeeded", "success", "approved"].contains(normalizedPaymentStatus) {
+            return OrderPaymentCompletionEvidence(isCompleted: true, source: "paymentStatus")
+        }
+        if ["cancelled", "canceled", "failed", "failure", "ready", "pending"].contains(normalizedPaymentStatus) {
+            return OrderPaymentCompletionEvidence(isCompleted: false, source: "paymentStatus")
+        }
+
+        if paidAt != nil {
+            return OrderPaymentCompletionEvidence(isCompleted: true, source: "paidAt")
+        }
+        if receiptExists || receiptURL != nil {
+            return OrderPaymentCompletionEvidence(isCompleted: true, source: "receipt")
+        }
+        if status.isPaymentCompletionEvidence {
+            return OrderPaymentCompletionEvidence(isCompleted: true, source: "orderStatus")
+        }
+        return OrderPaymentCompletionEvidence(isCompleted: false, source: hasPaymentLookupEvidence ? "paymentLookup" : "none")
+    }
+
+    private var hasPaymentLookupEvidence: Bool {
+        [
+            paymentLookupKey,
+            paymentID,
+            merchantUID,
+            impUID
+        ].contains { value in
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
     }
 
     init(
@@ -342,6 +377,16 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
             reviewID: nil,
             reviewRating: nil
         )
+    }
+}
+
+private extension Optional where Wrapped == String {
+    var normalizedPaymentState: String {
+        self?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            ?? ""
     }
 }
 

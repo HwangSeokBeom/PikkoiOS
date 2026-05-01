@@ -5,5 +5,8 @@ struct AuthGateView: View {
 
     var body: some View {
         featureBuilderFactory.makeAuthView(context: .generic)
+            .onAppear {
+                Logger(category: "AuthGate").debug("[AuthGate] show reason=sessionMissing authState=unauthenticated")
+            }
     }
 }

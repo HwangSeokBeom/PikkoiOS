@@ -75,9 +75,6 @@ targets:
           - "**/* 2.swift"
           - "**/* 3.swift"
           - "**/* 4.swift"
-      - path: Features/Home/HomeBuilder 2.swift
-      - path: Features/Home/HomeInteractor 2.swift
-      - path: Features/Home/HomePresenter 2.swift
       - path: Resources/Assets.xcassets
       - path: Resources/LaunchScreen.storyboard
     postBuildScripts:

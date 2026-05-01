@@ -11,8 +11,10 @@ struct ProfileBuilder {
     private let makeLikedPostsView: () -> AnyView
     private let makeMyReviewsView: (String) -> AnyView
     private let makeChatListView: () -> AnyView
+    private let makeNotificationListView: () -> AnyView
     private let makeUserSearchView: () -> AnyView
     private let makeDeveloperDiagnosticsView: () -> AnyView
+    private let initialUnreadNotificationCount: Int
 
     init(
         sessionStore: SessionStore,
@@ -23,8 +25,10 @@ struct ProfileBuilder {
         makeLikedPostsView: @escaping () -> AnyView,
         makeMyReviewsView: @escaping (String) -> AnyView,
         makeChatListView: @escaping () -> AnyView,
+        makeNotificationListView: @escaping () -> AnyView,
         makeUserSearchView: @escaping () -> AnyView,
-        makeDeveloperDiagnosticsView: @escaping () -> AnyView
+        makeDeveloperDiagnosticsView: @escaping () -> AnyView,
+        initialUnreadNotificationCount: Int = 0
     ) {
         self.sessionStore = sessionStore
         self.authRepository = authRepository
@@ -34,8 +38,10 @@ struct ProfileBuilder {
         self.makeLikedPostsView = makeLikedPostsView
         self.makeMyReviewsView = makeMyReviewsView
         self.makeChatListView = makeChatListView
+        self.makeNotificationListView = makeNotificationListView
         self.makeUserSearchView = makeUserSearchView
         self.makeDeveloperDiagnosticsView = makeDeveloperDiagnosticsView
+        self.initialUnreadNotificationCount = initialUnreadNotificationCount
     }
 
     func build() -> ProfileRootView {
@@ -58,8 +64,10 @@ struct ProfileBuilder {
             makeLikedPostsView: makeLikedPostsView,
             makeMyReviewsView: makeMyReviewsView,
             makeChatListView: makeChatListView,
+            makeNotificationListView: makeNotificationListView,
             makeUserSearchView: makeUserSearchView,
-            makeDeveloperDiagnosticsView: makeDeveloperDiagnosticsView
+            makeDeveloperDiagnosticsView: makeDeveloperDiagnosticsView,
+            initialUnreadNotificationCount: initialUnreadNotificationCount
         )
     }
 }

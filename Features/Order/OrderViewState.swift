@@ -36,11 +36,11 @@ enum PaymentVerificationState: Equatable, Sendable {
     var statusMessage: String? {
         switch self {
         case .unchecked, .checking:
-            return "결제 정보를 확인 중입니다."
+            return "결제 정보 확인 후 상태를 변경할 수 있어요."
         case .verified:
             return nil
         case .notVerified:
-            return "결제 검증 완료 후 상태 변경이 가능합니다."
+            return "결제 완료 확인 후 상태를 변경할 수 있어요."
         case .failed(let message):
             return message.isEmpty ? "결제 정보를 확인할 수 없습니다." : message
         }
@@ -85,6 +85,7 @@ struct OrderListItemViewState: Equatable, Identifiable {
     let isStatusChangeEnabled: Bool
     let statusChangeMessage: String?
     let disabledReasonText: String?
+    let cancelDisabledReasonText: String?
     let canRefreshPaymentReceipt: Bool
     let isCancelEnabled: Bool
     let isReviewWritable: Bool
@@ -99,7 +100,7 @@ struct OrderStatusTransitionDecision: Equatable {
     let disabledReasonText: String?
 }
 
-struct OrderStatusTransitionPolicy: Sendable {
+struct OrderStatusTransitionResolver: Sendable {
     func decision(
         currentStatus: OrderStatus,
         paymentVerificationState: PaymentVerificationState
@@ -112,7 +113,7 @@ struct OrderStatusTransitionPolicy: Sendable {
             )
         }
 
-        guard let nextStatus = currentStatus.allowedNextStatus else {
+        guard let nextStatus = sequentialNextStatus(after: currentStatus) else {
             return OrderStatusTransitionDecision(
                 allowedNextStatus: nil,
                 isStatusChangeEnabled: false,
@@ -120,8 +121,7 @@ struct OrderStatusTransitionPolicy: Sendable {
             )
         }
 
-        if currentStatus.requiresPaymentVerification(to: nextStatus),
-           !paymentVerificationState.isVerified {
+        if !paymentVerificationState.isVerified {
             return OrderStatusTransitionDecision(
                 allowedNextStatus: nil,
                 isStatusChangeEnabled: false,
@@ -136,19 +136,234 @@ struct OrderStatusTransitionPolicy: Sendable {
         )
     }
 
-    func canCancel(status: OrderStatus) -> Bool {
-        status.isCancellable
+    func allowedNextStatus(
+        currentStatus: OrderStatus,
+        paymentVerificationState: PaymentVerificationState
+    ) -> OrderStatus? {
+        decision(
+            currentStatus: currentStatus,
+            paymentVerificationState: paymentVerificationState
+        ).allowedNextStatus
     }
 
-    func reviewWritable(status: OrderStatus, reviewID: String?) -> Bool {
-        status == .completed && reviewID == nil
+    func canTransition(
+        currentStatus: OrderStatus,
+        nextStatus: OrderStatus,
+        paymentVerificationState: PaymentVerificationState
+    ) -> Bool {
+        allowedNextStatus(
+            currentStatus: currentStatus,
+            paymentVerificationState: paymentVerificationState
+        ) == nextStatus
     }
 
-    func reviewDisabledReason(status: OrderStatus, reviewID: String?) -> String? {
-        if reviewID != nil {
-            return "이미 이 주문에 대한 리뷰를 작성했어요."
+    private func sequentialNextStatus(after status: OrderStatus) -> OrderStatus? {
+        switch status {
+        case .pending:
+            return .accepted
+        case .accepted:
+            return .preparing
+        case .preparing:
+            return .ready
+        case .ready:
+            return .completed
+        case .completed, .cancelled, .rejected, .failed, .unknown:
+            return nil
         }
-        return status == .completed ? nil : "픽업완료 후 리뷰를 작성할 수 있어요."
+    }
+
+    func canCancel(status: OrderStatus, paymentVerificationState: PaymentVerificationState) -> Bool {
+        status.isCancellable && paymentVerificationState.isVerified
+    }
+}
+
+enum OrderCancelStrategy: String, Equatable, Sendable {
+    case serverOrderCancel
+    case serverPaymentCancel
+    case localPendingCancel
+    case unsupported
+}
+
+enum OrderCancelPolicyReason: String, Equatable, Sendable {
+    case available
+    case localPendingCancelAvailable
+    case cancelEndpointUnavailable
+    case missingPaymentIdentifier
+    case approvedAfterCannotCancel
+    case terminalStatus
+    case unsupportedStatus
+}
+
+struct OrderCancelPolicy: Equatable, Sendable {
+    let canShowCancelButton: Bool
+    let canExecuteCancel: Bool
+    let strategy: OrderCancelStrategy
+    let reason: OrderCancelPolicyReason
+    let userMessage: String?
+    let debugReason: String
+    let hasPaymentIdentifier: Bool
+    let cancelEndpointAvailable: Bool
+}
+
+struct OrderCancelPolicyResolver: Sendable {
+    // Swagger currently exposes no order cancel, payment cancel, or refund endpoint.
+    private let orderCancelEndpointAvailable = false
+    private let paymentCancelEndpointAvailable = false
+
+    func policy(
+        rawStatus: OrderStatus,
+        mappedStatus: OrderStatus,
+        paid: Bool,
+        paymentLookupKey: String?,
+        paymentID: String?,
+        merchantUID: String?,
+        impUID: String?
+    ) -> OrderCancelPolicy {
+        let hasPaymentIdentifier = [
+            paymentLookupKey,
+            paymentID,
+            merchantUID,
+            impUID
+        ].contains { value in
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+
+        if rawStatus == .cancelled || mappedStatus.isTerminal {
+            return OrderCancelPolicy(
+                canShowCancelButton: false,
+                canExecuteCancel: false,
+                strategy: .unsupported,
+                reason: .terminalStatus,
+                userMessage: nil,
+                debugReason: "terminalStatus",
+                hasPaymentIdentifier: hasPaymentIdentifier,
+                cancelEndpointAvailable: false
+            )
+        }
+
+        guard rawStatus == .pending || mappedStatus == .pending else {
+            return OrderCancelPolicy(
+                canShowCancelButton: false,
+                canExecuteCancel: false,
+                strategy: .unsupported,
+                reason: .approvedAfterCannotCancel,
+                userMessage: "매장 승인 후에는 앱에서 취소할 수 없어요.",
+                debugReason: "approvedAfterCannotCancel",
+                hasPaymentIdentifier: hasPaymentIdentifier,
+                cancelEndpointAvailable: false
+            )
+        }
+
+        if orderCancelEndpointAvailable {
+            return OrderCancelPolicy(
+                canShowCancelButton: true,
+                canExecuteCancel: true,
+                strategy: .serverOrderCancel,
+                reason: .available,
+                userMessage: "주문을 잘못했다면 매장 승인 전까지 취소할 수 있어요.",
+                debugReason: "serverOrderCancelEndpointAvailable",
+                hasPaymentIdentifier: hasPaymentIdentifier,
+                cancelEndpointAvailable: orderCancelEndpointAvailable
+            )
+        }
+
+        if hasPaymentIdentifier || paid {
+            guard paymentCancelEndpointAvailable else {
+                return OrderCancelPolicy(
+                    canShowCancelButton: true,
+                    canExecuteCancel: false,
+                    strategy: .unsupported,
+                    reason: .cancelEndpointUnavailable,
+                    userMessage: "결제 취소 API가 필요해요. 매장에 문의해 주세요.",
+                    debugReason: "paymentIdentifierPresentButNoPaymentCancelEndpoint",
+                    hasPaymentIdentifier: hasPaymentIdentifier,
+                    cancelEndpointAvailable: false
+                )
+            }
+
+            return OrderCancelPolicy(
+                canShowCancelButton: true,
+                canExecuteCancel: hasPaymentIdentifier,
+                strategy: .serverPaymentCancel,
+                reason: hasPaymentIdentifier ? .available : .missingPaymentIdentifier,
+                userMessage: hasPaymentIdentifier
+                    ? "주문을 잘못했다면 매장 승인 전까지 취소할 수 있어요."
+                    : "결제 정보를 확인할 수 없어 앱에서 취소할 수 없어요.",
+                debugReason: hasPaymentIdentifier ? "serverPaymentCancelEndpointAvailable" : "missingPaymentIdentifier",
+                hasPaymentIdentifier: hasPaymentIdentifier,
+                cancelEndpointAvailable: true
+            )
+        }
+
+        return OrderCancelPolicy(
+            canShowCancelButton: true,
+            canExecuteCancel: true,
+            strategy: .localPendingCancel,
+            reason: .localPendingCancelAvailable,
+            userMessage: "결제 정보를 확인하고 있어요. 주문을 잘못했다면 취소할 수 있어요.",
+            debugReason: "pendingApprovalUnpaidNoPaymentIdentifierNoServerCancelEndpoint",
+            hasPaymentIdentifier: false,
+            cancelEndpointAvailable: false
+        )
+    }
+}
+
+struct OrderReviewEligibilityDecision: Equatable {
+    let alreadyReviewed: Bool
+    let matchedReviewID: String?
+    let isWritable: Bool
+    let reason: String
+    let disabledReasonText: String?
+}
+
+struct OrderReviewEligibilityResolver: Sendable {
+    func decision(
+        storeID: String,
+        status: OrderStatus,
+        paymentVerificationState: PaymentVerificationState,
+        reviewID: String?
+    ) -> OrderReviewEligibilityDecision {
+        let normalizedStoreID = storeID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let alreadyReviewed = reviewID != nil
+
+        if normalizedStoreID.isEmpty {
+            return OrderReviewEligibilityDecision(
+                alreadyReviewed: alreadyReviewed,
+                matchedReviewID: reviewID,
+                isWritable: false,
+                reason: "missingStoreId",
+                disabledReasonText: "가게 정보를 확인한 뒤 리뷰를 작성할 수 있어요."
+            )
+        }
+
+        guard status == .completed else {
+            return OrderReviewEligibilityDecision(
+                alreadyReviewed: alreadyReviewed,
+                matchedReviewID: reviewID,
+                isWritable: false,
+                reason: "notPickedUp",
+                disabledReasonText: "픽업완료 후 리뷰를 작성할 수 있어요."
+            )
+        }
+
+        if alreadyReviewed {
+            return OrderReviewEligibilityDecision(
+                alreadyReviewed: true,
+                matchedReviewID: reviewID,
+                isWritable: false,
+                reason: "alreadyReviewed",
+                disabledReasonText: "이미 이 주문에 대한 리뷰를 작성했어요."
+            )
+        }
+
+        _ = paymentVerificationState
+        return OrderReviewEligibilityDecision(
+            alreadyReviewed: false,
+            matchedReviewID: nil,
+            isWritable: true,
+            reason: "pickedUpAndNotReviewed",
+            disabledReasonText: nil
+        )
     }
 }
 

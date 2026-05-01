@@ -96,33 +96,63 @@ enum ChatMessageMergePolicy {
 
         if let serverID = message.effectiveServerChatID,
            let index = result.firstIndex(where: { $0.effectiveServerChatID == serverID }) {
-            Logger.shared.debug("[ChatMerge] skipDuplicate serverChatId=\(serverID) source=\(source)")
+#if DEBUG
+            if ChatDebugOptions.isMergeLoggingEnabled {
+                DebugLogDeduplicator.shared.printOnce(
+                    key: "ChatMerge.skipDuplicate.\(serverID).\(source)",
+                    message: "[ChatMerge] skipDuplicate serverChatId=\(serverID) source=\(source)"
+                )
+            }
+#endif
             result[index] = mergeServerMessage(message, into: result[index])
             let deduped = deduplicated(result, currentUserID: currentUserID)
-            Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+#if DEBUG
+            if ChatDebugOptions.isMergeLoggingEnabled {
+                Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+            }
+#endif
             return deduped
         }
 
         if let serverID = message.effectiveServerChatID,
            let index = result.firstIndex(where: { isOptimistic($0, matching: message, currentUserID: currentUserID) }) {
             let localID = result[index].effectiveLocalTemporaryID ?? message.effectiveLocalTemporaryID ?? "-"
-            Logger.shared.debug("[ChatMerge] replaceOptimistic localTemporaryId=\(localID) serverChatId=\(serverID) source=\(source)")
+#if DEBUG
+            if ChatDebugOptions.isMergeLoggingEnabled {
+                DebugLogDeduplicator.shared.printOnce(
+                    key: "ChatMerge.replaceOptimistic.\(localID).\(serverID).\(source)",
+                    message: "[ChatMerge] replaceOptimistic localTemporaryId=\(localID) serverChatId=\(serverID) source=\(source)"
+                )
+            }
+#endif
             result[index] = mergeServerMessage(message, into: result[index])
             let deduped = deduplicated(result, currentUserID: currentUserID)
-            Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+#if DEBUG
+            if ChatDebugOptions.isMergeLoggingEnabled {
+                Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+            }
+#endif
             return deduped
         }
 
         if let localID = message.effectiveLocalTemporaryID,
            result.contains(where: { $0.effectiveLocalTemporaryID == localID }) {
             let deduped = deduplicated(result, currentUserID: currentUserID)
-            Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+#if DEBUG
+            if ChatDebugOptions.isMergeLoggingEnabled, countBefore != deduped.count {
+                Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+            }
+#endif
             return deduped
         }
 
         result.append(message)
         let deduped = deduplicated(result, currentUserID: currentUserID)
-        Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+#if DEBUG
+        if ChatDebugOptions.isMergeLoggingEnabled, countBefore != deduped.count {
+            Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+        }
+#endif
         return deduped
     }
 
@@ -783,9 +813,18 @@ final class UserDefaultsChatRoomStoreContextCache: ChatRoomStoreContextCaching, 
         let matches = loadContexts().values.filter { $0.roomID == roomID }
         guard matches.count == 1 else {
             if matches.count > 1 {
-                Logger.shared.info(
-                    "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(roomID) storeCount=\(matches.count) storeIds=\(matches.map(\.storeID).joined(separator: ","))"
+                let storeIDs = matches.map(\.storeID).joined(separator: ",")
+#if DEBUG
+                DebugLogDeduplicator.shared.printOnce(
+                    key: "ChatRoomContext.multipleStoreScopesShareServerRoom.\(roomID).\(storeIDs)",
+                    level: .info,
+                    message: "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(roomID) storeCount=\(matches.count) storeIds=\(storeIDs)"
                 )
+#else
+                Logger.shared.info(
+                    "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(roomID) storeCount=\(matches.count) storeIds=\(storeIDs)"
+                )
+#endif
             }
             return nil
         }
@@ -826,9 +865,17 @@ final class UserDefaultsChatRoomStoreContextCache: ChatRoomStoreContextCaching, 
             let mappedStoreIDs = (contexts.values.filter { $0.roomID == context.roomID }.map(\.storeID) + [context.storeID])
                 .removingDuplicates()
                 .joined(separator: ",")
+#if DEBUG
+            DebugLogDeduplicator.shared.printOnce(
+                key: "ChatRoomContext.multipleStoreScopesShareServerRoom.\(context.roomID).\(mappedStoreIDs)",
+                level: .info,
+                message: "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(context.roomID) storeCount=\(mappedStoreIDs.split(separator: ",").count) storeIds=\(mappedStoreIDs)"
+            )
+#else
             Logger.shared.info(
                 "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(context.roomID) storeCount=\(mappedStoreIDs.split(separator: ",").count) storeIds=\(mappedStoreIDs)"
             )
+#endif
         }
 
         contexts[context.storeID] = context
@@ -1588,14 +1635,29 @@ struct ChatInteractor: ChatInteracting {
             for message in messages {
                 if let serverID = message.effectiveServerChatID,
                    existingMessages.contains(where: { $0.effectiveServerChatID == serverID }) {
-                    Logger.shared.debug("[ChatMerge] skipDuplicate serverChatId=\(serverID) source=sync")
+#if DEBUG
+                    if ChatDebugOptions.isMergeLoggingEnabled {
+                        DebugLogDeduplicator.shared.printOnce(
+                            key: "ChatMerge.skipDuplicate.\(serverID).sync",
+                            message: "[ChatMerge] skipDuplicate serverChatId=\(serverID) source=sync"
+                        )
+                    }
+#endif
                 } else if let serverID = message.effectiveServerChatID,
                           let pending = existingMessages.first(where: {
                               ChatMessageMergePolicy.deduplicated([$0, message], currentUserID: sessionStore.currentUserID).count == 1
                                   && $0.effectiveServerChatID == nil
                                   && $0.sendStatus == .sending
                           }) {
-                    Logger.shared.debug("[ChatMerge] replaceOptimistic localTemporaryId=\(pending.effectiveLocalTemporaryID ?? pending.id) serverChatId=\(serverID) source=sync")
+                    let localID = pending.effectiveLocalTemporaryID ?? pending.id
+#if DEBUG
+                    if ChatDebugOptions.isMergeLoggingEnabled {
+                        DebugLogDeduplicator.shared.printOnce(
+                            key: "ChatMerge.replaceOptimistic.\(localID).\(serverID).sync",
+                            message: "[ChatMerge] replaceOptimistic localTemporaryId=\(localID) serverChatId=\(serverID) source=sync"
+                        )
+                    }
+#endif
                 }
             }
             return try await localDataSource.upsert(messages: messages, scope: scope)
@@ -1625,14 +1687,29 @@ struct ChatInteractor: ChatInteracting {
                 let existingMessages = (try? await localDataSource.fetchMessages(scope: scope)) ?? []
                 if let serverID = message.effectiveServerChatID,
                    existingMessages.contains(where: { $0.effectiveServerChatID == serverID }) {
-                    Logger.shared.debug("[ChatMerge] skipDuplicate serverChatId=\(serverID) source=socket")
+#if DEBUG
+                    if ChatDebugOptions.isMergeLoggingEnabled {
+                        DebugLogDeduplicator.shared.printOnce(
+                            key: "ChatMerge.skipDuplicate.\(serverID).socket",
+                            message: "[ChatMerge] skipDuplicate serverChatId=\(serverID) source=socket"
+                        )
+                    }
+#endif
                 } else if let serverID = message.effectiveServerChatID,
                           let pending = existingMessages.first(where: {
                               ChatMessageMergePolicy.deduplicated([$0, message], currentUserID: sessionStore.currentUserID).count == 1
                                   && $0.effectiveServerChatID == nil
                                   && $0.sendStatus == .sending
                           }) {
-                    Logger.shared.debug("[ChatMerge] replaceOptimistic localTemporaryId=\(pending.effectiveLocalTemporaryID ?? pending.id) serverChatId=\(serverID) source=socket")
+                    let localID = pending.effectiveLocalTemporaryID ?? pending.id
+#if DEBUG
+                    if ChatDebugOptions.isMergeLoggingEnabled {
+                        DebugLogDeduplicator.shared.printOnce(
+                            key: "ChatMerge.replaceOptimistic.\(localID).\(serverID).socket",
+                            message: "[ChatMerge] replaceOptimistic localTemporaryId=\(localID) serverChatId=\(serverID) source=socket"
+                        )
+                    }
+#endif
                 }
                 let messages = try await localDataSource.upsert(messages: [message], scope: scope)
                 touchStoreConversation(scope: scope, latestActivityDate: message.createdAt ?? message.updatedAt ?? Date())
@@ -1839,9 +1916,17 @@ struct ChatInteractor: ChatInteracting {
         if let explicitStoreID,
            let cachedStoreID,
            explicitStoreID != cachedStoreID {
+#if DEBUG
+            DebugLogDeduplicator.shared.printOnce(
+                key: "ChatRoomContext.multipleStoreScopesShareServerRoom.\(room.id).\(cachedStoreID).\(explicitStoreID)",
+                level: .info,
+                message: "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(room.id) oldStoreId=\(cachedStoreID) newStoreId=\(explicitStoreID)"
+            )
+#else
             Logger.shared.info(
                 "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(room.id) oldStoreId=\(cachedStoreID) newStoreId=\(explicitStoreID)"
             )
+#endif
         }
 
         let resolvedStoreID = explicitContextIsValid ? explicitStoreID : (cachedStoreID ?? serverStoreID)
@@ -1849,9 +1934,17 @@ struct ChatInteractor: ChatInteracting {
         let collidingStoreIDs = storeContextCache.contexts(for: room.id).map(\.storeID)
         let hasRoomIDCollision = collidingStoreIDs.count > 1
         if hasRoomIDCollision {
+#if DEBUG
+            DebugLogDeduplicator.shared.printOnce(
+                key: "ChatRoomContext.multipleStoreScopesShareServerRoom.\(room.id).\(collidingStoreIDs.joined(separator: ","))",
+                level: .info,
+                message: "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(room.id) currentStoreId=\(explicitStoreID ?? resolvedStoreID ?? "-") storeCount=\(collidingStoreIDs.count) storeIds=\(collidingStoreIDs.joined(separator: ","))"
+            )
+#else
             Logger.shared.info(
                 "[ChatRoomContext] multipleStoreScopesShareServerRoom roomId=\(room.id) currentStoreId=\(explicitStoreID ?? resolvedStoreID ?? "-") storeCount=\(collidingStoreIDs.count) storeIds=\(collidingStoreIDs.joined(separator: ","))"
             )
+#endif
         }
 
         let resolvedOpponentID = cachedContext?.opponentID.nilIfEmpty

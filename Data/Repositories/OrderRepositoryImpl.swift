@@ -73,7 +73,7 @@ struct OrderRepositoryImpl: OrderRepository {
             || matchedOrder.receiptURL != nil
             || matchedOrder.paidAt != nil
             || matchedOrder.paymentStatus?.lowercased() == "paid"
-        Logger.shared.debug(
+        Logger.shared.debugVerbose(
             "[PaymentReceipt] autoFetch decision orderCode=\(matchedOrder.orderCode) paidAtExists=\(matchedOrder.paidAt != nil) receiptExists=\(matchedOrder.receiptExists == true) cacheState=none shouldFetch=\(shouldFetchReceipt) reason=\(shouldFetchReceipt ? "paymentEvidencePresent" : "noPaymentEvidence")"
         )
         let paymentReceipt = shouldFetchReceipt
@@ -98,23 +98,14 @@ struct OrderRepositoryImpl: OrderRepository {
     }
 
     func cancelOrder(orderCode: String) async throws -> OrderDetail {
-        Logger.shared.debug("[OrderCancel] request orderCode=\(orderCode)")
-        let previousDetail = try? await fetchOrderDetail(orderID: orderCode)
-        do {
-            try await remoteDataSource.updateOrderStatus(orderCode: orderCode, nextStatus: OrderStatus.cancelled.apiValue)
-            let updatedAt = Date()
-            await statusOverrideStore.record(orderCode: orderCode, status: .cancelled, updatedAt: updatedAt)
-            await localSnapshotStore.markStatus(orderCode: orderCode, status: .cancelled, updatedAt: updatedAt)
-            if let previousDetail {
-                await localSnapshotStore.record(detail: makeCancelledDetail(from: previousDetail))
-            }
-            Logger.shared.debug("[OrderCancel] success orderCode=\(orderCode)")
-            postStatusChange(orderID: previousDetail?.orderID, orderCode: orderCode, status: .cancelled)
-            return previousDetail.map(makeCancelledDetail(from:)) ?? makeFallbackCancelledDetail(orderCode: orderCode)
-        } catch {
-            Logger.shared.warning("[OrderCancel] failed orderCode=\(orderCode) message=\(error.localizedDescription)")
-            throw error
-        }
+        Logger.shared.debug("[OrderCancel] start orderCode=\(orderCode) strategy=unsupported")
+        Logger.shared.debug("[OrderCancel] selectedEndpoint=none method=none body={}")
+        Logger.shared.warning(
+            "[OrderCancel] failed orderCode=\(orderCode) statusCode=none serverMessage=Swagger exposes no order/payment cancel endpoint strategy=unsupported"
+        )
+        throw NetworkError.abnormalRequest(
+            message: "현재 서버에서 주문 취소를 지원하지 않아요. 매장에 문의해 주세요."
+        )
     }
 
     func updateOrderStatus(orderCode: String, status: OrderStatus) async throws {
@@ -199,8 +190,9 @@ struct OrderRepositoryImpl: OrderRepository {
             order: order,
             cacheState: cacheState
         )
-        Logger.shared.debug(
-            "[OrderMapping] statusMerge orderCode=\(order.orderCode) dtoStatus=\(order.status.apiValue) cachedPaymentState=\(cacheState?.logValue ?? "none") localOverrideStatus=\(overrideStatus?.apiValue ?? "nil") finalStatus=\(finalStatus.apiValue) finalPaymentState=\(finalPaymentState ?? "unchecked")"
+        let statusSource = overrideStatus == nil ? "server" : "localOverride"
+        Logger.shared.debugVerbose(
+            "[OrderMapping] statusMerge orderCode=\(order.orderCode) dtoStatus=\(order.status.apiValue) localOverrideStatus=\(overrideStatus?.apiValue ?? "nil") finalStatus=\(finalStatus.apiValue) statusSource=\(statusSource) cachedPaymentState=\(cacheState?.logValue ?? "none") finalPaymentState=\(finalPaymentState ?? "unchecked")"
         )
 
         return OrderSummary(
@@ -265,13 +257,7 @@ struct OrderRepositoryImpl: OrderRepository {
         order: OrderSummary,
         cacheState: PaymentReceiptCacheState?
     ) -> String? {
-        let rawState = order.paymentVerificationState?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        if rawState == "verified" {
-            return "verified"
-        }
-        if order.paymentStatus?.lowercased() == "paid", order.paidAt != nil {
+        if order.isPaymentCompleted {
             return "verified"
         }
         if cacheState?.isVerified == true {

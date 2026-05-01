@@ -8,9 +8,11 @@ final class OrderDetailPresenter: ObservableObject {
     private let interactor: OrderDetailInteracting
     private let router: OrderDetailRouting
     private let mapper: OrderMapper
+    private let cancelPolicyResolver = OrderCancelPolicyResolver()
     private let dateParser = DateParser()
 
     private var hasLoaded = false
+    private var currentCancelPolicy: OrderCancelPolicy?
     private var cancellables = Set<AnyCancellable>()
 
     init(
@@ -111,27 +113,109 @@ final class OrderDetailPresenter: ObservableObject {
         viewState.timelineStages = makeTimelineStages(from: detail.timeline, currentStatus: detail.status)
         viewState.emptyState = nil
         viewState.hasLoadedContent = true
+        applyCancelPolicy(detail)
         applyReviewCTA(detail)
     }
 
     private func cancelOrder() async {
-        guard viewState.canCancelOrder else { return }
+        let policy = currentCancelPolicy ?? OrderCancelPolicy(
+            canShowCancelButton: false,
+            canExecuteCancel: false,
+            strategy: .unsupported,
+            reason: .unsupportedStatus,
+            userMessage: viewState.cancelDisabledReasonText,
+            debugReason: "missingPolicy",
+            hasPaymentIdentifier: false,
+            cancelEndpointAvailable: false
+        )
+        Logger.shared.debug(
+            "[OrderCancel] tapped orderCode=\(viewState.orderCode) strategy=\(policy.strategy.rawValue)"
+        )
+        guard policy.canExecuteCancel else {
+            Logger.shared.debug(
+                "[OrderCancel] request method=none path=none orderCode=\(viewState.orderCode) strategy=\(policy.strategy.rawValue)"
+            )
+            viewState.cancelErrorMessage = viewState.cancelDisabledReasonText ?? "현재 주문은 앱에서 취소할 수 없어요."
+            return
+        }
 
         viewState.isCancelling = true
         viewState.cancelErrorMessage = nil
         viewState.cancelSuccessMessage = nil
 
         do {
-            let detail = try await interactor.cancelOrder(orderCode: viewState.orderCode)
+            let detail: OrderDetail
+            switch policy.strategy {
+            case .serverOrderCancel:
+                Logger.shared.debug(
+                    "[OrderCancel] request method=none path=none orderCode=\(viewState.orderCode) strategy=\(policy.strategy.rawValue)"
+                )
+                detail = try await interactor.cancelOrder(orderCode: viewState.orderCode)
+            case .serverPaymentCancel:
+                Logger.shared.debug(
+                    "[OrderCancel] request method=none path=none orderCode=\(viewState.orderCode) strategy=\(policy.strategy.rawValue)"
+                )
+                detail = try await interactor.cancelOrder(orderCode: viewState.orderCode)
+            case .localPendingCancel:
+                detail = try await interactor.cancelPendingOrderLocally(orderCode: viewState.orderCode)
+            case .unsupported:
+                throw OrderFeatureError.unavailable(message: policy.userMessage ?? "현재 주문은 앱에서 취소할 수 없어요.")
+            }
             apply(detail: detail)
+            NotificationCenter.default.post(
+                name: .pikkoOrdersShouldRefresh,
+                object: nil,
+                userInfo: [
+                    OrderRefreshNotificationUserInfoKey.event: OrderRefreshNotification(
+                        orderID: detail.orderID,
+                        orderCode: detail.orderCode,
+                        message: "주문이 취소되었어요."
+                    )
+                ]
+            )
             viewState.cancelSuccessMessage = "주문이 취소되었어요."
         } catch {
             let featureError = (error as? OrderFeatureError)
                 ?? .unavailable(message: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
-            viewState.cancelErrorMessage = featureError.userMessage
+            Logger.shared.warning(
+                "[OrderCancel] failed orderCode=\(viewState.orderCode) statusCode=unknown serverMessage=\(featureError.userMessage) strategy=unsupported"
+            )
+            viewState.cancelErrorMessage = cancelFailureUserMessage(from: featureError)
         }
 
         viewState.isCancelling = false
+    }
+
+    private func applyCancelPolicy(_ detail: OrderDetail) {
+        let paid = detail.paidAt != nil
+            || detail.paymentSummary?.paidAt != nil
+            || detail.paymentSummary?.statusText?.lowercased() == "paid"
+        let policy = cancelPolicyResolver.policy(
+            rawStatus: detail.status,
+            mappedStatus: detail.status,
+            paid: paid,
+            paymentLookupKey: nil,
+            paymentID: nil,
+            merchantUID: nil,
+            impUID: nil
+        )
+        currentCancelPolicy = policy
+        viewState.canCancelOrder = policy.canShowCancelButton && !viewState.isCancelling
+        viewState.canExecuteCancelOrder = policy.canExecuteCancel && !viewState.isCancelling
+        viewState.cancelDisabledReasonText = policy.userMessage
+        Logger.shared.debug(
+            "[OrderCancelPolicy] orderCode=\(detail.orderCode) rawStatus=\(detail.status.apiValue) mappedStatus=\(detail.status.apiValue) paid=\(paid) evidence=\(paid ? "detailPaymentSummary" : "none") paymentId=nil impUid=nil merchantUid=nil canShowCancelButton=\(policy.canShowCancelButton) canExecuteCancel=\(policy.canExecuteCancel) reason=\(policy.reason.rawValue) cancelEndpointAvailable=\(policy.cancelEndpointAvailable) hasPaymentIdentifier=\(policy.hasPaymentIdentifier) debugReason=\(policy.debugReason)"
+        )
+        Logger.shared.debug(
+            "[OrderCancelRender] orderCode=\(detail.orderCode) rawStatus=\(detail.status.apiValue) paid=\(paid) canShowCancelButton=\(policy.canShowCancelButton) strategy=\(policy.strategy.rawValue)"
+        )
+    }
+
+    private func cancelFailureUserMessage(from error: OrderFeatureError) -> String {
+        if error.userMessage.contains("결제가 완료된 주문만") {
+            return "아직 결제 확인이 완료되지 않아 취소할 수 없어요."
+        }
+        return "주문 취소에 실패했어요. 잠시 후 다시 시도해주세요."
     }
 
     private func applyReviewCTA(_ detail: OrderDetail) {
@@ -240,6 +324,11 @@ final class OrderDetailPresenter: ObservableObject {
 
         viewState.orderStatus = event.status
         viewState.statusTitle = event.status.displayTitle
+        viewState.canCancelOrder = false
+        viewState.canExecuteCancelOrder = false
+        viewState.cancelDisabledReasonText = event.status.isTerminal
+            ? nil
+            : "매장 승인 후에는 앱에서 취소할 수 없어요."
         viewState.reviewActionTitle = event.status == .completed
             ? (viewState.reviewID == nil ? "리뷰 작성하기" : "리뷰 수정하기")
             : nil

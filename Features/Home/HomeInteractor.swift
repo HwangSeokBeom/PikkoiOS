@@ -14,6 +14,7 @@ protocol HomeInteracting {
     func loadHome(category: String?) async throws -> HomeContent
     func loadMoreNearbyStores(category: String?, nextCursor: String) async throws -> CursorPage<StoreSummary>
     func updateLikeStatus(storeID: String, isLiked: Bool) async throws -> Bool
+    func notificationUnreadCount() -> Int
     func requestCurrentLocationForHome() async -> HomeLocationRequestResult
     func saveSelectedLocation(_ location: PikkoSelectedLocation)
 }
@@ -22,17 +23,20 @@ protocol HomeInteracting {
 struct HomeInteractor: HomeInteracting {
     private let storeRepository: StoreRepository
     private let bannerRepository: BannerRepository
+    private let notificationService: AppNotificationService
     private let locationService: any LocationServiceProtocol
     private let reverseGeocoder: ReverseGeocoder
 
     init(
         storeRepository: StoreRepository,
         bannerRepository: BannerRepository,
+        notificationService: AppNotificationService,
         locationService: any LocationServiceProtocol,
         reverseGeocoder: ReverseGeocoder
     ) {
         self.storeRepository = storeRepository
         self.bannerRepository = bannerRepository
+        self.notificationService = notificationService
         self.locationService = locationService
         self.reverseGeocoder = reverseGeocoder
     }
@@ -122,6 +126,10 @@ struct HomeInteractor: HomeInteracting {
         } catch {
             throw map(error)
         }
+    }
+
+    func notificationUnreadCount() -> Int {
+        notificationService.unreadCount()
     }
 
     func requestCurrentLocationForHome() async -> HomeLocationRequestResult {

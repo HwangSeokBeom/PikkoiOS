@@ -6,6 +6,8 @@ struct CommunityBuilder {
     private let communityRepository: CommunityRepository
     private let locationService: any LocationServiceProtocol
     private let sessionStore: SessionStore
+    private let notificationService: AppNotificationService
+    private let communityNotificationSnapshotStore: CommunityNotificationSnapshotStore
     private let imageLoader: any AuthorizedImageLoading
     private let makeAuthView: (AuthPresentationContext, @escaping () -> Void) -> AnyView
     private let makeCommunityDetailView: (String) -> AnyView
@@ -17,6 +19,8 @@ struct CommunityBuilder {
         communityRepository: CommunityRepository,
         locationService: any LocationServiceProtocol,
         sessionStore: SessionStore,
+        notificationService: AppNotificationService = NoopAppNotificationService(),
+        communityNotificationSnapshotStore: CommunityNotificationSnapshotStore = InMemoryCommunityNotificationSnapshotStore(),
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping (AuthPresentationContext, @escaping () -> Void) -> AnyView,
         makeCommunityDetailView: @escaping (String) -> AnyView,
@@ -27,6 +31,8 @@ struct CommunityBuilder {
         self.communityRepository = communityRepository
         self.locationService = locationService
         self.sessionStore = sessionStore
+        self.notificationService = notificationService
+        self.communityNotificationSnapshotStore = communityNotificationSnapshotStore
         self.imageLoader = imageLoader
         self.makeAuthView = makeAuthView
         self.makeCommunityDetailView = makeCommunityDetailView
@@ -50,6 +56,8 @@ struct CommunityBuilder {
             interactor: interactor,
             router: router,
             sessionStore: sessionStore,
+            notificationService: notificationService,
+            communityNotificationSnapshotStore: communityNotificationSnapshotStore,
             initialQuery: initialQuery,
             routesSearchSubmissions: routesSearchSubmissions
         )
