@@ -46,13 +46,16 @@ struct CommunityCard: View {
             if let storeSnippet = model.storeSnippet {
                 snippetView(storeSnippet)
             }
-            Divider()
-                .background(PikkoColor.line)
         }
-        .padding(.horizontal, PikkoSpacing.md)
-        .padding(.vertical, PikkoSpacing.lg)
-        .background(.white)
-        .contentShape(Rectangle())
+        .padding(PikkoSpacing.lg)
+        .background(PikkoColor.elevatedSurface)
+        .overlay {
+            RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                .stroke(PikkoColor.divider.opacity(0.55), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+        .pikkoShadow(PikkoShadow.card)
+        .contentShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         .onTapGesture {
             onCardTapped?()
         }
@@ -86,9 +89,9 @@ struct CommunityCard: View {
                 } label: {
                     Image(systemName: "bubble.left")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(PikkoColor.accentStrong)
+                        .foregroundStyle(PikkoColor.primary)
                         .frame(width: 32, height: 32)
-                        .background(PikkoColor.surfaceMuted)
+                        .background(PikkoColor.primarySoft)
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -155,7 +158,7 @@ struct CommunityCard: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: model.isLiked ? "heart.fill" : "heart")
-                            .foregroundStyle(PikkoColor.warmYellow)
+                            .foregroundStyle(model.isLiked ? PikkoColor.primary : PikkoColor.textTertiary)
                         Text(model.likeText)
                     }
                     .frame(minWidth: 56, minHeight: 32, alignment: .leading)
@@ -165,7 +168,7 @@ struct CommunityCard: View {
 
                 HStack(spacing: 4) {
                     Image(systemName: "paperplane.fill")
-                        .foregroundStyle(PikkoColor.accent)
+                        .foregroundStyle(PikkoColor.primary)
                     Text(model.distanceText)
                 }
             }
@@ -196,7 +199,7 @@ struct CommunityCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(snippet.title)
                         .font(PikkoTypography.bodyStrong)
-                        .foregroundStyle(PikkoColor.accentStrong)
+                        .foregroundStyle(PikkoColor.primaryPressed)
                     Text(snippet.subtitle)
                         .font(PikkoTypography.caption)
                         .foregroundStyle(PikkoColor.secondaryText)
@@ -204,10 +207,10 @@ struct CommunityCard: View {
                 Spacer()
             }
             .padding(PikkoSpacing.xs)
-            .background(PikkoColor.surfaceMuted)
+            .background(PikkoColor.primarySoft)
             .overlay {
                 RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                    .stroke(PikkoColor.accent.opacity(0.28), lineWidth: 1)
+                    .stroke(PikkoColor.primary.opacity(0.16), lineWidth: 1)
             }
             .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         }

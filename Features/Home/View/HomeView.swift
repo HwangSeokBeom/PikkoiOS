@@ -6,9 +6,9 @@ struct HomeView: View {
     }
 
     private enum HomeLayout {
-        static let horizontalInset: CGFloat = 16
-        static let sectionSpacing: CGFloat = 18
-        static let topPadding: CGFloat = 4
+        static let horizontalInset: CGFloat = PikkoSpacing.lg
+        static let sectionSpacing: CGFloat = PikkoSpacing.xl
+        static let topPadding: CGFloat = PikkoSpacing.xs
         static let bottomInset: CGFloat = RootTabBarMetrics.scrollContentBottomInset
     }
 

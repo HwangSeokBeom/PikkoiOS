@@ -45,16 +45,16 @@ struct StoreDetailSummarySectionView: View {
                 Button(action: onChatTap) {
                     Image(systemName: "bubble.left.and.bubble.right.fill")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(PikkoColor.accentStrong)
+                        .foregroundStyle(PikkoColor.primary)
                         .frame(width: 34, height: 34)
-                        .background(PikkoColor.surfaceMuted)
+                        .background(PikkoColor.primarySoft)
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
 
             HStack(spacing: PikkoSpacing.md) {
-                metricLabel(systemImage: "heart.fill", text: ratingSummary.likeCountText, tint: PikkoColor.warmYellow)
+                metricLabel(systemImage: "heart.fill", text: ratingSummary.likeCountText, tint: PikkoColor.primary)
                 metricLabel(systemImage: "star.fill", text: "\(ratingSummary.ratingText) \(ratingSummary.reviewCountText)", tint: PikkoColor.point)
                 Spacer()
                 Text(ratingSummary.orderCountText)
@@ -71,10 +71,10 @@ struct StoreDetailSummarySectionView: View {
             infoRow(title: "주차여부", value: storeInfo.parkingInfo, systemImage: "parkingsign.circle.fill")
         }
         .padding(PikkoSpacing.lg)
-        .background(.white)
+        .background(PikkoColor.elevatedSurface)
         .overlay {
             RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
-                .stroke(PikkoColor.line, lineWidth: 1)
+                .stroke(PikkoColor.divider.opacity(0.65), lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
     }
@@ -119,11 +119,11 @@ struct StoreDetailSummarySectionView: View {
 
             Image(systemName: systemImage)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(PikkoColor.sage300)
+                .foregroundStyle(PikkoColor.primary)
 
             Text(value)
                 .font(PikkoTypography.body)
-                .foregroundStyle(PikkoColor.gray600)
+                .foregroundStyle(PikkoColor.textPrimary)
 
             Spacer(minLength: 0)
         }

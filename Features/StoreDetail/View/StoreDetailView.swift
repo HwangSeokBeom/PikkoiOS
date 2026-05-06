@@ -186,12 +186,12 @@ struct StoreDetailView: View {
         HStack(alignment: .top, spacing: PikkoSpacing.sm) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(PikkoColor.ink900)
+                .foregroundStyle(PikkoColor.textPrimary)
                 .padding(.top, 1)
 
             Text(message)
                 .font(PikkoTypography.bodyStrong)
-                .foregroundStyle(PikkoColor.ink900)
+                .foregroundStyle(PikkoColor.textPrimary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -200,7 +200,7 @@ struct StoreDetailView: View {
         .padding(.horizontal, PikkoSpacing.md)
         .padding(.vertical, PikkoSpacing.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PikkoColor.warmYellow.opacity(0.88))
+        .background(PikkoColor.warning.opacity(0.18))
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         .pikkoShadow(PikkoShadow.card)
     }
@@ -212,7 +212,7 @@ struct StoreDetailView: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(PikkoColor.primaryText)
                     .frame(width: 40, height: 40)
-                    .background(Color.white.opacity(0.88))
+                    .background(PikkoColor.elevatedSurface.opacity(0.9))
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
@@ -229,13 +229,13 @@ struct StoreDetailView: View {
         .padding(.horizontal, PikkoSpacing.lg)
         .frame(height: Layout.navigationHeight)
         .background(
-            Color.white
-                .opacity(0.92 * navigationOverlayAlpha)
+            PikkoColor.elevatedSurface
+                .opacity(0.94 * navigationOverlayAlpha)
                 .ignoresSafeArea(edges: .top)
         )
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(PikkoColor.line.opacity(0.8 * navigationOverlayAlpha))
+                .fill(PikkoColor.divider.opacity(0.8 * navigationOverlayAlpha))
                 .frame(height: 1)
         }
         .shadow(

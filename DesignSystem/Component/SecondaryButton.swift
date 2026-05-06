@@ -14,13 +14,13 @@ struct SecondaryButton: View {
                 Text(title)
                     .font(PikkoTypography.bodyStrong)
             }
-            .foregroundStyle(PikkoColor.accentStrong)
+            .foregroundStyle(PikkoColor.primaryPressed)
             .frame(maxWidth: .infinity)
             .frame(height: 52)
-            .background(.white)
+            .background(PikkoColor.primarySoft)
             .overlay {
                 RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
-                    .stroke(PikkoColor.accent.opacity(0.35), lineWidth: 1)
+                    .stroke(PikkoColor.primary.opacity(0.18), lineWidth: 1)
             }
             .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
         }

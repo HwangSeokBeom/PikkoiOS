@@ -32,7 +32,7 @@ struct SnackbarView: View {
         .background(PikkoColor.surfaceElevated)
         .overlay {
             RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
-                .stroke(PikkoColor.line, lineWidth: 1)
+                .stroke(PikkoColor.divider.opacity(0.8), lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
         .pikkoShadow(PikkoShadow.card)

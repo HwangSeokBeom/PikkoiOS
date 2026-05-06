@@ -69,10 +69,10 @@ struct StoreDetailMenuSectionView: View {
             if let badgeText = menu.badgeText {
                 Text(badgeText)
                     .font(PikkoTypography.micro)
-                    .foregroundStyle(PikkoColor.sage500)
+                    .foregroundStyle(PikkoColor.primaryPressed)
                     .padding(.horizontal, PikkoSpacing.xs)
                     .frame(height: 20)
-                    .background(PikkoColor.surfaceMuted)
+                    .background(PikkoColor.primarySoft)
                     .clipShape(Capsule())
             }
 
@@ -183,14 +183,14 @@ struct StoreDetailMenuSectionView: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .foregroundStyle(PikkoColor.accentStrong)
+            .foregroundStyle(PikkoColor.primaryPressed)
             .padding(.horizontal, PikkoSpacing.md)
             .frame(minWidth: Layout.addButtonMinWidth)
             .frame(height: Layout.addButtonHeight)
-            .background(.white)
+            .background(PikkoColor.elevatedSurface)
             .overlay {
                 RoundedRectangle(cornerRadius: Layout.addButtonHeight / 2, style: .continuous)
-                    .stroke(PikkoColor.accent.opacity(0.35), lineWidth: 1)
+                    .stroke(PikkoColor.primary.opacity(0.28), lineWidth: 1)
             }
             .clipShape(Capsule())
         }
@@ -202,9 +202,9 @@ struct StoreDetailMenuSectionView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(PikkoColor.accentStrong)
+                .foregroundStyle(PikkoColor.primaryPressed)
                 .frame(width: 28, height: 28)
-                .background(.white)
+                .background(PikkoColor.elevatedSurface)
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)

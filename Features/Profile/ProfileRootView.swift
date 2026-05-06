@@ -98,13 +98,13 @@ struct ProfileRootView: View {
                     } label: {
                         Text(presenter.viewState.editProfileActionTitle)
                             .font(PikkoTypography.captionStrong)
-                            .foregroundStyle(PikkoColor.accentStrong)
+                            .foregroundStyle(PikkoColor.primaryPressed)
                             .padding(.horizontal, PikkoSpacing.md)
                             .frame(height: 36)
-                            .background(PikkoColor.surface)
+                            .background(PikkoColor.primarySoft)
                             .overlay {
                                 RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
-                                    .stroke(PikkoColor.line, lineWidth: 1)
+                                    .stroke(PikkoColor.primary.opacity(0.18), lineWidth: 1)
                             }
                             .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
                     }
@@ -113,7 +113,11 @@ struct ProfileRootView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(PikkoSpacing.xl)
                 .background(PikkoColor.surfaceElevated)
-                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                        .stroke(PikkoColor.divider.opacity(0.55), lineWidth: 1)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
                 .pikkoShadow(PikkoShadow.card)
 
                 VStack(spacing: PikkoSpacing.md) {
@@ -348,13 +352,13 @@ private struct ProfileEditorView: View {
                         ) {
                             Text("프로필 이미지 변경")
                                 .font(PikkoTypography.captionStrong)
-                                .foregroundStyle(PikkoColor.accentStrong)
+                                .foregroundStyle(PikkoColor.primaryPressed)
                                 .padding(.horizontal, PikkoSpacing.md)
                                 .frame(height: 36)
-                                .background(PikkoColor.surface)
+                                .background(PikkoColor.primarySoft)
                                 .overlay {
                                     RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
-                                        .stroke(PikkoColor.line, lineWidth: 1)
+                                        .stroke(PikkoColor.primary.opacity(0.18), lineWidth: 1)
                                 }
                                 .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
                         }
@@ -1005,8 +1009,12 @@ private struct ProfileListSkeletonView: View {
                         .frame(height: 12)
                 }
                 .padding(PikkoSpacing.lg)
-                .background(.white)
-                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
+                .background(PikkoColor.elevatedSurface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                        .stroke(PikkoColor.divider.opacity(0.55), lineWidth: 1)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
                 .pikkoShadow(PikkoShadow.card)
             }
         }
@@ -3849,10 +3857,12 @@ final class UserReviewListRouter: ObservableObject, UserReviewListRouting {
     @Published private(set) var pendingRoute: AppRoute?
 
     func routeToStoreDetail(storeID: String) {
+        guard pendingRoute == nil else { return }
         pendingRoute = .storeDetail(storeID: storeID)
     }
 
     func routeToReviewComposer(context: ReviewComposerContext) {
+        guard pendingRoute == nil else { return }
         pendingRoute = .reviewComposer(context)
     }
 
@@ -3924,9 +3934,6 @@ final class UserReviewListPresenter: ObservableObject {
             merge(page, mode: mode)
         } catch {
             viewState.errorMessage = map(error)
-            if reviews.isEmpty {
-                viewState.emptyMessage = viewState.errorMessage
-            }
         }
 
         setLoading(mode, false)
@@ -4047,14 +4054,22 @@ struct UserReviewListRootView: View {
             if presenter.viewState.isInitialLoading && presenter.viewState.reviews.isEmpty {
                 ProfileListSkeletonView(title: "내 리뷰")
                     .padding(PikkoSpacing.xl)
+            } else if let errorMessage = presenter.viewState.errorMessage,
+                      presenter.viewState.reviews.isEmpty {
+                EmptyStateView(
+                    title: "리뷰 목록을 불러오지 못했어요",
+                    message: errorMessage,
+                    systemImage: "exclamationmark.triangle",
+                    actionTitle: "다시 시도",
+                    action: { Task { await presenter.send(.refreshRequested) } }
+                )
+                .padding(PikkoSpacing.xl)
             } else if let emptyMessage = presenter.viewState.emptyMessage,
                       presenter.viewState.reviews.isEmpty {
                 EmptyStateView(
-                    title: "내 리뷰",
-                    message: emptyMessage,
-                    systemImage: "star.bubble",
-                    actionTitle: "다시 시도",
-                    action: { Task { await presenter.send(.refreshRequested) } }
+                    title: emptyMessage,
+                    message: "주문한 가게에 첫 리뷰를 남겨보세요.",
+                    systemImage: "star.bubble"
                 )
                 .padding(PikkoSpacing.xl)
             } else {
@@ -4185,7 +4200,7 @@ private struct UserReviewRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.md) {
-            Button(action: onStoreTap) {
+            VStack(alignment: .leading, spacing: PikkoSpacing.md) {
                 HStack(alignment: .top, spacing: PikkoSpacing.md) {
                     AuthorizedAsyncImage(path: review.storeImagePath, loader: imageLoader, cornerRadius: PikkoRadius.card)
                         .frame(width: 72, height: 72)
@@ -4203,18 +4218,19 @@ private struct UserReviewRow: View {
                     }
                     Spacer()
                 }
+
+                Text(review.content)
+                    .font(PikkoTypography.body)
+                    .foregroundStyle(PikkoColor.primaryText)
+                    .lineLimit(3)
+
+                Text(review.menuText)
+                    .font(PikkoTypography.caption)
+                    .foregroundStyle(PikkoColor.secondaryText)
+                    .lineLimit(1)
             }
-            .buttonStyle(.plain)
-
-            Text(review.content)
-                .font(PikkoTypography.body)
-                .foregroundStyle(PikkoColor.primaryText)
-                .lineLimit(3)
-
-            Text(review.menuText)
-                .font(PikkoTypography.caption)
-                .foregroundStyle(PikkoColor.secondaryText)
-                .lineLimit(1)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onStoreTap)
 
             HStack(spacing: PikkoSpacing.sm) {
                 SecondaryButton(title: "수정", systemImage: "square.and.pencil", action: onEditTap)

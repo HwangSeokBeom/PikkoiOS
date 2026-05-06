@@ -12,6 +12,7 @@ struct RootTabView: View {
     @State private var profilePath = NavigationPath()
     @State private var homeResetTrigger = 0
     @State private var videoResetTrigger = 0
+    @State private var didLogInitialTabReload = false
     @State private var presentedNotificationRoute: NotificationRoutePresentation?
     @StateObject private var keyboardObserver = RootTabKeyboardObserver()
 
@@ -29,28 +30,27 @@ struct RootTabView: View {
                 .ignoresSafeArea()
 
             ZStack {
-                RootTabContainerView(path: $homePath, isActive: appState.selectedTab == .home) {
+                RootTabContainerView(path: $homePath, tab: .home, isActive: appState.selectedTab == .home) {
                     featureBuilderFactory.makeHomeView(resetTrigger: homeResetTrigger)
                 }
 
-                RootTabContainerView(path: $orderPath, isActive: appState.selectedTab == .order) {
+                RootTabContainerView(path: $orderPath, tab: .order, isActive: appState.selectedTab == .order) {
                     featureBuilderFactory.makeOrderView()
                 }
 
-                RootTabContainerView(path: $videoPath, isActive: appState.selectedTab == .video) {
+                RootTabContainerView(path: $videoPath, tab: .video, isActive: appState.selectedTab == .video) {
                     featureBuilderFactory.makeVideoListView(resetTrigger: videoResetTrigger)
                 }
 
-                RootTabContainerView(path: $communityPath, isActive: appState.selectedTab == .community) {
+                RootTabContainerView(path: $communityPath, tab: .community, isActive: appState.selectedTab == .community) {
                     featureBuilderFactory.makeCommunityView()
                 }
 
-                RootTabContainerView(path: $profilePath, isActive: appState.selectedTab == .profile) {
+                RootTabContainerView(path: $profilePath, tab: .profile, isActive: appState.selectedTab == .profile) {
                     featureBuilderFactory.makeProfileView()
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: appState.selectedTab)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if !keyboardObserver.isKeyboardVisible {
                 RootTabBarView(
@@ -74,6 +74,7 @@ struct RootTabView: View {
             }
         }
         .onAppear {
+            logInitialTabReloadIfNeeded()
             featureBuilderFactory.routePendingNotificationIfNeeded()
             handleNotificationRoute(appState.pendingNotificationRoute)
         }
@@ -83,17 +84,34 @@ struct RootTabView: View {
     }
 
     private func handleTabSelection(_ tab: RootTab) {
+        let previousTab = appState.selectedTab
+        logTabSwitch(from: previousTab, to: tab)
+
+        guard tab != previousTab else {
+            handleCurrentTabReselection(tab)
+            return
+        }
+
+        appState.selectedTab = tab
+        logTabReload(tab: tab, reason: "tabSwitchSkipped")
+    }
+
+    private func handleCurrentTabReselection(_ tab: RootTab) {
         if tab == .home {
             homePath = NavigationPath()
             homeResetTrigger += 1
+            logTabReload(tab: tab, reason: "refresh")
+            return
         }
 
         if tab == .video {
             videoPath = NavigationPath()
             videoResetTrigger += 1
+            logTabReload(tab: tab, reason: "refresh")
+            return
         }
 
-        appState.selectedTab = tab
+        logTabReload(tab: tab, reason: "tabSwitchSkipped")
     }
 
     @ViewBuilder
@@ -145,6 +163,26 @@ struct RootTabView: View {
         }
 
         appState.pendingNotificationRoute = nil
+    }
+
+    private func logInitialTabReloadIfNeeded() {
+#if DEBUG
+        guard !didLogInitialTabReload else { return }
+        didLogInitialTabReload = true
+        logTabReload(tab: appState.selectedTab, reason: "initial")
+#endif
+    }
+
+    private func logTabSwitch(from previousTab: RootTab, to tab: RootTab) {
+#if DEBUG
+        Logger(category: "Tab").debug("[TabSwitch] from=\(previousTab.rawValue) to=\(tab.rawValue)")
+#endif
+    }
+
+    private func logTabReload(tab: RootTab, reason: String) {
+#if DEBUG
+        Logger(category: "Tab").debug("[TabReload] tab=\(tab.rawValue) reason=\(reason)")
+#endif
     }
 }
 

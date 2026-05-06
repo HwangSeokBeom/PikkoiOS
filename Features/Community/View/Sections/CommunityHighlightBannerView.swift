@@ -9,11 +9,11 @@ struct CommunityHighlightBannerView: View {
                 VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
                     Text(banner.eyebrow)
                         .font(PikkoTypography.micro)
-                        .foregroundStyle(PikkoColor.sage300)
+                        .foregroundStyle(PikkoColor.textTertiary)
 
                     Text(banner.title)
                         .font(PikkoTypography.hero)
-                        .foregroundStyle(PikkoColor.accentStrong)
+                        .foregroundStyle(PikkoColor.primaryPressed)
                         .lineLimit(2)
                         .minimumScaleFactor(0.75)
 
@@ -22,7 +22,7 @@ struct CommunityHighlightBannerView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, PikkoSpacing.sm)
                         .frame(height: 28)
-                        .background(PikkoColor.sage500)
+                        .background(PikkoColor.primary)
                         .clipShape(Capsule())
                 }
 
@@ -30,12 +30,12 @@ struct CommunityHighlightBannerView: View {
 
                 ZStack {
                     Circle()
-                        .fill(Color.white.opacity(0.54))
+                        .fill(PikkoColor.surface.opacity(0.72))
                         .frame(width: 88, height: 88)
 
                     Image(systemName: banner.systemImage)
                         .font(.system(size: 52, weight: .medium))
-                        .foregroundStyle(PikkoColor.sage500)
+                        .foregroundStyle(PikkoColor.primary)
                         .rotationEffect(.degrees(-8))
                 }
                 .padding(.trailing, PikkoSpacing.sm)
@@ -49,26 +49,13 @@ struct CommunityHighlightBannerView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, PikkoSpacing.sm)
                 .frame(height: 28)
-                .background(PikkoColor.ink900.opacity(0.24))
+                .background(PikkoColor.textPrimary.opacity(0.24))
                 .clipShape(Capsule())
                 .padding(PikkoSpacing.md)
         }
         .background(
-            LinearGradient(
-                colors: [
-                    PikkoColor.surfaceMuted,
-                    PikkoColor.sage50
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
+            PikkoColor.primarySoft
         )
-        .overlay(alignment: .topTrailing) {
-            Circle()
-                .fill(PikkoColor.mint200.opacity(0.38))
-                .frame(width: 110, height: 110)
-                .offset(x: 34, y: -44)
-        }
         .clipped()
     }
 }

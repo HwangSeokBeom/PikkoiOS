@@ -13,13 +13,13 @@ struct HomeHeaderSectionView: View {
     @State private var hasLoggedBellPlacement = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
             HStack(alignment: .center, spacing: PikkoSpacing.sm) {
                 Button(action: onLocationTap) {
                     HStack(spacing: 6) {
                         Image(systemName: "mappin.circle.fill")
                             .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(PikkoColor.gray600)
+                            .foregroundStyle(PikkoColor.primary)
 
                         Text(locationLabel)
                             .font(.system(size: 15, weight: .semibold))
@@ -28,7 +28,7 @@ struct HomeHeaderSectionView: View {
 
                         Image(systemName: "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(PikkoColor.gray500)
+                            .foregroundStyle(PikkoColor.textTertiary)
 
                         Spacer(minLength: PikkoSpacing.xs)
                     }
@@ -45,7 +45,7 @@ struct HomeHeaderSectionView: View {
                 Button(action: onCartTap) {
                     Image(systemName: "cart")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(PikkoColor.gray600)
+                        .foregroundStyle(PikkoColor.textPrimary)
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
@@ -65,11 +65,11 @@ struct HomeHeaderSectionView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(PikkoColor.accentSoft)
+                        .foregroundStyle(PikkoColor.primary)
 
                     Text("인기검색어")
                         .font(PikkoTypography.micro)
-                        .foregroundStyle(PikkoColor.sage300)
+                        .foregroundStyle(PikkoColor.textTertiary)
 
                     Rectangle()
                         .fill(PikkoColor.line)
@@ -83,7 +83,7 @@ struct HomeHeaderSectionView: View {
                                 } label: {
                                     Text("\(item.rank) \(item.keyword)")
                                         .font(PikkoTypography.micro)
-                                        .foregroundStyle(PikkoColor.sage500)
+                                        .foregroundStyle(PikkoColor.primaryPressed)
                                         .lineLimit(1)
                                         .padding(.vertical, 6)
                                         .contentShape(Rectangle())

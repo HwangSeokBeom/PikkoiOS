@@ -259,13 +259,13 @@ struct VideoPlayerView: View {
                     Text(viewModel.viewState.video.isLiked ? "좋아요 취소" : "좋아요")
                         .font(PikkoTypography.bodyStrong)
                 }
-                .foregroundStyle(viewModel.viewState.video.isLiked ? PikkoColor.coralHeart : PikkoColor.accentStrong)
+                .foregroundStyle(viewModel.viewState.video.isLiked ? PikkoColor.primary : PikkoColor.primaryPressed)
                 .frame(maxWidth: .infinity)
                 .frame(height: 44)
                 .background(PikkoColor.surfaceElevated)
                 .overlay {
                     RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                        .stroke(PikkoColor.line.opacity(0.7), lineWidth: 1)
+                        .stroke(PikkoColor.divider.opacity(0.7), lineWidth: 1)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
             }
@@ -316,7 +316,7 @@ struct VideoPlayerView: View {
         VStack(spacing: PikkoSpacing.sm) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 26, weight: .semibold))
-                .foregroundStyle(PikkoColor.warmYellow)
+                .foregroundStyle(PikkoColor.warning)
 
             Text("영상을 재생할 수 없습니다.")
                 .font(PikkoTypography.bodyStrong)
@@ -336,7 +336,7 @@ struct VideoPlayerView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, PikkoSpacing.md)
                     .padding(.vertical, PikkoSpacing.xs)
-                    .background(PikkoColor.accent)
+                    .background(PikkoColor.primary)
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -363,7 +363,7 @@ struct VideoPlayerView: View {
                 .foregroundStyle(isSelected ? .white : PikkoColor.secondaryText)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .background(isSelected ? PikkoColor.accent : PikkoColor.surfaceMuted)
+                .background(isSelected ? PikkoColor.primary : PikkoColor.primarySoft)
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)

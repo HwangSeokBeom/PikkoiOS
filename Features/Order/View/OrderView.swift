@@ -519,7 +519,7 @@ private struct OrderRowView: View {
     private func ratingPill(_ ratingText: String) -> some View {
         HStack(spacing: PikkoSpacing.sm) {
             Image(systemName: "star.fill")
-                .foregroundStyle(Color(red: 1.0, green: 0.71, blue: 0.10))
+                .foregroundStyle(PikkoColor.warning)
             Text(ratingText)
                 .font(PikkoTypography.bodyStrong)
                 .foregroundStyle(PikkoColor.secondaryText)

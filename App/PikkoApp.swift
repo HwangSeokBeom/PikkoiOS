@@ -40,6 +40,7 @@ struct PikkoApp: App {
             .environmentObject(appState)
             .environmentObject(appState.sessionStore)
             .environmentObject(appState.cartStore)
+            .tint(PikkoColor.primary)
             .onOpenURL { url in
                 // 결제 복귀 URL은 PortOne SDK가 먼저 처리한다.
                 if url.scheme == container.appConfiguration.portOneAppScheme {

@@ -675,9 +675,9 @@ extension View {
             .background(PikkoColor.surface)
             .overlay {
                 RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
-                    .stroke(PikkoColor.line, lineWidth: 1)
+                    .stroke(PikkoColor.divider.opacity(0.85), lineWidth: 1)
             }
             .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
-            .tint(PikkoColor.accentStrong)
+            .tint(PikkoColor.primary)
     }
 }

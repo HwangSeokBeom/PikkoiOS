@@ -202,9 +202,9 @@ struct CartView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(PikkoColor.accentStrong)
+                .foregroundStyle(PikkoColor.primaryPressed)
                 .frame(width: 24, height: 24)
-                .background(.white)
+                .background(PikkoColor.elevatedSurface)
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)

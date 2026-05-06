@@ -36,10 +36,10 @@ struct StoreCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(cardPadding)
-        .background(.white)
+        .background(PikkoColor.elevatedSurface)
         .overlay {
             RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .stroke(PikkoColor.line.opacity(0.6), lineWidth: 1)
+                .stroke(PikkoColor.divider.opacity(0.55), lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
         .pikkoShadow(PikkoShadow.card)
@@ -73,9 +73,9 @@ struct StoreCard: View {
                 } label: {
                     Image(systemName: model.isLiked ? "heart.fill" : "heart")
                         .font(.system(size: heartIconSize, weight: .semibold))
-                        .foregroundStyle(model.isLiked ? PikkoColor.coralHeart : PikkoColor.gray500)
+                        .foregroundStyle(model.isLiked ? PikkoColor.primary : PikkoColor.textSecondary)
                         .frame(width: overlayButtonSize, height: overlayButtonSize)
-                        .background(.white.opacity(0.9))
+                        .background(PikkoColor.elevatedSurface.opacity(0.92))
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -105,7 +105,7 @@ struct StoreCard: View {
                 .multilineTextAlignment(.leading)
 
             HStack(spacing: metaSpacing) {
-                metaBadge(systemImage: "heart.fill", text: model.likeText, tint: PikkoColor.warmYellow)
+                metaBadge(systemImage: "heart.fill", text: model.likeText, tint: PikkoColor.primary)
                 RatingSummaryView(
                     ratingText: model.ratingText,
                     reviewCountText: model.reviewCountText,
@@ -231,9 +231,9 @@ struct StoreCard: View {
     private var cardPadding: CGFloat {
         switch style {
         case .featured:
-            return 10
+            return PikkoSpacing.sm
         case .list:
-            return 12
+            return PikkoSpacing.md
         }
     }
 
@@ -249,9 +249,9 @@ struct StoreCard: View {
     private var infoSpacing: CGFloat {
         switch style {
         case .featured:
-            return 6
+            return PikkoSpacing.xs
         case .list:
-            return 8
+            return PikkoSpacing.sm
         }
     }
 
@@ -293,18 +293,18 @@ struct StoreCard: View {
     private var imageCornerRadius: CGFloat {
         switch style {
         case .featured:
-            return 14
+            return PikkoRadius.medium
         case .list:
-            return 16
+            return PikkoRadius.large
         }
     }
 
     private var secondaryImageCornerRadius: CGFloat {
         switch style {
         case .featured:
-            return 14
+            return PikkoRadius.medium
         case .list:
-            return 14
+            return PikkoRadius.medium
         }
     }
 

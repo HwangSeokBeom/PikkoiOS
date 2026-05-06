@@ -79,12 +79,12 @@ struct HomePickedStoresSectionView: View {
             .foregroundStyle(PikkoColor.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(PikkoSpacing.md)
-            .background(PikkoColor.surface)
+            .background(PikkoColor.elevatedSurface)
             .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(PikkoColor.line.opacity(0.7), lineWidth: 1)
+                RoundedRectangle(cornerRadius: PikkoRadius.large, style: .continuous)
+                    .stroke(PikkoColor.divider.opacity(0.65), lineWidth: 1)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.large, style: .continuous))
     }
 
     private var resolvedEmptyMessage: String {

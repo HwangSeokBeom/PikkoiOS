@@ -325,9 +325,9 @@ struct ChatRootView: View {
                 ) {
                     Image(systemName: isUploadingFiles ? "hourglass" : "paperclip")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(PikkoColor.accentStrong)
+                        .foregroundStyle(PikkoColor.primary)
                         .frame(width: 44, height: 44)
-                        .background(PikkoColor.surface)
+                        .background(PikkoColor.primarySoft)
                         .clipShape(Circle())
                 }
                 .disabled(presenter.viewState.selectedRoomID == nil || isUploadingFiles || presenter.viewState.isSending)
@@ -337,9 +337,9 @@ struct ChatRootView: View {
                 } label: {
                     Image(systemName: isUploadingFiles ? "hourglass" : "doc.badge.plus")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(PikkoColor.accentStrong)
+                        .foregroundStyle(PikkoColor.primary)
                         .frame(width: 44, height: 44)
-                        .background(PikkoColor.surface)
+                        .background(PikkoColor.primarySoft)
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -349,22 +349,22 @@ struct ChatRootView: View {
                     "메시지 입력",
                     text: messageTextBinding,
                     prompt: Text("메시지 입력")
-                        .foregroundStyle(PikkoColor.gray500),
+                        .foregroundStyle(PikkoColor.textTertiary),
                     axis: .vertical
                 )
                 .lineLimit(1...3)
                 .font(PikkoTypography.body)
                 .foregroundStyle(PikkoColor.primaryText)
-                .tint(PikkoColor.accentStrong)
+                .tint(PikkoColor.primary)
                 .padding(.horizontal, PikkoSpacing.md)
                 .padding(.vertical, PikkoSpacing.sm + 2)
                 .frame(minHeight: 48)
                 .background(PikkoColor.surface)
                 .overlay {
-                    RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                        .stroke(PikkoColor.line.opacity(0.8), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
+                        .stroke(PikkoColor.primary.opacity(isComposerFocused ? 0.32 : 0.12), lineWidth: 1)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
                 .focused($isComposerFocused)
 
                 Button {
@@ -379,7 +379,7 @@ struct ChatRootView: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
-                        .background(presenter.viewState.canSend ? PikkoColor.accent : PikkoColor.gray400)
+                        .background(presenter.viewState.canSend ? PikkoColor.primary : PikkoColor.gray300)
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -399,7 +399,7 @@ struct ChatRootView: View {
         .transformEffect(.identity)
         .background {
             GeometryReader { proxy in
-                PikkoColor.background.opacity(0.96)
+                PikkoColor.background.opacity(0.98)
                     .onAppear {
                         logComposerGeometry(
                             proxy: proxy,
@@ -697,6 +697,10 @@ private struct ChatRoomRow: View {
         }
         .padding(PikkoSpacing.md)
         .background(PikkoColor.surfaceElevated)
+        .overlay {
+            RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                .stroke(PikkoColor.divider.opacity(0.55), lineWidth: 1)
+        }
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         .pikkoShadow(PikkoShadow.card)
     }
@@ -772,7 +776,7 @@ private struct ChatMessageBubble: View {
                                         .lineLimit(1)
                                 }
                                 .font(PikkoTypography.caption)
-                                .foregroundStyle(message.isMine ? .white : PikkoColor.accentStrong)
+                                .foregroundStyle(message.isMine ? .white : PikkoColor.primaryPressed)
                                 .frame(width: 164, height: 40, alignment: .leading)
                             }
                         }
@@ -782,7 +786,11 @@ private struct ChatMessageBubble: View {
         }
         .padding(.horizontal, PikkoSpacing.md)
         .padding(.vertical, PikkoSpacing.sm)
-        .background(message.isMine ? bubbleColor : PikkoColor.surface)
+        .background(message.isMine ? bubbleColor : PikkoColor.elevatedSurface)
+        .overlay {
+            RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                .stroke(message.isMine ? .clear : PikkoColor.divider.opacity(0.65), lineWidth: 1)
+        }
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         .frame(maxWidth: 260, alignment: message.isMine ? .trailing : .leading)
     }
@@ -797,14 +805,14 @@ private struct ChatMessageBubble: View {
             if let statusText = message.statusText {
                 Text(statusText)
                     .font(PikkoTypography.caption)
-                    .foregroundStyle(message.sendStatus == .failed ? Color.red : PikkoColor.tertiaryText)
+                    .foregroundStyle(message.sendStatus == .failed ? PikkoColor.error : PikkoColor.tertiaryText)
                     .lineLimit(1)
             }
         }
     }
 
     private var bubbleColor: Color {
-        message.sendStatus == .failed ? Color.red.opacity(0.72) : PikkoColor.accent
+        message.sendStatus == .failed ? PikkoColor.error.opacity(0.78) : PikkoColor.primary
     }
 
     private func isImagePath(_ path: String) -> Bool {

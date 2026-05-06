@@ -78,7 +78,7 @@ struct SearchBar: View {
                         .font(.system(size: accessoryIconSize, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: fieldHeight, height: fieldHeight)
-                        .background(PikkoColor.sage300)
+                        .background(PikkoColor.primary)
                         .clipShape(RoundedRectangle(cornerRadius: accessoryCornerRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -120,36 +120,36 @@ struct SearchBar: View {
     private var iconColor: Color {
         switch style {
         case .regular:
-            return PikkoColor.sage500
+            return PikkoColor.primary
         case .compact:
-            return PikkoColor.sage300
+            return PikkoColor.textTertiary
         }
     }
 
     private var placeholderColor: Color {
         switch style {
         case .regular:
-            return PikkoColor.gray400
+            return PikkoColor.textTertiary
         case .compact:
-            return PikkoColor.gray500
+            return PikkoColor.textTertiary
         }
     }
 
     private var backgroundColor: Color {
         switch style {
         case .regular:
-            return .white
-        case .compact:
             return PikkoColor.surface
+        case .compact:
+            return PikkoColor.elevatedSurface
         }
     }
 
     private var borderColor: Color {
         switch style {
         case .regular:
-            return PikkoColor.accent.opacity(0.35)
+            return PikkoColor.primary.opacity(0.22)
         case .compact:
-            return PikkoColor.gray200
+            return PikkoColor.divider.opacity(0.85)
         }
     }
 

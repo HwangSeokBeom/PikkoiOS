@@ -69,7 +69,7 @@ struct CommunityComposerView: View {
         VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
             Text(presenter.viewState.eyebrow)
                 .font(PikkoTypography.captionStrong)
-                .foregroundStyle(PikkoColor.accentStrong)
+                .foregroundStyle(PikkoColor.primaryPressed)
 
             Text(presenter.viewState.heroTitle)
                 .font(PikkoTypography.hero)
@@ -81,7 +81,7 @@ struct CommunityComposerView: View {
 
             Text(modeBadgeTitle)
                 .font(PikkoTypography.captionStrong)
-                .foregroundStyle(PikkoColor.accentStrong)
+                .foregroundStyle(PikkoColor.primaryPressed)
                 .padding(.horizontal, PikkoSpacing.sm)
                 .padding(.vertical, PikkoSpacing.xs)
                 .background(PikkoColor.surfaceMuted)
@@ -121,7 +121,7 @@ struct CommunityComposerView: View {
         VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
             SectionHeader(
                 title: "카테고리",
-                subtitle: "작성 API 전에도 create 모드 초기 상태를 확인할 수 있어요"
+                subtitle: "게시글의 분위기에 맞는 주제를 골라주세요"
             )
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -168,13 +168,13 @@ struct CommunityComposerView: View {
                     Text(presenter.viewState.isUploadingAttachments ? "업로드 중..." : "파일 선택")
                 }
                 .font(PikkoTypography.bodyStrong)
-                .foregroundStyle(PikkoColor.accentStrong)
+                .foregroundStyle(PikkoColor.primaryPressed)
                 .padding(.horizontal, PikkoSpacing.md)
                 .frame(height: 44)
                 .background(PikkoColor.surfaceMuted)
                 .overlay {
                     RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
-                        .stroke(PikkoColor.accent.opacity(0.28), lineWidth: 1)
+                        .stroke(PikkoColor.primary.opacity(0.24), lineWidth: 1)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
             }
@@ -227,10 +227,10 @@ struct CommunityComposerView: View {
             .foregroundStyle(PikkoColor.primaryText)
             .padding(.horizontal, PikkoSpacing.md)
             .frame(height: 52)
-            .background(.white)
+            .background(PikkoColor.surface)
             .overlay {
                 RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
-                    .stroke(PikkoColor.accent.opacity(0.25), lineWidth: 1)
+                    .stroke(PikkoColor.primary.opacity(0.22), lineWidth: 1)
             }
             .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
         }
@@ -244,10 +244,10 @@ struct CommunityComposerView: View {
 
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                    .fill(Color.white)
+                    .fill(PikkoColor.surface)
 
                 RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                    .stroke(PikkoColor.accent.opacity(0.25), lineWidth: 1)
+                    .stroke(PikkoColor.primary.opacity(0.22), lineWidth: 1)
 
                 TextEditor(
                     text: Binding(
@@ -316,13 +316,13 @@ struct CommunityComposerView: View {
         VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
             Text("생성된 게시글")
                 .font(PikkoTypography.captionStrong)
-                .foregroundStyle(PikkoColor.accentStrong)
+                .foregroundStyle(PikkoColor.primaryPressed)
 
             Text(postID)
                 .font(PikkoTypography.bodyStrong)
                 .foregroundStyle(PikkoColor.primaryText)
 
-            Text("다음 턴에서 상세 복귀나 피드 갱신에 이 postID를 바로 사용할 수 있어요.")
+            Text("게시글이 저장됐어요. 피드에서 곧 확인할 수 있어요.")
                 .font(PikkoTypography.caption)
                 .foregroundStyle(PikkoColor.secondaryText)
         }

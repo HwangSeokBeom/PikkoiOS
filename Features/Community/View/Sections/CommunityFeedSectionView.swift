@@ -26,12 +26,7 @@ struct CommunityFeedSectionView: View {
                 CommunityHighlightBannerView(banner: banner)
             }
 
-            Rectangle()
-                .fill(PikkoColor.line)
-                .frame(height: 1)
-                .padding(.horizontal, PikkoSpacing.xl)
-
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: PikkoSpacing.md) {
                 ForEach(posts) { post in
                     CommunityCard(
                         model: post,

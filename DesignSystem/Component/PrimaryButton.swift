@@ -39,12 +39,13 @@ struct PrimaryButton: View {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .frame(height: size.height)
-            .background(isEnabled ? PikkoColor.accent : PikkoColor.gray500)
+            .background(isEnabled ? PikkoColor.primary : PikkoColor.gray300)
             .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
+            .opacity(isEnabled ? 1 : 0.72)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled || isLoading)
-        .pikkoShadow(size == .regular ? PikkoShadow.card : PikkoShadowToken(color: .clear, radius: 0, x: 0, y: 0))
+        .pikkoShadow(size == .regular && isEnabled ? PikkoShadow.card : PikkoShadow.none)
     }
 }
 

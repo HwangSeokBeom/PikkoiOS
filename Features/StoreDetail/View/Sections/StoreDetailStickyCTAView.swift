@@ -31,11 +31,11 @@ struct StoreDetailStickyCTAView: View {
                 HStack(spacing: PikkoSpacing.xs) {
                     Text(summary.itemCountText)
                         .font(PikkoTypography.captionStrong)
-                        .foregroundStyle(PikkoColor.accentStrong)
+                        .foregroundStyle(PikkoColor.primaryPressed)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .frame(width: Layout.quantityBadgeSize, height: Layout.quantityBadgeSize)
-                        .background(.white)
+                        .background(PikkoColor.elevatedSurface)
                         .clipShape(Circle())
 
                     Text(summary.buttonTitle)
@@ -46,8 +46,8 @@ struct StoreDetailStickyCTAView: View {
                 .padding(.horizontal, PikkoSpacing.md)
                 .frame(minWidth: Layout.buttonMinWidth)
                 .frame(height: Layout.buttonHeight)
-                .background(summary.isEnabled ? PikkoColor.accent : PikkoColor.gray300)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(summary.isEnabled ? PikkoColor.primary : PikkoColor.gray300)
+                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.large, style: .continuous))
             }
             .buttonStyle(.plain)
             .disabled(!summary.isEnabled)
@@ -63,6 +63,6 @@ struct StoreDetailStickyCTAView: View {
                 .fill(PikkoColor.divider)
                 .frame(height: 1)
         }
-        .shadow(color: Color.black.opacity(0.10), radius: 16, x: 0, y: -4)
+        .pikkoShadow(PikkoShadow.floating)
     }
 }

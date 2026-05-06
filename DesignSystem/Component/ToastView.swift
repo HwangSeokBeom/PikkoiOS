@@ -41,20 +41,20 @@ struct ToastView: View {
         case .neutral:
             return .white
         case .success:
-            return PikkoColor.accentStrong
+            return PikkoColor.success
         case .warning:
-            return PikkoColor.ink900
+            return PikkoColor.textPrimary
         }
     }
 
     private var backgroundColor: Color {
         switch tone {
         case .neutral:
-            return PikkoColor.accentStrong
+            return PikkoColor.primary
         case .success:
-            return PikkoColor.surfaceMuted
+            return PikkoColor.success.opacity(0.12)
         case .warning:
-            return PikkoColor.warmYellow.opacity(0.85)
+            return PikkoColor.warning.opacity(0.18)
         }
     }
 }

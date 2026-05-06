@@ -1,17 +1,18 @@
 import SwiftUI
 
 enum RootTabBarMetrics {
-    static let contentHeight: CGFloat = 72
-    static let minimumContentGap: CGFloat = 28
+    static let contentHeight: CGFloat = 60
+    static let minimumContentGap: CGFloat = 22
     static let scrollContentBottomInset: CGFloat = contentHeight + minimumContentGap
 }
 
 struct RootTabBarView: View {
     private enum Layout {
         static let height: CGFloat = RootTabBarMetrics.contentHeight
-        static let itemsTopPadding: CGFloat = 10
-        static let itemsBottomPadding: CGFloat = 8
-        static let itemHeight: CGFloat = 50
+        static let itemsTopPadding: CGFloat = 5
+        static let itemsBottomPadding: CGFloat = 3
+        static let itemHeight: CGFloat = 44
+        static let iconFrame: CGFloat = 24
     }
 
     let selectedTab: RootTab
@@ -37,15 +38,16 @@ struct RootTabBarView: View {
     }
 
     private var tabBarBackground: some View {
-        Rectangle()
-            .fill(Color.white.opacity(0.86))
+        RoundedRectangle(cornerRadius: PikkoRadius.sheet, style: .continuous)
+            .fill(PikkoColor.elevatedSurface.opacity(0.9))
             .background(.ultraThinMaterial)
             .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(PikkoColor.line.opacity(0.8))
-                    .frame(height: 1)
+                RoundedRectangle(cornerRadius: PikkoRadius.sheet, style: .continuous)
+                    .stroke(PikkoColor.divider.opacity(0.55), lineWidth: 1)
             }
-            .shadow(color: Color.black.opacity(0.06), radius: 12, x: 0, y: -2)
+            .padding(.horizontal, PikkoSpacing.lg)
+            .padding(.bottom, PikkoSpacing.xs)
+            .pikkoShadow(PikkoShadow.floating)
             .ignoresSafeArea(edges: .bottom)
     }
 
@@ -57,12 +59,13 @@ struct RootTabBarView: View {
         } label: {
             VStack(spacing: 2) {
                 Image(systemName: isSelected ? tab.activeSystemImage : tab.inactiveSystemImage)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(isSelected ? PikkoColor.accentStrong : PikkoColor.gray400)
+                    .font(.system(size: isSelected ? 18 : 17, weight: .semibold))
+                    .foregroundStyle(isSelected ? PikkoColor.primary : PikkoColor.textTertiary)
+                    .frame(width: Layout.iconFrame, height: Layout.iconFrame)
 
                 Text(tab.title)
                     .font(PikkoTypography.micro)
-                    .foregroundStyle(isSelected ? PikkoColor.accentStrong : PikkoColor.tertiaryText)
+                    .foregroundStyle(isSelected ? PikkoColor.primary : PikkoColor.textTertiary)
             }
             .frame(maxWidth: .infinity)
             .frame(height: Layout.itemHeight)

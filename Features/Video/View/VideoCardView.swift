@@ -35,10 +35,10 @@ struct VideoCardView: View {
                     ForEach(model.qualityLabels, id: \.self) { quality in
                         Text(quality)
                             .font(PikkoTypography.micro)
-                            .foregroundStyle(PikkoColor.accentStrong)
+                            .foregroundStyle(PikkoColor.primaryPressed)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 4)
-                            .background(PikkoColor.surfaceMuted)
+                            .background(PikkoColor.primarySoft)
                             .clipShape(Capsule())
                     }
 
@@ -47,13 +47,13 @@ struct VideoCardView: View {
                     Button(action: onLikeTap) {
                         Image(systemName: model.isLiked ? "heart.fill" : "heart")
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(model.isLiked ? PikkoColor.coralHeart : PikkoColor.secondaryText)
+                            .foregroundStyle(model.isLiked ? PikkoColor.primary : PikkoColor.secondaryText)
                             .frame(width: 36, height: 36)
                             .background(PikkoColor.surfaceElevated)
                             .clipShape(Circle())
                             .overlay {
                                 Circle()
-                                    .stroke(PikkoColor.line.opacity(0.7), lineWidth: 1)
+                                    .stroke(PikkoColor.divider.opacity(0.7), lineWidth: 1)
                             }
                     }
                     .buttonStyle(.plain)
@@ -63,12 +63,13 @@ struct VideoCardView: View {
             .padding(.horizontal, PikkoSpacing.md)
             .padding(.bottom, PikkoSpacing.md)
         }
-        .background(PikkoColor.surface)
+        .background(PikkoColor.elevatedSurface)
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                .stroke(PikkoColor.line.opacity(0.7), lineWidth: 1)
+                .stroke(PikkoColor.divider.opacity(0.55), lineWidth: 1)
         }
+        .pikkoShadow(PikkoShadow.card)
         .contentShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         .onTapGesture(perform: onTap)
     }

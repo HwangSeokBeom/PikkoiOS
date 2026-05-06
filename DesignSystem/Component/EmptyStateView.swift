@@ -11,11 +11,11 @@ struct EmptyStateView: View {
         VStack(spacing: PikkoSpacing.md) {
             ZStack {
                 Circle()
-                    .fill(PikkoColor.surfaceMuted)
+                    .fill(PikkoColor.primarySoft)
                     .frame(width: 72, height: 72)
                 Image(systemName: systemImage)
                     .font(.system(size: 28, weight: .medium))
-                    .foregroundStyle(PikkoColor.accentStrong)
+                    .foregroundStyle(PikkoColor.primary)
             }
 
             VStack(spacing: PikkoSpacing.xs) {
@@ -35,8 +35,8 @@ struct EmptyStateView: View {
         }
         .padding(PikkoSpacing.xl)
         .frame(maxWidth: .infinity)
-        .background(.white)
-        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
+        .background(PikkoColor.elevatedSurface)
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         .pikkoShadow(PikkoShadow.card)
     }
 }

@@ -56,7 +56,7 @@ struct StoreDetailReviewSummarySectionView: View {
                                         .fill(PikkoColor.surfaceMuted)
 
                                     Capsule()
-                                        .fill(PikkoColor.sage300)
+                                        .fill(PikkoColor.primary)
                                         .frame(width: proxy.size.width * ratingBar.ratio)
                                 }
                             }
@@ -114,7 +114,7 @@ struct StoreDetailReviewSummarySectionView: View {
                     HStack(spacing: PikkoSpacing.xs) {
                         Text(reviewPreview.authorName)
                             .font(PikkoTypography.captionStrong)
-                            .foregroundStyle(PikkoColor.accentStrong)
+                            .foregroundStyle(PikkoColor.primaryPressed)
 
                         if reviewPreview.canChatWithAuthor, let authorID = reviewPreview.authorID {
                             Button {
@@ -122,9 +122,9 @@ struct StoreDetailReviewSummarySectionView: View {
                             } label: {
                                 Image(systemName: "bubble.left")
                                     .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(PikkoColor.accentStrong)
+                                    .foregroundStyle(PikkoColor.primary)
                                     .frame(width: 28, height: 28)
-                                    .background(PikkoColor.surfaceMuted)
+                                    .background(PikkoColor.primarySoft)
                                     .clipShape(Circle())
                             }
                             .buttonStyle(.plain)
@@ -137,8 +137,12 @@ struct StoreDetailReviewSummarySectionView: View {
                 }
             }
             .padding(PikkoSpacing.lg)
-            .background(.white)
-            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
+            .background(PikkoColor.elevatedSurface)
+            .overlay {
+                RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                    .stroke(PikkoColor.divider.opacity(0.55), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
             .pikkoShadow(PikkoShadow.card)
         }
         .confirmationDialog("리뷰를 삭제할까요?", isPresented: $isDeleteConfirmationPresented, titleVisibility: .visible) {

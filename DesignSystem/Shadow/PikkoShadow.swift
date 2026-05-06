@@ -9,16 +9,22 @@ struct PikkoShadowToken {
 
 enum PikkoShadow {
     static let card = PikkoShadowToken(
-        color: Color.black.opacity(0.08),
-        radius: 12,
+        color: Color.black.opacity(0.045),
+        radius: 10,
         x: 0,
-        y: 4
+        y: 3
     )
     static let floating = PikkoShadowToken(
-        color: Color.black.opacity(0.12),
+        color: Color.black.opacity(0.08),
         radius: 18,
         x: 0,
-        y: 8
+        y: 6
+    )
+    static let none = PikkoShadowToken(
+        color: .clear,
+        radius: 0,
+        x: 0,
+        y: 0
     )
 }
 

@@ -53,36 +53,36 @@ struct TagChip: View {
 
     private var foregroundColor: Color {
         if isSelected {
-            return appearance == .filled ? .white : PikkoColor.accentStrong
+            return appearance == .filled ? .white : PikkoColor.primaryPressed
         }
-        return appearance == .subtle ? PikkoColor.secondaryText : PikkoColor.gray500
+        return appearance == .subtle ? PikkoColor.secondaryText : PikkoColor.textSecondary
     }
 
     private var backgroundColor: Color {
         if isSelected {
-            return appearance == .filled ? PikkoColor.accent : PikkoColor.surfaceMuted
+            return appearance == .filled ? PikkoColor.primary : PikkoColor.primarySoft
         }
 
         switch appearance {
         case .filled:
-            return PikkoColor.gray200
+            return PikkoColor.divider
         case .outlined:
-            return .white
+            return PikkoColor.surface
         case .subtle:
-            return PikkoColor.gray100
+            return PikkoColor.elevatedSurface
         }
     }
 
     private var borderColor: Color {
         if isSelected {
-            return appearance == .filled ? .clear : PikkoColor.accent.opacity(0.55)
+            return appearance == .filled ? .clear : PikkoColor.primary.opacity(0.28)
         }
 
         switch appearance {
         case .filled:
             return .clear
         case .outlined:
-            return PikkoColor.gray200
+            return PikkoColor.divider
         case .subtle:
             return .clear
         }

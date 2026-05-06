@@ -56,7 +56,7 @@ struct RootScene: View {
 
 private struct SplashScreenView: View {
     var body: some View {
-        PikkoColor.sage50
+        PikkoColor.background
             .ignoresSafeArea()
     }
 }
