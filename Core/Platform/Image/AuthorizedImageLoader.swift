@@ -126,7 +126,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             }
 #if DEBUG
             logger.debug(
-                "Image request completed. url=\(url.absoluteString) status=\(httpResponse.statusCode) hasAuthorization=\(request.value(forHTTPHeaderField: "Authorization")?.isEmpty == false) hasSesacKey=\(request.value(forHTTPHeaderField: "SesacKey")?.isEmpty == false)"
+                "Image request completed. url=\(url.absoluteString) status=\(httpResponse.statusCode) hasAuthorization=\(request.value(forHTTPHeaderField: HTTPHeaderField.authorization)?.isEmpty == false) hasSesacKey=\(request.value(forHTTPHeaderField: HTTPHeaderField.sesacKey)?.isEmpty == false)"
             )
 #endif
 

@@ -244,12 +244,138 @@ struct StreamUrlResponseDTO: Decodable, Sendable {
 struct VideoStreamQualityDTO: Decodable, Sendable {
     let quality: String
     let urlPath: String
+    let label: String?
+    let resolution: String?
+    let bitrate: String?
 
     private enum CodingKeys: String, CodingKey {
         case quality
+        case label
+        case resolution
+        case bitrate
         case urlPath = "url"
+        case streamURLPath = "stream_url"
+    }
+
+    init(
+        quality: String,
+        urlPath: String,
+        label: String? = nil,
+        resolution: String? = nil,
+        bitrate: String? = nil
+    ) {
+        self.quality = quality
+        self.urlPath = urlPath
+        self.label = label
+        self.resolution = resolution
+        self.bitrate = bitrate
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let label = try container.decodeIfPresent(String.self, forKey: .label)
+        self.quality = try container.decodeIfPresent(String.self, forKey: .quality)
+            ?? label
+            ?? ""
+        self.urlPath = try container.decodeIfPresent(String.self, forKey: .urlPath)
+            ?? container.decodeIfPresent(String.self, forKey: .streamURLPath)
+            ?? ""
+        self.label = label
+        self.resolution = try container.decodeIfPresent(String.self, forKey: .resolution)
+        self.bitrate = Self.decodeFlexibleString(from: container, forKey: .bitrate)
+    }
+
+    private static func decodeFlexibleString(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> String? {
+        if let value = try? container.decodeIfPresent(String.self, forKey: key) {
+            return value
+        }
+        if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return String(value)
+        }
+        if let value = try? container.decodeIfPresent(Double.self, forKey: key) {
+            return String(value)
+        }
+        return nil
     }
 }
+
+#if DEBUG
+enum VideoStreamingDebugLogger {
+    static func logAPIResponse(videoId: String, response: StreamUrlResponseDTO) {
+        print("[VideoStreamingDebug] videoId=\(videoId)")
+        print("[VideoStreamingDebug] response.stream_url=\(redactedURLString(response.streamURLPath))")
+        logURLComponents(label: "response.stream_url", rawValue: response.streamURLPath)
+        print("[VideoStreamingDebug] qualities.count=\(response.qualities.count)")
+        for (index, quality) in response.qualities.enumerated() {
+            print(
+                "[VideoStreamingDebug] qualities[\(index)] label=\(quality.label ?? quality.quality) resolution=\(quality.resolution ?? "-") bitrate=\(quality.bitrate ?? "-") stream_url=\(redactedURLString(quality.urlPath))"
+            )
+            logURLComponents(label: "qualities[\(index)].stream_url", rawValue: quality.urlPath)
+        }
+    }
+
+    static func logSelected(source: String, quality: String, url: URL) {
+        print("[VideoStreamingDebug] selectedSource=\(source)")
+        print("[VideoStreamingDebug] selectedQuality=\(quality)")
+        print("[VideoStreamingDebug] selectedURL=\(redactedURLString(url.absoluteString))")
+        logURLComponents(label: "selectedURL", url: url)
+    }
+
+    static func logFinalPlayerURL(action: String, url: URL) {
+        print("[VideoStreamingDebug] \(action) url=\(redactedURLString(url.absoluteString))")
+        logURLComponents(label: action, url: url)
+    }
+
+    static func logURLComponents(label: String, url: URL) {
+        logURLComponents(label: label, rawValue: url.absoluteString)
+    }
+
+    static func logURLComponents(label: String, rawValue: String) {
+        guard let components = URLComponents(string: rawValue) else {
+            print("[VideoStreamingDebug] \(label).urlComponents=false")
+            return
+        }
+
+        let queryNames = queryItemNames(from: components.percentEncodedQuery)
+        print("[VideoStreamingDebug] \(label).hasToken=\(queryNames.contains("token"))")
+        print("[VideoStreamingDebug] \(label).queryItems=\(queryNames.isEmpty ? "nil" : queryNames.joined(separator: ","))")
+        print(
+            "[VideoStreamingDebug] \(label).scheme=\(components.scheme ?? "nil") host=\(components.host ?? "nil") path=\(components.percentEncodedPath.removingPercentEncoding ?? components.path)"
+        )
+    }
+
+    private static func queryItemNames(from percentEncodedQuery: String?) -> [String] {
+        guard let percentEncodedQuery,
+              !percentEncodedQuery.isEmpty else {
+            return []
+        }
+
+        return percentEncodedQuery
+            .split(separator: "&")
+            .compactMap { rawPair -> String? in
+                let rawName = rawPair.split(separator: "=", maxSplits: 1).first.map(String.init) ?? ""
+                let name = rawName.removingPercentEncoding ?? rawName
+                return name.isEmpty ? nil : name
+            }
+    }
+
+    private static func redactedURLString(_ rawValue: String) -> String {
+        guard var components = URLComponents(string: rawValue) else {
+            return rawValue.contains("?") ? "\(rawValue.components(separatedBy: "?").first ?? rawValue)?<redacted>" : rawValue
+        }
+
+        guard components.percentEncodedQuery?.isEmpty == false else {
+            return rawValue
+        }
+
+        components.percentEncodedQuery = nil
+        return "\(components.string ?? rawValue)?<redacted>"
+    }
+}
+#endif
 
 struct VideoSubtitleDTO: Decodable, Sendable {
     let language: String

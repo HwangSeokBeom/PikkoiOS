@@ -31,6 +31,12 @@ struct VideoRemoteDataSource: VideoRemoteDataSourceProtocol {
         logger.debug("[VideoAPI] request stream videoID=\(normalizedVideoId)")
         do {
             let response = try await apiClient.execute(try VideoEndpoint.stream(videoId: normalizedVideoId))
+#if DEBUG
+            VideoStreamingDebugLogger.logAPIResponse(
+                videoId: response.videoId.isEmpty ? normalizedVideoId : response.videoId,
+                response: response
+            )
+#endif
             logger.debug(
                 "[VideoAPI] response stream videoID=\(response.videoId) streamURLExists=\(!response.streamURLPath.isEmpty) qualities=\(response.qualities.map(\.quality).joined(separator: ","))"
             )

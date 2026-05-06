@@ -1,4 +1,4 @@
-# HLS Streaming Failure - serverServiceMismatch
+# HLS Streaming Failure - SeSACKey Header Required
 
 ## 1. Symptoms
 
@@ -16,7 +16,7 @@
 ## 3. Expected Result
 
 ```bash
-curl -i "http://pickup.sesac.kr:42678/videos/stream/pickup_video_5/master.m3u8?token=<TOKEN>"
+curl -i -H "SeSACKey: <SESAC_KEY>" "http://pickup.sesac.kr:42678/videos/stream/pickup_video_5/master.m3u8?token=<TOKEN>"
 ```
 
 - HTTP 200
@@ -35,11 +35,11 @@ curl -i "http://pickup.sesac.kr:42678/videos/stream/pickup_video_5/master.m3u8?t
 
 ## 5. Additional Findings
 
-- `tokenOnly` also returns 420.
+- Swagger previously implied token-only HLS playback, but the server requires SeSACKey header for HLS .m3u8 requests. Playback must use token query + SeSACKey header.
+- `tokenOnly` returns 420 and is useful only as a comparison diagnostic.
 - `noAuth` also returns 420.
-- Adding `Authorization` and/or `SeSACKey` to the HLS URL returns 444.
-- Therefore the HLS URL appears to use token query authentication, not API header authentication.
-- However, the issued token or HLS resource binding does not match the PickUp service.
+- Do not add `Authorization` to HLS requests unless the server explicitly requires it.
+- If token + `SeSACKey` still returns 420, classify the response as `hlsServiceMismatchEvenWithSeSACKey`.
 
 ## 6. Server Checks Requested
 
@@ -48,7 +48,7 @@ curl -i "http://pickup.sesac.kr:42678/videos/stream/pickup_video_5/master.m3u8?t
 - Confirm `/videos/stream/pickup_video_5/master.m3u8` is not routed through `sesac_memolease`-only middleware.
 - Confirm the PickUp `SeSACKey`/API key and HLS token service binding match.
 - Confirm the HLS manifest and segment files are actually deployed.
-- Confirm all quality URLs returned by the stream API should be accessible with only the `token` query.
+- Confirm all quality URLs returned by the stream API are accessible with the `token` query and `SeSACKey` header.
 - Confirm the token expiry is not too short and is not rejected immediately after issue.
 - Confirm the server sees the same HTTP 420 when testing the same issued token with curl.
 
@@ -58,13 +58,13 @@ curl -i "http://pickup.sesac.kr:42678/videos/stream/pickup_video_5/master.m3u8?t
 - The stream API request includes `Authorization` and `SeSACKey`.
 - The m3u8 playback URL contains the `token` query.
 - `rawQueryLength` and `percentEncodedQueryLength` are preserved identically.
-- The AVPlayer playback URL uses `assetHeaders=false`.
+- The AVPlayer asset uses `AVURLAssetHTTPHeaderFieldsKey` with `SeSACKey`; `Authorization` and `Content-Type` are not added for HLS GET requests.
 - Raw token values are not exposed in logs.
 
 ## 8. Conclusion
 
-This is not an issue the client can fix by adding extra query parameters or headers.
+The client must preserve the token query and inject `SeSACKey` through AVURLAsset HTTP header options.
 
-The server must return the PickUp HLS manifest by fixing HLS token issuance or the streaming resource service binding.
+If token + `SeSACKey` still returns 420, the server must verify HLS token issuance and streaming resource service binding.
 
 Do not include raw token, `Authorization`, or `SeSACKey` values in shared logs or reports.

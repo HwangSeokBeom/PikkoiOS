@@ -16,6 +16,7 @@ final class VideoPlayerViewModel: ObservableObject {
     private let setLikeUseCase: SetVideoLikeUseCase
     private let appConfiguration: AppConfiguration
     private let tokenStore: (any TokenStore)?
+    private let protectedResourceHeaderProvider: ProtectedResourceHeaderProvider?
     private let onVideoUpdated: (Video) -> Void
     private let logger = Logger(category: "VideoPlayer")
     private let qualityLogger = Logger(category: "VideoQuality")
@@ -35,6 +36,7 @@ final class VideoPlayerViewModel: ObservableObject {
     private var currentAttemptQuality: String?
     private var currentAttemptAuthMode: HLSAuthMode?
     private var currentAttemptFailureMessage: String?
+    private var didRefreshAfterHLSServiceMismatch = false
 
     init(
         video: Video,
@@ -49,6 +51,9 @@ final class VideoPlayerViewModel: ObservableObject {
         self.setLikeUseCase = setLikeUseCase
         self.appConfiguration = appConfiguration
         self.tokenStore = tokenStore
+        self.protectedResourceHeaderProvider = tokenStore.map {
+            ProtectedResourceHeaderProvider(configuration: appConfiguration, tokenStore: $0)
+        }
         self.onVideoUpdated = onVideoUpdated
     }
 
@@ -83,6 +88,7 @@ final class VideoPlayerViewModel: ObservableObject {
     func retryStream() async {
         cancelPendingPlayback(reason: "retry")
         attemptedFallbackQualities.removeAll()
+        didRefreshAfterHLSServiceMismatch = false
         viewState.effectivePlaybackQuality = nil
         await loadStream(shouldAutoplay: true, reason: "retry")
     }
@@ -282,6 +288,7 @@ final class VideoPlayerViewModel: ObservableObject {
             streamIssuedAt = Date()
             viewState.stream = stream
             attemptedFallbackQualities.removeAll()
+            didRefreshAfterHLSServiceMismatch = false
 
             let correctedQuality = correctedUserSelectedQuality(in: stream)
             if correctedQuality != viewState.userSelectedQuality {
@@ -295,7 +302,13 @@ final class VideoPlayerViewModel: ObservableObject {
 
 #if DEBUG
             if HLSDebugDiagnosticsOptions.isEnabled {
-                HLSPlaylistDiagnostics.run(stream: stream)
+                if let protectedResourceHeaders = try? await makeProtectedResourceHeaders() {
+                    HLSPlaylistDiagnostics.run(
+                        stream: stream,
+                        seSACKey: appConfiguration.seSACKey,
+                        protectedResourceHeaders: protectedResourceHeaders
+                    )
+                }
             }
 #endif
 
@@ -383,7 +396,23 @@ final class VideoPlayerViewModel: ObservableObject {
             if let probeFailure = error as? HLSProbeFailure {
                 attemptedFallbackQualities.insert(resolvedQuality.identifier)
                 viewState.detailReason = probeFailure.detailReason
+                if probeFailure.shouldRefreshStreamOnce,
+                   await retryOnceAfterTerminalHLSAuthFailure(
+                    failedQuality: resolvedQuality.identifier,
+                    reason: probeFailure.refreshRetryReason,
+                    seekTime: seekTime,
+                    shouldResume: shouldResume,
+                    failureMessage: failureMessage
+                   ) {
+                    return
+                }
+
                 setPlaybackState(.failed(userFacingHLSProbeFailureMessage()))
+                logTerminalHLSAuthFailureIfNeeded(
+                    probeFailure: probeFailure,
+                    selectedQuality: resolvedQuality.identifier,
+                    retryExhausted: true
+                )
                 logger.error("[VideoPlayer] failed videoId=\(viewState.video.videoId) reason=\(probeFailure.detailReason)")
                 return
             }
@@ -398,7 +427,7 @@ final class VideoPlayerViewModel: ObservableObject {
         currentAttemptQuality = playbackCandidate.quality
         currentAttemptAuthMode = playbackCandidate.authMode
         logger.debug(
-            "[VideoPlayer] replace item reason=\(reason) quality=\(playbackCandidate.quality) authMode=\(playbackCandidate.authMode.rawValue) assetHeaders=false playbackURLPath=\(playbackDescriptor.path) queryExists=\(playbackDescriptor.queryExists) queryKeys=\(playbackDescriptor.queryKeys) preserveTime=\(seekTime.seconds.isFinite ? seekTime.seconds : 0) generation=\(generation)"
+            "[VideoPlayer] replace item reason=\(reason) quality=\(playbackCandidate.quality) authMode=\(playbackCandidate.authMode.rawValue) hlsHeaderMode=\(playbackCandidate.authMode.rawValue) assetHeaders=true hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false playbackURLPath=\(playbackDescriptor.path) queryExists=\(playbackDescriptor.queryExists) queryKeys=\(playbackDescriptor.queryKeys) preserveTime=\(seekTime.seconds.isFinite ? seekTime.seconds : 0) generation=\(generation)"
         )
 
         guard generation == playbackGeneration else {
@@ -451,9 +480,9 @@ final class VideoPlayerViewModel: ObservableObject {
         let terminalStreamServerFailure = statusCodes.contains(420) || statusCodes.contains(444)
         let detailReason: String
         if statusCodes.contains(444) {
-            detailReason = "forbiddenByStreamServer"
+            detailReason = "hlsUnauthorizedEvenWithProtectedHeaders"
         } else if statusCodes.contains(420) {
-            detailReason = "serverServiceMismatch"
+            detailReason = "hlsRequiresServiceHeader"
         } else {
             detailReason = "playerItemFailed(\(nsError?.code ?? 0))"
         }
@@ -469,9 +498,23 @@ final class VideoPlayerViewModel: ObservableObject {
         if let playerError = player?.error {
             logger.error("[VideoPlayer] player error=\(playerError.localizedDescription)")
         }
+#if DEBUG
+        debugLogPlayerFailure(item: item, player: player)
+#endif
 
         attemptedFallbackQualities.insert(quality)
         let failedURL = (item.asset as? AVURLAsset)?.url
+        if statusCodes.contains(where: { $0 == 420 || $0 == 444 }),
+           await retryOnceAfterTerminalHLSAuthFailure(
+            failedQuality: quality,
+            reason: statusCodes.contains(444) ? "playerItem444ProtectedResourceUnauthorized" : "playerItem420RequiresServiceHeader",
+            seekTime: player?.currentTime() ?? .zero,
+            shouldResume: true,
+            failureMessage: failureMessage
+           ) {
+            return
+        }
+
         if shouldAttemptFallbackAfterItemFailure(quality: quality, statusCodes: statusCodes, nsError: nsError),
            let stream = viewState.stream,
            let nextQuality = nextFallbackQuality(
@@ -503,7 +546,86 @@ final class VideoPlayerViewModel: ObservableObject {
             "[VideoPlayer] fallback exhausted attempted=\(fallbackAttemptSummary(in: viewState.stream))"
         )
         viewState.detailReason = "quality=\(quality) \(detailReason)"
+        if statusCodes.contains(420) {
+            logger.error(
+                "[VideoPlayer] failed reason=hlsRequiresServiceHeader videoId=\(viewState.video.videoId) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(quality) status=420 classification=hlsRequiresServiceHeader responseMessage=unavailableFromAVPlayerErrorLog hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false retryAfterRefresh=\(didRefreshAfterHLSServiceMismatch ? "exhausted" : "notAttempted")"
+            )
+        } else if statusCodes.contains(444) {
+            logger.error(
+                "[VideoPlayer] failed reason=hlsUnauthorizedEvenWithProtectedHeaders videoId=\(viewState.video.videoId) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(quality) status=444 classification=hlsUnauthorizedEvenWithProtectedHeaders responseMessage=unavailableFromAVPlayerErrorLog hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false retryAfterRefresh=\(didRefreshAfterHLSServiceMismatch ? "exhausted" : "notAttempted")"
+            )
+        }
         setPlaybackState(.failed(terminalStreamServerFailure ? streamServerFailureMessage : (failureMessage ?? userFacingPlaybackFailureMessage(forExplicitQuality: viewState.userSelectedQuality != "auto"))))
+    }
+
+    private func retryOnceAfterTerminalHLSAuthFailure(
+        failedQuality: String,
+        reason: String,
+        seekTime: CMTime,
+        shouldResume: Bool,
+        failureMessage: String?
+    ) async -> Bool {
+        guard !didRefreshAfterHLSServiceMismatch else {
+            logger.warning(
+                "[VideoPlayer] HLS auth retry suppressed videoId=\(viewState.video.videoId) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(failedQuality) reason=\(reason) retryAfterRefresh=exhausted hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false"
+            )
+            return false
+        }
+
+        didRefreshAfterHLSServiceMismatch = true
+        let videoID = viewState.video.videoId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !videoID.isEmpty else { return false }
+
+        logger.warning(
+            "[VideoPlayer] HLS auth failure refreshing stream once videoId=\(videoID) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(failedQuality) reason=\(reason) hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false"
+        )
+
+        do {
+            let stream = try await fetchStreamUseCase.execute(videoId: videoID)
+            streamIssuedAt = Date()
+            viewState.stream = stream
+            logStreamResponseDiagnostics(requestedVideoID: videoID, stream: stream)
+
+            let correctedQuality = correctedUserSelectedQuality(in: stream)
+            if correctedQuality != viewState.userSelectedQuality {
+                qualityLogger.warning(
+                    "[VideoQuality] corrected selected quality from=\(viewState.userSelectedQuality) to=\(correctedQuality) reason=unavailableAfterHLSServiceMismatchRefresh"
+                )
+                viewState.userSelectedQuality = correctedQuality
+                viewState.detailReason = "selectedQualityUnavailable"
+            }
+
+            let resolvedQuality = try resolveQuality(viewState.userSelectedQuality, in: stream)
+            await replacePlayerItem(
+                resolvedQuality: resolvedQuality,
+                reason: "refreshAfterHLSServiceMismatch",
+                seekTime: seekTime,
+                shouldResume: shouldResume,
+                failureMessage: failureMessage
+            )
+            return true
+        } catch {
+            logger.error(
+                "[VideoPlayer] HLS auth refresh failed videoId=\(videoID) selectedQuality=\(failedQuality) reason=\(error.localizedDescription)"
+            )
+            return false
+        }
+    }
+
+    private func logTerminalHLSAuthFailureIfNeeded(
+        probeFailure: HLSProbeFailure,
+        selectedQuality: String,
+        retryExhausted: Bool
+    ) {
+        guard let result = probeFailure.results.last,
+              result.classification.isTerminalHLSAuthFailure else {
+            return
+        }
+
+        let descriptor = VideoURLLogDescriptor(url: result.candidate.url)
+        logger.error(
+            "[VideoPlayer] failed reason=\(result.classification.rawValue) videoId=\(result.candidate.requestedVideoID) responseVideoId=\(result.candidate.responseVideoID) selectedQuality=\(selectedQuality) resolvedHLSHost=\(descriptor.host) resolvedHLSPort=\(descriptor.port) resolvedHLSPath=\(descriptor.path) queryKeys=\(descriptor.queryKeys) tokenLengthPreserved=\(result.tokenLengthPreserved) hasSeSACKeyHeader=\(result.headerSnapshot.hasSeSACKey) status=\(result.statusCode) responseMessage=\(result.bodyPrefix ?? "nil") classification=\(result.classification.rawValue) headerAuthorization=\(result.headerSnapshot.hasAuthorization) headerContentType=\(result.headerSnapshot.hasContentType) retryAfterRefresh=\(retryExhausted ? "exhausted" : "notExhausted")"
+        )
     }
 
     private func correctedUserSelectedQuality(in stream: VideoStream) -> String {
@@ -689,18 +811,46 @@ final class VideoPlayerViewModel: ObservableObject {
         guard let stream = viewState.stream else {
             throw VideoPlaybackSelectionError.selectedQualityUnavailable(resolvedQuality.identifier)
         }
+        let protectedResourceHeaders = try await makeProtectedResourceHeaders()
         let playbackCandidate = try await HLSProbeService.resolvePlaybackCandidate(
             selectedQuality: resolvedQuality.identifier,
-            stream: stream
+            stream: stream,
+            requestedVideoID: viewState.video.videoId,
+            seSACKey: appConfiguration.seSACKey,
+            protectedResourceHeaders: protectedResourceHeaders
         )
         let descriptor = VideoURLLogDescriptor(url: playbackCandidate.url)
+        let headerSnapshot = HLSHeaderSnapshot(headers: protectedResourceHeaders)
+        let assetOptions = HLSPlaybackHeaderOptions.assetOptions(headers: protectedResourceHeaders)
         logger.debug(
-            "[VideoPlayer] build asset quality=\(playbackCandidate.quality) url=\(descriptor.redactedAbsoluteString) authMode=\(playbackCandidate.authMode.rawValue) assetHeaders=false queryExists=\(descriptor.queryExists) queryKeys=\(descriptor.queryKeys) queryKeyCount=\(descriptor.queryKeyCount) rawQueryLength=\(descriptor.rawQueryLength) percentEncodedQueryLength=\(descriptor.percentEncodedQueryLength) hasAuthorization=false hasSeSACKey=false"
+            "[VideoPlayer] createAsset hlsAuthMode=\(playbackCandidate.authMode.rawValue) quality=\(playbackCandidate.quality) url=\(descriptor.redactedAbsoluteString) assetHeaders=true queryExists=\(descriptor.queryExists) queryKeys=\(descriptor.queryKeys) queryKeyCount=\(descriptor.queryKeyCount) rawQueryLength=\(descriptor.rawQueryLength) percentEncodedQueryLength=\(descriptor.percentEncodedQueryLength) hasAuthorization=\(headerSnapshot.hasAuthorization) hasSeSACKey=\(headerSnapshot.hasSeSACKey) headerContentType=\(headerSnapshot.hasContentType)"
         )
+        logger.debug("[VideoPlayer] hlsAuthMode=\(playbackCandidate.authMode.rawValue) headerSeSACKey=\(headerSnapshot.hasSeSACKey) headerAuthorization=\(headerSnapshot.hasAuthorization) headerContentType=\(headerSnapshot.hasContentType)")
+#if DEBUG
+        VideoStreamingDebugLogger.logSelected(
+            source: debugSelectedSource(for: playbackCandidate.quality, in: stream),
+            quality: playbackCandidate.quality,
+            url: playbackCandidate.url
+        )
+#endif
         logATSConfigurationIfNeeded(for: playbackCandidate.url)
 
-        let asset = AVURLAsset(url: playbackCandidate.url)
+#if DEBUG
+        VideoStreamingDebugLogger.logFinalPlayerURL(action: "create AVURLAsset", url: playbackCandidate.url)
+#endif
+        // Keep the token query intact and inject the same protected-resource headers used by authenticated image loading.
+        let asset = AVURLAsset(url: playbackCandidate.url, options: assetOptions)
+#if DEBUG
+        VideoStreamingDebugLogger.logFinalPlayerURL(action: "create AVPlayerItem", url: playbackCandidate.url)
+#endif
         return (AVPlayerItem(asset: asset), playbackCandidate)
+    }
+
+    private func makeProtectedResourceHeaders() async throws -> [String: String] {
+        guard let protectedResourceHeaderProvider else {
+            throw NetworkError.unauthorized
+        }
+        return try await protectedResourceHeaderProvider.makeHeaders()
     }
 
     private func installPlayerObserversIfNeeded(for player: AVPlayer) {
@@ -712,6 +862,9 @@ final class VideoPlayerViewModel: ObservableObject {
                 guard let self else { return }
                 if observedPlayer.status == .failed {
                     self.logger.error("[VideoPlayer] player error=\(observedPlayer.error?.localizedDescription ?? "unknown")")
+#if DEBUG
+                    self.debugLogPlayerError(observedPlayer, item: observedPlayer.currentItem)
+#endif
                 }
             }
         }
@@ -721,6 +874,9 @@ final class VideoPlayerViewModel: ObservableObject {
                 guard let self else { return }
                 if let error = observedPlayer.error {
                     self.logger.error("[VideoPlayer] player error=\(error.localizedDescription)")
+#if DEBUG
+                    self.debugLogPlayerError(observedPlayer, item: observedPlayer.currentItem)
+#endif
                 }
             }
         }
@@ -818,7 +974,34 @@ final class VideoPlayerViewModel: ObservableObject {
             logger.error(
                 "[VideoPlayer] errorLog event uri=\(uri) statusCode=\(event.errorStatusCode) errorStatusCode=\(event.errorStatusCode) serverAddress=\(event.serverAddress ?? "nil") playbackSessionID=\(event.playbackSessionID ?? "nil") errorDomain=\(event.errorDomain) errorComment=\(event.errorComment ?? "nil")"
             )
+            if [401, 403, 420, 444].contains(event.errorStatusCode) {
+                let resourceKind = hlsResourceKind(from: event.uri)
+                logger.error(
+                    "[VideoPlayer] failed reason=\(resourceKind)Unauthorized status=\(event.errorStatusCode) hlsAuthMode=\(currentAttemptAuthMode?.rawValue ?? "unknown") headerAuthorization=true headerSeSACKey=true headerContentType=false"
+                )
+            }
         }
+    }
+
+    private func hlsResourceKind(from uri: String?) -> String {
+        guard let uri,
+              let url = URL(string: uri) else {
+            return "hlsRequest"
+        }
+
+        let path = url.path.lowercased()
+        if path.hasSuffix(".m3u8") {
+            return path.contains("master") ? "masterPlaylist" : "variantPlaylist"
+        }
+
+        if path.hasSuffix(".ts")
+            || path.hasSuffix(".m4s")
+            || path.hasSuffix(".aac")
+            || path.hasSuffix(".vtt") {
+            return "segment"
+        }
+
+        return "hlsRequest"
     }
 
     private func logAccessLog(for item: AVPlayerItem) {
@@ -909,15 +1092,100 @@ final class VideoPlayerViewModel: ObservableObject {
 
 private enum HLSAuthMode: String, Sendable, CaseIterable {
     case tokenOnly
+    case tokenPlusSeSACKey
+    case tokenPlusProtectedResourceHeaders
+}
+
+private struct HLSHeaderSnapshot: Sendable {
+    let headerNames: [String]
+    let hasAuthorization: Bool
+    let hasSeSACKey: Bool
+    let hasLegacySeSACKey: Bool
+    let hasContentType: Bool
+    let apiKeyLength: Int?
+    let authorizationExists: Bool
+
+    init(headers: [String: String]) {
+        self.headerNames = headers.keys.sorted()
+        self.hasAuthorization = headers[HTTPHeaderField.authorization]?.isEmpty == false
+        self.hasSeSACKey = headers[HTTPHeaderField.sesacKey]?.isEmpty == false
+        self.hasLegacySeSACKey = headers[HLSPlaybackHeaderOptions.legacySeSACKeyHeaderField]?.isEmpty == false
+        self.hasContentType = headers[HTTPHeaderField.contentType]?.isEmpty == false
+        self.apiKeyLength = headers[HTTPHeaderField.sesacKey]?.count
+            ?? headers[HLSPlaybackHeaderOptions.legacySeSACKeyHeaderField]?.count
+        self.authorizationExists = self.hasAuthorization
+    }
+}
+
+#if DEBUG
+private enum HLSAuthDebugLogger {
+    private static let logger = Logger(category: "HLSAuthDebug")
+
+    static func logComparison(imageHeaders: [String: String], hlsHeaders: [String: String]) {
+        let image = HLSHeaderSnapshot(headers: imageHeaders)
+        let hls = HLSHeaderSnapshot(headers: hlsHeaders)
+        logger.debug(
+            "[HLSAuthDebug] compare image/protected-resource headers vs HLS headers imageAuthHasAuthorization=\(image.hasAuthorization) imageAuthHasSeSACKey=\(image.hasSeSACKey) imageAuthHeaderNames=\(image.headerNames.joined(separator: ",")) hlsAuthHasAuthorization=\(hls.hasAuthorization) hlsAuthHasSeSACKey=\(hls.hasSeSACKey) hlsAuthHeaderNames=\(hls.headerNames.joined(separator: ",")) apiKeyLengthMatches=\(image.apiKeyLength == hls.apiKeyLength) authorizationExistsMatches=\(image.authorizationExists == hls.authorizationExists)"
+        )
+    }
+}
+#endif
+
+private enum HLSPlaybackHeaderOptions {
+    static let legacySeSACKeyHeaderField = "SeSACKey"
+    private static let avURLAssetHTTPHeaderFieldsKey = "AVURLAssetHTTPHeaderFieldsKey"
+
+    static func assetOptions(headers: [String: String]) -> [String: Any] {
+        [
+            avURLAssetHTTPHeaderFieldsKey: headers
+        ]
+    }
+
+    static func applyHeaders(
+        to request: inout URLRequest,
+        authMode: HLSAuthMode,
+        seSACKey: String,
+        protectedResourceHeaders: [String: String]
+    ) {
+        request.setValue(nil, forHTTPHeaderField: HTTPHeaderField.authorization)
+        request.setValue(nil, forHTTPHeaderField: HTTPHeaderField.contentType)
+        request.setValue(nil, forHTTPHeaderField: HTTPHeaderField.sesacKey)
+        request.setValue(nil, forHTTPHeaderField: legacySeSACKeyHeaderField)
+
+        switch authMode {
+        case .tokenOnly:
+            return
+        case .tokenPlusSeSACKey:
+            request.setValue(seSACKey, forHTTPHeaderField: legacySeSACKeyHeaderField)
+        case .tokenPlusProtectedResourceHeaders:
+            for (field, value) in protectedResourceHeaders where field != HTTPHeaderField.contentType {
+                request.setValue(value, forHTTPHeaderField: field)
+            }
+        }
+    }
+
+    static func headerSnapshot(authMode: HLSAuthMode, protectedResourceHeaders: [String: String]) -> HLSHeaderSnapshot {
+        switch authMode {
+        case .tokenOnly:
+            return HLSHeaderSnapshot(headers: [:])
+        case .tokenPlusSeSACKey:
+            return HLSHeaderSnapshot(headers: [legacySeSACKeyHeaderField: "present"])
+        case .tokenPlusProtectedResourceHeaders:
+            return HLSHeaderSnapshot(headers: protectedResourceHeaders)
+        }
+    }
 }
 
 private enum HLSProbeClassification: String, Sendable {
+    case hlsPlayable
     case playableMasterPlaylist
     case playableMediaPlaylist
     case tokenExpired
     case unauthorized
     case sesacKeyInvalid
-    case serviceMismatch
+    case hlsRequiresServiceHeader
+    case hlsUnauthorizedWithPartialHeaders
+    case hlsUnauthorizedEvenWithProtectedHeaders
     case serverReturnedJson
     case fileMissing
     case invalidURL
@@ -925,9 +1193,22 @@ private enum HLSProbeClassification: String, Sendable {
     case unknown
 }
 
+private extension HLSProbeClassification {
+    var isTerminalHLSAuthFailure: Bool {
+        switch self {
+        case .hlsRequiresServiceHeader, .hlsUnauthorizedWithPartialHeaders, .hlsUnauthorizedEvenWithProtectedHeaders:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 private struct HLSProbeCandidate: Sendable {
-    let videoID: String
+    let requestedVideoID: String
+    let responseVideoID: String
     let quality: String
+    let rawPath: String
     let url: URL
     let authMode: HLSAuthMode
 
@@ -947,9 +1228,11 @@ private struct HLSProbeResult: Sendable {
     let hasStreamInf: Bool
     let hasExtInf: Bool
     let uriLines: [String]
+    let tokenLengthPreserved: Bool
+    let headerSnapshot: HLSHeaderSnapshot
 
     var isPlayablePlaylist: Bool {
-        classification == .playableMasterPlaylist || classification == .playableMediaPlaylist
+        classification == .hlsPlayable || classification == .playableMasterPlaylist || classification == .playableMediaPlaylist
     }
 }
 
@@ -967,7 +1250,22 @@ private struct HLSProbeFailure: Error, LocalizedError {
             return "hlsTokenPlaybackFailed(status=-1)"
         }
 
+        if lastResult.classification.isTerminalHLSAuthFailure {
+            return "\(lastResult.classification.rawValue)(status=\(lastResult.statusCode))"
+        }
+
         return "hlsTokenPlaybackFailed(status=\(lastResult.statusCode))"
+    }
+
+    var shouldRefreshStreamOnce: Bool {
+        results.contains { $0.classification == .hlsUnauthorizedEvenWithProtectedHeaders }
+    }
+
+    var refreshRetryReason: String {
+        if let result = results.last(where: { $0.classification == .hlsUnauthorizedEvenWithProtectedHeaders }) {
+            return "\(result.classification.rawValue)(status=\(result.statusCode))"
+        }
+        return "hlsTerminalAuthFailure"
     }
 
     var errorDescription: String? {
@@ -994,15 +1292,22 @@ private final class HLSProbeClient: @unchecked Sendable {
         self.session = URLSession(configuration: configuration)
     }
 
-    func fetchPlaylistHeadOrPrefix(url: URL) async throws -> HLSProbeRawResponse {
+    func fetchPlaylistHeadOrPrefix(
+        url: URL,
+        authMode: HLSAuthMode,
+        seSACKey: String,
+        protectedResourceHeaders: [String: String]
+    ) async throws -> HLSProbeRawResponse {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 8
-        request.setValue(nil, forHTTPHeaderField: "Authorization")
-        request.setValue(nil, forHTTPHeaderField: "SeSACKey")
-        request.setValue(nil, forHTTPHeaderField: "SesacKey")
-        request.setValue(nil, forHTTPHeaderField: "Content-Type")
-        request.setValue("bytes=0-4095", forHTTPHeaderField: "Range")
+        HLSPlaybackHeaderOptions.applyHeaders(
+            to: &request,
+            authMode: authMode,
+            seSACKey: seSACKey,
+            protectedResourceHeaders: protectedResourceHeaders
+        )
+        request.setValue("bytes=0-4095", forHTTPHeaderField: HTTPHeaderField.range)
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -1015,50 +1320,149 @@ private final class HLSProbeClient: @unchecked Sendable {
 private enum HLSProbeService {
     private static let logger = Logger(category: "HLSProbe")
     private static let client = HLSProbeClient()
+#if DEBUG
+    private static let isLegacyComparisonDiagnosticsEnabled = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
+#else
+    private static let isLegacyComparisonDiagnosticsEnabled = false
+#endif
 
     static func resolvePlaybackCandidate(
         selectedQuality: String,
-        stream: VideoStream
+        stream: VideoStream,
+        requestedVideoID: String,
+        seSACKey: String,
+        protectedResourceHeaders: [String: String]
     ) async throws -> PlaybackCandidate {
         var results: [HLSProbeResult] = []
-        for (quality, url) in qualityProbeOrder(selectedQuality: selectedQuality, stream: stream) {
-            let candidate = HLSProbeCandidate(videoID: stream.videoId, quality: quality, url: url, authMode: .tokenOnly)
-            let result = await fetchPlaylist(candidate: candidate)
+        let probeEntries = qualityProbeOrder(selectedQuality: selectedQuality, stream: stream)
+        if let masterEntry = probeEntries.first {
+            await fetchLegacyComparisonDiagnostics(
+                selectedQuality: masterEntry.quality,
+                rawPath: masterEntry.rawPath,
+                url: masterEntry.url,
+                requestedVideoID: requestedVideoID,
+                responseVideoID: stream.videoId,
+                seSACKey: seSACKey,
+                protectedResourceHeaders: protectedResourceHeaders
+            )
+        }
+
+#if DEBUG
+        HLSAuthDebugLogger.logComparison(
+            imageHeaders: protectedResourceHeaders,
+            hlsHeaders: protectedResourceHeaders
+        )
+#endif
+
+        for (quality, url, rawPath) in probeEntries {
+            let candidate = HLSProbeCandidate(
+                requestedVideoID: requestedVideoID,
+                responseVideoID: stream.videoId,
+                quality: quality,
+                rawPath: rawPath,
+                url: url,
+                authMode: .tokenPlusProtectedResourceHeaders
+            )
+            let result = await fetchPlaylist(
+                candidate: candidate,
+                seSACKey: seSACKey,
+                protectedResourceHeaders: protectedResourceHeaders
+            )
             results.append(result)
             if result.isPlayablePlaylist {
+                if selectedQuality != "auto", quality == "auto", probeEntries.count > 1 {
+                    continue
+                }
                 return PlaybackCandidate(
                     quality: quality,
                     url: url,
-                    authMode: .tokenOnly
+                    authMode: .tokenPlusProtectedResourceHeaders
                 )
+            }
+            if result.classification.isTerminalHLSAuthFailure {
+                throw HLSProbeFailure(results: results)
             }
         }
 
         throw HLSProbeFailure(results: results)
     }
 
+    private static func fetchLegacyComparisonDiagnostics(
+        selectedQuality: String,
+        rawPath: String,
+        url: URL,
+        requestedVideoID: String,
+        responseVideoID: String,
+        seSACKey: String,
+        protectedResourceHeaders: [String: String]
+    ) async {
+        guard isLegacyComparisonDiagnosticsEnabled else { return }
+
+        let tokenOnlyCandidate = HLSProbeCandidate(
+            requestedVideoID: requestedVideoID,
+            responseVideoID: responseVideoID,
+            quality: selectedQuality,
+            rawPath: rawPath,
+            url: url,
+            authMode: .tokenOnly
+        )
+        _ = await fetchPlaylist(
+            candidate: tokenOnlyCandidate,
+            seSACKey: seSACKey,
+            protectedResourceHeaders: protectedResourceHeaders
+        )
+
+        let partialHeaderCandidate = HLSProbeCandidate(
+            requestedVideoID: requestedVideoID,
+            responseVideoID: responseVideoID,
+            quality: selectedQuality,
+            rawPath: rawPath,
+            url: url,
+            authMode: .tokenPlusSeSACKey
+        )
+        _ = await fetchPlaylist(
+            candidate: partialHeaderCandidate,
+            seSACKey: seSACKey,
+            protectedResourceHeaders: protectedResourceHeaders
+        )
+    }
+
     private static func qualityProbeOrder(
         selectedQuality: String,
         stream: VideoStream
-    ) -> [(quality: String, url: URL)] {
+    ) -> [(quality: String, url: URL, rawPath: String)] {
         if selectedQuality != "auto",
            let quality = stream.qualities.first(where: { $0.quality == selectedQuality }) {
-            return [(quality.quality, quality.url)]
+            return [
+                ("auto", stream.streamURL, stream.streamURLPath),
+                (quality.quality, quality.url, quality.urlPath)
+            ]
         }
 
-        let available = Dictionary(uniqueKeysWithValues: stream.qualities.map { ($0.quality, $0.url) })
-        var result: [(String, URL)] = [("auto", stream.streamURL)]
+        let available = Dictionary(uniqueKeysWithValues: stream.qualities.map { ($0.quality, $0) })
+        var result: [(String, URL, String)] = [("auto", stream.streamURL, stream.streamURLPath)]
         for quality in ["1080p", "720p", "480p"] {
-            if let url = available[quality] {
-                result.append((quality, url))
+            if let streamQuality = available[quality] {
+                result.append((quality, streamQuality.url, streamQuality.urlPath))
             }
         }
         return result
     }
 
     static func fetchPlaylist(
-        candidate: HLSProbeCandidate
+        candidate: HLSProbeCandidate,
+        seSACKey: String,
+        protectedResourceHeaders: [String: String]
     ) async -> HLSProbeResult {
+        let rawDescriptor = VideoURLLogDescriptor(rawValue: candidate.rawPath)
+        let descriptor = VideoURLLogDescriptor(url: candidate.url)
+        let pathNormalization = HLSStreamPathNormalizer.normalization(for: rawDescriptor.path)
+        let tokenLengthPreserved = rawDescriptor.tokenValueLength == 0 || rawDescriptor.tokenValueLength == descriptor.tokenValueLength
+        let headerSnapshot = HLSPlaybackHeaderOptions.headerSnapshot(
+            authMode: candidate.authMode,
+            protectedResourceHeaders: protectedResourceHeaders
+        )
+
         guard candidate.url.scheme?.isEmpty == false,
               candidate.url.host?.isEmpty == false else {
             return HLSProbeResult(
@@ -1071,16 +1475,21 @@ private enum HLSProbeService {
                 hasExtM3U: false,
                 hasStreamInf: false,
                 hasExtInf: false,
-                uriLines: []
+                uriLines: [],
+                tokenLengthPreserved: tokenLengthPreserved,
+                headerSnapshot: headerSnapshot
             )
         }
 
-        let descriptor = VideoURLLogDescriptor(url: candidate.url)
-
         do {
-            let rawResponse = try await client.fetchPlaylistHeadOrPrefix(url: candidate.url)
+            let rawResponse = try await client.fetchPlaylistHeadOrPrefix(
+                url: candidate.url,
+                authMode: candidate.authMode,
+                seSACKey: seSACKey,
+                protectedResourceHeaders: protectedResourceHeaders
+            )
             let body = String(data: rawResponse.data.prefix(4096), encoding: .utf8) ?? "<non-utf8>"
-            let contentType = rawResponse.response.value(forHTTPHeaderField: "Content-Type")
+            let contentType = rawResponse.response.value(forHTTPHeaderField: HTTPHeaderField.contentType)
             let bodyType = bodyType(body: body, contentType: contentType)
             let hasExtM3U = body.contains("#EXTM3U")
             let hasStreamInf = body.contains("#EXT-X-STREAM-INF")
@@ -1092,7 +1501,8 @@ private enum HLSProbeService {
                 bodyType: bodyType,
                 hasExtM3U: hasExtM3U,
                 hasStreamInf: hasStreamInf,
-                hasExtInf: hasExtInf
+                hasExtInf: hasExtInf,
+                authMode: candidate.authMode
             )
             let result = HLSProbeResult(
                 candidate: candidate,
@@ -1104,27 +1514,29 @@ private enum HLSProbeService {
                 hasExtM3U: hasExtM3U,
                 hasStreamInf: hasStreamInf,
                 hasExtInf: hasExtInf,
-                uriLines: parseURILines(from: body)
+                uriLines: parseURILines(from: body),
+                tokenLengthPreserved: tokenLengthPreserved,
+                headerSnapshot: headerSnapshot
             )
             logger.debug(
-                "[HLSProbeRequest] urlPath=\(descriptor.path) queryKeys=\(descriptor.queryKeys) authMode=\(candidate.authMode.rawValue) usesAPIClient=false headerAuthorization=false headerSeSACKey=false headerContentType=false session=ephemeral"
+                "[HLSProbeRequest] videoId=\(candidate.requestedVideoID) responseVideoId=\(candidate.responseVideoID) selectedQuality=\(candidate.quality) originalPath=\(pathNormalization.originalPath) normalizedPath=\(descriptor.path) pathNormalization=\(pathNormalization.action.rawValue) resolvedScheme=\(descriptor.scheme) resolvedHost=\(descriptor.host) resolvedPort=\(descriptor.port) resolvedPath=\(descriptor.path) queryKeys=\(descriptor.queryKeys) tokenLengthPreserved=\(tokenLengthPreserved) authMode=\(candidate.authMode.rawValue) usesAPIClient=false headerAuthorization=\(headerSnapshot.hasAuthorization) headerSeSACKey=\(headerSnapshot.hasSeSACKey || headerSnapshot.hasLegacySeSACKey) headerContentType=\(headerSnapshot.hasContentType) session=ephemeral"
             )
             logger.debug(
-                "[HLSProbe] quality=\(candidate.quality) candidate=\(candidate.candidateName) authMode=\(candidate.authMode.rawValue) status=\(result.statusCode) contentType=\(result.contentType ?? "nil") bodyType=\(result.bodyType) classification=\(result.classification.rawValue) hasExtM3U=\(result.hasExtM3U) hasStreamInf=\(result.hasStreamInf) hasExtInf=\(result.hasExtInf) uriCount=\(result.uriLines.count) bodyPrefix=\(result.bodyPrefix ?? "nil")"
+                "[HLSProbe] videoId=\(candidate.requestedVideoID) responseVideoId=\(candidate.responseVideoID) selectedQuality=\(candidate.quality) candidate=\(candidate.candidateName) authMode=\(candidate.authMode.rawValue) originalPath=\(pathNormalization.originalPath) normalizedPath=\(descriptor.path) pathNormalization=\(pathNormalization.action.rawValue) resolvedHost=\(descriptor.host) resolvedPort=\(descriptor.port) resolvedPath=\(descriptor.path) queryKeys=\(descriptor.queryKeys) tokenLengthPreserved=\(tokenLengthPreserved) status=\(result.statusCode) contentType=\(result.contentType ?? "nil") bodyType=\(result.bodyType) classification=\(result.classification.rawValue) hasExtM3U=\(result.hasExtM3U) hasStreamInf=\(result.hasStreamInf) hasExtInf=\(result.hasExtInf) uriCount=\(result.uriLines.count) responseMessage=\(result.bodyPrefix ?? "nil")"
             )
-            if result.statusCode == 420 {
+            if result.statusCode == 420 || result.statusCode == 444 {
                 logger.warning(
-                    "[HLSProbe] tokenOnly received 420 classification=\(result.classification.rawValue) videoID=\(candidate.videoID) streamURLPath=\(descriptor.path) tokenExists=\(descriptor.queryKeys.split(separator: ",").contains("token")) status=420 responseMessage=\(result.bodyPrefix ?? "nil") headerAuthorization=false headerSeSACKey=false headerContentType=false usesAPIClient=false diagnosis=serverIssuedTokenOrServiceRoutingMismatch"
+                    "[HLSProbe] status=\(result.statusCode) videoId=\(candidate.requestedVideoID) responseVideoId=\(candidate.responseVideoID) selectedQuality=\(candidate.quality) originalPath=\(pathNormalization.originalPath) normalizedPath=\(descriptor.path) pathNormalization=\(pathNormalization.action.rawValue) resolvedHost=\(descriptor.host) resolvedPort=\(descriptor.port) resolvedPath=\(descriptor.path) queryKeys=\(descriptor.queryKeys) tokenLengthPreserved=\(tokenLengthPreserved) responseMessage=\(result.bodyPrefix ?? "nil") classification=\(result.classification.rawValue) authMode=\(candidate.authMode.rawValue) headerAuthorization=\(headerSnapshot.hasAuthorization) headerSeSACKey=\(headerSnapshot.hasSeSACKey || headerSnapshot.hasLegacySeSACKey) headerContentType=\(headerSnapshot.hasContentType) usesAPIClient=false"
                 )
             }
             return result
         } catch {
             let nsError = error as NSError
             logger.debug(
-                "[HLSProbeRequest] urlPath=\(descriptor.path) queryKeys=\(descriptor.queryKeys) authMode=\(candidate.authMode.rawValue) usesAPIClient=false headerAuthorization=false headerSeSACKey=false headerContentType=false session=ephemeral"
+                "[HLSProbeRequest] videoId=\(candidate.requestedVideoID) responseVideoId=\(candidate.responseVideoID) selectedQuality=\(candidate.quality) originalPath=\(pathNormalization.originalPath) normalizedPath=\(descriptor.path) pathNormalization=\(pathNormalization.action.rawValue) resolvedScheme=\(descriptor.scheme) resolvedHost=\(descriptor.host) resolvedPort=\(descriptor.port) resolvedPath=\(descriptor.path) queryKeys=\(descriptor.queryKeys) tokenLengthPreserved=\(tokenLengthPreserved) authMode=\(candidate.authMode.rawValue) usesAPIClient=false headerAuthorization=\(headerSnapshot.hasAuthorization) headerSeSACKey=\(headerSnapshot.hasSeSACKey || headerSnapshot.hasLegacySeSACKey) headerContentType=\(headerSnapshot.hasContentType) session=ephemeral"
             )
             logger.warning(
-                "[HLSProbe] quality=\(candidate.quality) candidate=\(candidate.candidateName) authMode=\(candidate.authMode.rawValue) failed domain=\(nsError.domain) code=\(nsError.code) path=\(descriptor.path) queryExists=\(descriptor.queryExists) queryKeys=\(descriptor.queryKeys)"
+                "[HLSProbe] videoId=\(candidate.requestedVideoID) responseVideoId=\(candidate.responseVideoID) selectedQuality=\(candidate.quality) candidate=\(candidate.candidateName) authMode=\(candidate.authMode.rawValue) failed domain=\(nsError.domain) code=\(nsError.code) originalPath=\(pathNormalization.originalPath) normalizedPath=\(descriptor.path) pathNormalization=\(pathNormalization.action.rawValue) resolvedHost=\(descriptor.host) resolvedPort=\(descriptor.port) resolvedPath=\(descriptor.path) queryExists=\(descriptor.queryExists) queryKeys=\(descriptor.queryKeys) tokenLengthPreserved=\(tokenLengthPreserved)"
             )
             return HLSProbeResult(
                 candidate: candidate,
@@ -1136,7 +1548,9 @@ private enum HLSProbeService {
                 hasExtM3U: false,
                 hasStreamInf: false,
                 hasExtInf: false,
-                uriLines: []
+                uriLines: [],
+                tokenLengthPreserved: tokenLengthPreserved,
+                headerSnapshot: headerSnapshot
             )
         }
     }
@@ -1178,14 +1592,15 @@ private enum HLSProbeService {
         bodyType: String,
         hasExtM3U: Bool,
         hasStreamInf: Bool,
-        hasExtInf: Bool
+        hasExtInf: Bool,
+        authMode: HLSAuthMode
     ) -> HLSProbeClassification {
         let normalizedContentType = contentType?.lowercased() ?? ""
         let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
         let message = (jsonMessage(from: body) ?? trimmedBody).lowercased()
 
         if (200..<300).contains(statusCode), hasExtM3U {
-            return hasStreamInf ? .playableMasterPlaylist : .playableMediaPlaylist
+            return .hlsPlayable
         }
 
         if statusCode == 200, bodyType == "json" {
@@ -1205,8 +1620,8 @@ private enum HLSProbeService {
         }
 
         if statusCode == 420 {
-            if message.contains("service") {
-                return .serviceMismatch
+            if isHLSServiceGuardMessage(message) {
+                return .hlsRequiresServiceHeader
             }
             if message.contains("sesackey") || message.contains("sesac key") || message.contains("api key") || message.contains("key") {
                 return .sesacKeyInvalid
@@ -1214,10 +1629,14 @@ private enum HLSProbeService {
         }
 
         if statusCode == 444 {
-            if message.contains("sesac") || message.contains("key") {
-                return .sesacKeyInvalid
+            switch authMode {
+            case .tokenPlusSeSACKey:
+                return .hlsUnauthorizedWithPartialHeaders
+            case .tokenPlusProtectedResourceHeaders:
+                return .hlsUnauthorizedEvenWithProtectedHeaders
+            case .tokenOnly:
+                return .unauthorized
             }
-            return .unauthorized
         }
 
         if bodyType == "json" || normalizedContentType.contains("json") {
@@ -1230,6 +1649,10 @@ private enum HLSProbeService {
         }
 
         return .unknown
+    }
+
+    private static func isHLSServiceGuardMessage(_ message: String) -> Bool {
+        message.contains("this service") && message.contains("only")
     }
 
     private static func isHLSContentType(_ contentType: String) -> Bool {
@@ -1277,17 +1700,25 @@ private enum HLSDebugDiagnosticsOptions {
 private enum HLSPlaylistDiagnostics {
     private static let logger = Logger(category: "HLSDiagnostics")
 
-    static func run(stream: VideoStream) {
+    static func run(stream: VideoStream, seSACKey: String, protectedResourceHeaders: [String: String]) {
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
             return
         }
 
         Task.detached(priority: .utility) {
-            await diagnose(stream: stream)
+            await diagnose(
+                stream: stream,
+                seSACKey: seSACKey,
+                protectedResourceHeaders: protectedResourceHeaders
+            )
         }
     }
 
-    private static func diagnose(stream: VideoStream) async {
+    private static func diagnose(
+        stream: VideoStream,
+        seSACKey: String,
+        protectedResourceHeaders: [String: String]
+    ) async {
         let qualityPriority = ["720p": 0, "480p": 1, "1080p": 2]
         let qualityEntries = stream.qualities
             .sorted {
@@ -1298,21 +1729,31 @@ private enum HLSPlaylistDiagnostics {
                 }
                 return lhsPriority < rhsPriority
             }
-            .map { ($0.quality, $0.url) }
-        let entries = [("stream_url", stream.streamURL)] + qualityEntries
+            .map { ($0.quality, $0.url, $0.urlPath) }
+        let entries = [("stream_url", stream.streamURL, stream.streamURLPath)] + qualityEntries
         for entry in entries {
-            let tokenOnlyReport = await HLSProbeService.fetchPlaylist(
+            let tokenPlusSeSACKeyReport = await HLSProbeService.fetchPlaylist(
                 candidate: HLSProbeCandidate(
-                    videoID: stream.videoId,
+                    requestedVideoID: stream.videoId,
+                    responseVideoID: stream.videoId,
                     quality: entry.0 == "stream_url" ? "auto" : entry.0,
+                    rawPath: entry.2,
                     url: entry.1,
-                    authMode: .tokenOnly
-                )
+                    authMode: .tokenPlusProtectedResourceHeaders
+                ),
+                seSACKey: seSACKey,
+                protectedResourceHeaders: protectedResourceHeaders
             )
 
-            logPlaylistURIs(name: entry.0, report: tokenOnlyReport)
-            if tokenOnlyReport.hasExtInf {
-                await probeFirstSegment(playlistName: entry.0, playlistURL: entry.1, uriLines: tokenOnlyReport.uriLines)
+            logPlaylistURIs(name: entry.0, report: tokenPlusSeSACKeyReport)
+            if tokenPlusSeSACKeyReport.hasExtInf {
+                await probeFirstSegment(
+                    playlistName: entry.0,
+                    playlistURL: entry.1,
+                    uriLines: tokenPlusSeSACKeyReport.uriLines,
+                    seSACKey: seSACKey,
+                    protectedResourceHeaders: protectedResourceHeaders
+                )
             }
         }
     }
@@ -1343,14 +1784,20 @@ private enum HLSPlaylistDiagnostics {
     private static func probeFirstSegment(
         playlistName: String,
         playlistURL: URL,
-        uriLines: [String]
+        uriLines: [String],
+        seSACKey: String,
+        protectedResourceHeaders: [String: String]
     ) async {
         guard let segmentURI = uriLines.first(where: { !$0.hasSuffix(".m3u8") }),
               let originalURL = URL(string: segmentURI, relativeTo: playlistURL)?.absoluteURL else {
             return
         }
 
-        let originalStatus = await probeSegment(url: originalURL)
+        let originalStatus = await probeSegment(
+            url: originalURL,
+            seSACKey: seSACKey,
+            protectedResourceHeaders: protectedResourceHeaders
+        )
         let originalDescriptor = VideoURLLogDescriptor(url: originalURL)
         logger.debug(
             "[HLSDiagnostics] segment probe original playlist=\(playlistName) status=\(originalStatus) path=\(originalDescriptor.path) queryExists=\(originalDescriptor.queryExists)"
@@ -1361,7 +1808,11 @@ private enum HLSPlaylistDiagnostics {
             return
         }
 
-        let copiedStatus = await probeSegment(url: queryCopiedURL)
+        let copiedStatus = await probeSegment(
+            url: queryCopiedURL,
+            seSACKey: seSACKey,
+            protectedResourceHeaders: protectedResourceHeaders
+        )
         let copiedDescriptor = VideoURLLogDescriptor(url: queryCopiedURL)
         logger.debug(
             "[HLSDiagnostics] segment probe queryCopied playlist=\(playlistName) status=\(copiedStatus) path=\(copiedDescriptor.path) queryExists=\(copiedDescriptor.queryExists)"
@@ -1376,15 +1827,21 @@ private enum HLSPlaylistDiagnostics {
         }
     }
 
-    private static func probeSegment(url: URL) async -> Int {
+    private static func probeSegment(
+        url: URL,
+        seSACKey: String,
+        protectedResourceHeaders: [String: String]
+    ) async -> Int {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 8
-        request.setValue(nil, forHTTPHeaderField: "Authorization")
-        request.setValue(nil, forHTTPHeaderField: "SeSACKey")
-        request.setValue(nil, forHTTPHeaderField: "SesacKey")
-        request.setValue(nil, forHTTPHeaderField: "Content-Type")
-        request.setValue("bytes=0-1", forHTTPHeaderField: "Range")
+        HLSPlaybackHeaderOptions.applyHeaders(
+            to: &request,
+            authMode: .tokenPlusProtectedResourceHeaders,
+            seSACKey: seSACKey,
+            protectedResourceHeaders: protectedResourceHeaders
+        )
+        request.setValue("bytes=0-1", forHTTPHeaderField: HTTPHeaderField.range)
 
         do {
             let configuration = URLSessionConfiguration.ephemeral
@@ -1423,6 +1880,86 @@ private enum HLSPlaylistDiagnostics {
         return descriptor.path
     }
 
+}
+#endif
+
+#if DEBUG
+private extension VideoPlayerViewModel {
+    func debugSelectedSource(for quality: String, in stream: VideoStream) -> String {
+        if quality == "auto" {
+            return "response.stream_url"
+        }
+
+        guard let index = stream.qualities.firstIndex(where: { $0.quality == quality }) else {
+            return "qualities[unknown].stream_url"
+        }
+        return "qualities[\(index)].stream_url"
+    }
+
+    func debugLogPlayerError(_ player: AVPlayer, item: AVPlayerItem?) {
+        print("[VideoStreamingDebug] player.status=failed")
+        print("[VideoStreamingDebug] player.error=\(String(describing: player.error))")
+        if let item {
+            print("[VideoStreamingDebug] playerItem.error=\(String(describing: item.error))")
+            debugLogAVPlayerItemLogs(item)
+        }
+    }
+
+    func debugLogPlayerFailure(item: AVPlayerItem, player: AVPlayer?) {
+        print("[VideoStreamingDebug] AVPlayerItem.status=failed")
+        print("[VideoStreamingDebug] playerItem.error=\(String(describing: item.error))")
+        print("[VideoStreamingDebug] player.error=\(String(describing: player?.error))")
+        if let failedURL = (item.asset as? AVURLAsset)?.url {
+            print("[VideoStreamingDebug] failed item asset url=\(VideoURLLogDescriptor(url: failedURL).redactedAbsoluteString)")
+            VideoStreamingDebugLogger.logURLComponents(label: "failedItem.assetURL", url: failedURL)
+        }
+        debugLogAVPlayerItemLogs(item)
+    }
+
+    func debugLogAVPlayerItemLogs(_ item: AVPlayerItem) {
+        debugLogAccessLogEvents(for: item)
+        debugLogErrorLogEvents(for: item)
+    }
+
+    func debugLogAccessLogEvents(for item: AVPlayerItem) {
+        guard let events = item.accessLog()?.events,
+              !events.isEmpty else {
+            print("[VideoStreamingDebug] accessLog.events.count=0")
+            return
+        }
+
+        print("[VideoStreamingDebug] accessLog.events.count=\(events.count)")
+        for (index, event) in events.enumerated() {
+            let uri = event.uri ?? "nil"
+            let redactedURI = event.uri.map { VideoURLLogDescriptor(rawValue: $0).redactedAbsoluteString } ?? "nil"
+            print(
+                "[VideoStreamingDebug] accessLog.events[\(index)] uri=\(redactedURI) indicatedBitrate=\(event.indicatedBitrate) observedBitrate=\(event.observedBitrate) segmentsDownloadedDuration=\(event.segmentsDownloadedDuration) durationWatched=\(event.durationWatched) numberOfStalls=\(event.numberOfStalls) numberOfMediaRequests=\(event.numberOfMediaRequests) serverAddress=\(event.serverAddress ?? "nil") playbackSessionID=\(event.playbackSessionID ?? "nil")"
+            )
+            if uri != "nil" {
+                VideoStreamingDebugLogger.logURLComponents(label: "accessLog.events[\(index)].uri", rawValue: uri)
+            }
+        }
+    }
+
+    func debugLogErrorLogEvents(for item: AVPlayerItem) {
+        guard let events = item.errorLog()?.events,
+              !events.isEmpty else {
+            print("[VideoStreamingDebug] errorLog.events.count=0")
+            return
+        }
+
+        print("[VideoStreamingDebug] errorLog.events.count=\(events.count)")
+        for (index, event) in events.enumerated() {
+            let uri = event.uri ?? "nil"
+            let redactedURI = event.uri.map { VideoURLLogDescriptor(rawValue: $0).redactedAbsoluteString } ?? "nil"
+            print(
+                "[VideoStreamingDebug] errorLog.events[\(index)] uri=\(redactedURI) statusCode=\(event.errorStatusCode) errorDomain=\(event.errorDomain) errorComment=\(event.errorComment ?? "nil") serverAddress=\(event.serverAddress ?? "nil") playbackSessionID=\(event.playbackSessionID ?? "nil")"
+            )
+            if uri != "nil" {
+                VideoStreamingDebugLogger.logURLComponents(label: "errorLog.events[\(index)].uri", rawValue: uri)
+            }
+        }
+    }
 }
 #endif
 

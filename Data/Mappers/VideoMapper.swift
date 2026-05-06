@@ -181,16 +181,18 @@ struct VideoURLResolver: Sendable {
     ) throws -> URL {
         let resolvedURL = try fileURLResolver.resolveURL(from: rawURLString)
         let queryFixedURL = copyQueryIfNeeded(to: resolvedURL, from: streamURLForQueryFallback)
+        let normalizedResult = HLSStreamPathNormalizer.normalize(url: queryFixedURL)
         let rawDescriptor = VideoURLLogDescriptor(rawValue: rawURLString)
-        let resolvedDescriptor = VideoURLLogDescriptor(url: queryFixedURL)
+        let resolvedDescriptor = VideoURLLogDescriptor(url: normalizedResult.url)
         let strategy = resolveStrategy(
             for: rawURLString,
-            copiedQuery: resolvedURL.absoluteString != queryFixedURL.absoluteString
+            copiedQuery: resolvedURL.absoluteString != queryFixedURL.absoluteString,
+            normalizedPath: normalizedResult.normalization.didChange
         )
         logger.debug(
-            "[VideoURLResolve] quality=\(quality) rawPath=\(rawDescriptor.path) resolvedScheme=\(resolvedDescriptor.scheme) resolvedHost=\(resolvedDescriptor.host) resolvedPort=\(resolvedDescriptor.port) resolvedPath=\(resolvedDescriptor.path) resolvedExt=\(resolvedDescriptor.ext) queryExists=\(resolvedDescriptor.queryExists) queryKeys=\(resolvedDescriptor.queryKeys) queryKeyCount=\(resolvedDescriptor.queryKeyCount) rawQueryLength=\(resolvedDescriptor.rawQueryLength) percentEncodedQueryLength=\(resolvedDescriptor.percentEncodedQueryLength) rawTokenLength=\(rawDescriptor.tokenValueLength) resolvedTokenLength=\(resolvedDescriptor.tokenValueLength) tokenLengthPreserved=\(rawDescriptor.tokenValueLength == 0 || rawDescriptor.tokenValueLength == resolvedDescriptor.tokenValueLength) maskedQuery=\(resolvedDescriptor.maskedQuery) strategy=\(strategy)"
+            "[VideoURLResolve] quality=\(quality) rawPath=\(rawDescriptor.path) originalPath=\(normalizedResult.normalization.originalPath) normalizedPath=\(normalizedResult.normalization.normalizedPath) pathNormalization=\(normalizedResult.normalization.action.rawValue) resolvedScheme=\(resolvedDescriptor.scheme) resolvedHost=\(resolvedDescriptor.host) resolvedPort=\(resolvedDescriptor.port) resolvedPath=\(resolvedDescriptor.path) resolvedExt=\(resolvedDescriptor.ext) queryExists=\(resolvedDescriptor.queryExists) queryKeys=\(resolvedDescriptor.queryKeys) queryKeyCount=\(resolvedDescriptor.queryKeyCount) rawQueryLength=\(resolvedDescriptor.rawQueryLength) percentEncodedQueryLength=\(resolvedDescriptor.percentEncodedQueryLength) rawTokenLength=\(rawDescriptor.tokenValueLength) resolvedTokenLength=\(resolvedDescriptor.tokenValueLength) tokenLengthPreserved=\(rawDescriptor.tokenValueLength == 0 || rawDescriptor.tokenValueLength == resolvedDescriptor.tokenValueLength) maskedQuery=\(resolvedDescriptor.maskedQuery) strategy=\(strategy)"
         )
-        return queryFixedURL
+        return normalizedResult.url
     }
 
     private func copyQueryIfNeeded(to url: URL, from streamURL: URL?) -> URL {
@@ -211,7 +213,7 @@ struct VideoURLResolver: Sendable {
         URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQuery?.isEmpty == false
     }
 
-    private func resolveStrategy(for rawURLString: String, copiedQuery: Bool) -> String {
+    private func resolveStrategy(for rawURLString: String, copiedQuery: Bool, normalizedPath: Bool) -> String {
         let trimmed = rawURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseStrategy: String
         if let absoluteURL = URL(string: trimmed),
@@ -221,7 +223,85 @@ struct VideoURLResolver: Sendable {
             baseStrategy = "originPlusRawPathAndQuery"
         }
 
-        return copiedQuery ? "\(baseStrategy)+queryCopiedFromStreamURL" : baseStrategy
+        var strategy = copiedQuery ? "\(baseStrategy)+queryCopiedFromStreamURL" : baseStrategy
+        if normalizedPath {
+            strategy += "+addV1PrefixForHLS"
+        }
+        return strategy
+    }
+}
+
+enum HLSStreamPathNormalizationAction: String, Sendable {
+    case addV1PrefixForHLS
+    case alreadyV1HLSPath
+    case notHLSStreamPath
+}
+
+struct HLSStreamPathNormalization: Equatable, Sendable {
+    let originalPath: String
+    let normalizedPath: String
+    let action: HLSStreamPathNormalizationAction
+
+    var didChange: Bool {
+        originalPath != normalizedPath
+    }
+}
+
+enum HLSStreamPathNormalizer {
+    static func normalizeHLSStreamPath(_ path: String) -> String {
+        normalization(for: path).normalizedPath
+    }
+
+    static func normalization(for path: String) -> HLSStreamPathNormalization {
+        if path.hasPrefix("/v1/videos/stream/") {
+            return HLSStreamPathNormalization(
+                originalPath: path,
+                normalizedPath: path,
+                action: .alreadyV1HLSPath
+            )
+        }
+
+        if path.hasPrefix("/videos/stream/") {
+            return HLSStreamPathNormalization(
+                originalPath: path,
+                normalizedPath: "/v1\(path)",
+                action: .addV1PrefixForHLS
+            )
+        }
+
+        return HLSStreamPathNormalization(
+            originalPath: path,
+            normalizedPath: path,
+            action: .notHLSStreamPath
+        )
+    }
+
+    static func normalize(url: URL) -> (url: URL, normalization: HLSStreamPathNormalization) {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            let normalization = normalization(for: url.path)
+            return (url, normalization)
+        }
+
+        let normalization = normalization(for: components.percentEncodedPath)
+        guard normalization.didChange else {
+            return (url, normalization)
+        }
+
+        components.percentEncodedPath = normalization.normalizedPath
+        components.percentEncodedQuery = rawQuery(from: url.absoluteString)
+        return (components.url ?? url, normalization)
+    }
+
+    private static func rawQuery(from value: String) -> String? {
+        guard let questionMarkIndex = value.firstIndex(of: "?") else {
+            return nil
+        }
+
+        let queryStart = value.index(after: questionMarkIndex)
+        if let fragmentIndex = value[queryStart...].firstIndex(of: "#") {
+            return String(value[queryStart..<fragmentIndex])
+        }
+        return String(value[queryStart...])
     }
 }
 

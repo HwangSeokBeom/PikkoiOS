@@ -176,8 +176,8 @@ final class VideoFeatureTests: XCTestCase {
         )
 
         XCTAssertEqual(video.thumbnailURL, "http://pickup.sesac.kr:42678/v1/data/videos/a.jpg")
-        XCTAssertEqual(stream.streamURL.absoluteString, "http://pickup.sesac.kr:42678/videos/stream/a/master.m3u8?token=abc")
-        XCTAssertEqual(stream.qualities.first?.url.absoluteString, "http://pickup.sesac.kr:42678/videos/stream/a/720p/index.m3u8?token=abc")
+        XCTAssertEqual(stream.streamURL.absoluteString, "http://pickup.sesac.kr:42678/v1/videos/stream/a/master.m3u8?token=abc")
+        XCTAssertEqual(stream.qualities.first?.url.absoluteString, "http://pickup.sesac.kr:42678/v1/videos/stream/a/720p/index.m3u8?token=abc")
         XCTAssertEqual(stream.subtitles.first?.url.absoluteString, "https://example.com/subtitle.vtt")
     }
 
@@ -199,11 +199,11 @@ final class VideoFeatureTests: XCTestCase {
 
         XCTAssertEqual(
             stream.streamURL.absoluteString,
-            "http://pickup.sesac.kr:42678/videos/stream/a/master.m3u8?token=abc+def%2Fghi%3D&expires=123"
+            "http://pickup.sesac.kr:42678/v1/videos/stream/a/master.m3u8?token=abc+def%2Fghi%3D&expires=123"
         )
         XCTAssertEqual(
             stream.qualities.first?.url.absoluteString,
-            "http://pickup.sesac.kr:42678/videos/stream/a/480p/index.m3u8?token=abc+def%2Fghi%3D&expires=123"
+            "http://pickup.sesac.kr:42678/v1/videos/stream/a/480p/index.m3u8?token=abc+def%2Fghi%3D&expires=123"
         )
     }
 
@@ -225,8 +225,74 @@ final class VideoFeatureTests: XCTestCase {
 
         XCTAssertEqual(
             stream.qualities.first?.url.absoluteString,
-            "http://pickup.sesac.kr:42678/videos/stream/a/720p/index.m3u8?token=abc+def%2Fghi%3D&expires=123"
+            "http://pickup.sesac.kr:42678/v1/videos/stream/a/720p/index.m3u8?token=abc+def%2Fghi%3D&expires=123"
         )
+    }
+
+    func testHLSStreamPathNormalizerAddsV1PrefixOnlyForHLSStreamPaths() {
+        XCTAssertEqual(
+            HLSStreamPathNormalizer.normalizeHLSStreamPath("/videos/stream/pickup_video_5/master.m3u8"),
+            "/v1/videos/stream/pickup_video_5/master.m3u8"
+        )
+        XCTAssertEqual(
+            HLSStreamPathNormalizer.normalizeHLSStreamPath("/videos/stream/pickup_video_5/1080p/index.m3u8"),
+            "/v1/videos/stream/pickup_video_5/1080p/index.m3u8"
+        )
+        XCTAssertEqual(
+            HLSStreamPathNormalizer.normalizeHLSStreamPath("/videos/stream/pickup_video_5/720p/index.m3u8"),
+            "/v1/videos/stream/pickup_video_5/720p/index.m3u8"
+        )
+        XCTAssertEqual(
+            HLSStreamPathNormalizer.normalizeHLSStreamPath("/videos/stream/pickup_video_5/480p/index.m3u8"),
+            "/v1/videos/stream/pickup_video_5/480p/index.m3u8"
+        )
+        XCTAssertEqual(
+            HLSStreamPathNormalizer.normalizeHLSStreamPath("/v1/videos/stream/pickup_video_5/master.m3u8"),
+            "/v1/videos/stream/pickup_video_5/master.m3u8"
+        )
+        XCTAssertEqual(
+            HLSStreamPathNormalizer.normalizeHLSStreamPath("/v1/data/videos/pickup_video_5.jpg"),
+            "/v1/data/videos/pickup_video_5.jpg"
+        )
+        XCTAssertEqual(
+            HLSStreamPathNormalizer.normalizeHLSStreamPath("/stores/abc"),
+            "/stores/abc"
+        )
+    }
+
+    func testHLSStreamURLNormalizerPreservesHostPortAndRawTokenQuery() throws {
+        let url = try XCTUnwrap(URL(string: "http://pickup.sesac.kr:42678/videos/stream/pickup_video_5/master.m3u8?token=abc+def%2Fghi%3D&expires=123"))
+        let result = HLSStreamPathNormalizer.normalize(url: url)
+
+        XCTAssertEqual(result.url.scheme, "http")
+        XCTAssertEqual(result.url.host, "pickup.sesac.kr")
+        XCTAssertEqual(result.url.port, 42678)
+        XCTAssertEqual(
+            result.url.absoluteString,
+            "http://pickup.sesac.kr:42678/v1/videos/stream/pickup_video_5/master.m3u8?token=abc+def%2Fghi%3D&expires=123"
+        )
+        XCTAssertEqual(result.normalization.action, .addV1PrefixForHLS)
+    }
+
+    func testVideoMapperDoesNotNormalizeNonHLSPaths() throws {
+        let mapper = makeMapper()
+        let video = mapper.map(
+            VideoResponseDTO(
+                videoId: "video-1",
+                fileName: "a",
+                title: "A",
+                description: "B",
+                duration: 65,
+                thumbnailURLPath: "/data/videos/pickup_video_5.jpg",
+                availableQualities: [],
+                viewCount: 0,
+                likeCount: 0,
+                isLiked: false,
+                createdAt: "2024-01-15T10:30:00.000Z"
+            )
+        )
+
+        XCTAssertEqual(video.thumbnailURL, "http://pickup.sesac.kr:42678/v1/data/videos/pickup_video_5.jpg")
     }
 
     func testVideoMapperDropsEmptyAndDuplicateIDs() throws {

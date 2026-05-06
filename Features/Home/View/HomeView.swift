@@ -8,7 +8,7 @@ struct HomeView: View {
     private enum HomeLayout {
         static let horizontalInset: CGFloat = 16
         static let sectionSpacing: CGFloat = 18
-        static let topPadding: CGFloat = 4
+        static let topPadding: CGFloat = 16
         static let bottomInset: CGFloat = RootTabBarMetrics.scrollContentBottomInset
     }
 

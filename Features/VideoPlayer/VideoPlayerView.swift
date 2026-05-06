@@ -98,6 +98,7 @@ struct VideoPlayerView: View {
                 .stroke(PikkoColor.line.opacity(0.35), lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+        .animation(.easeInOut(duration: 0.18), value: viewModel.viewState.playbackState)
     }
 
     @ViewBuilder
@@ -106,8 +107,8 @@ struct VideoPlayerView: View {
         case .idle:
             EmptyView()
         case .loadingStream:
-            LoadingView(message: "영상을 준비 중입니다.")
-                .background(.black.opacity(0.15))
+            playerLoadingOverlay
+                .transition(.opacity)
         case .ready, .paused:
             Button {
                 viewModel.play()
@@ -139,11 +140,41 @@ struct VideoPlayerView: View {
                 }
                 .padding(PikkoSpacing.sm)
             }
-        case .failed(let message):
-            retryOverlay(message: message, buttonTitle: "재시도")
-        case .expiredOrUnavailable(let message):
-            retryOverlay(message: message, buttonTitle: "스트림 URL 재발급")
+        case .failed:
+            retryOverlay(buttonTitle: "재시도")
+        case .expiredOrUnavailable:
+            retryOverlay(buttonTitle: "재시도")
         }
+    }
+
+    private var playerLoadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.34)
+
+            VStack(spacing: PikkoSpacing.xs) {
+                ProgressView()
+                    .tint(PikkoColor.accent)
+                    .scaleEffect(0.95)
+
+                Text("영상을 준비 중입니다")
+                    .font(PikkoTypography.captionStrong)
+                    .foregroundStyle(.white.opacity(0.9))
+
+                Text("스트리밍 정보를 불러오고 있어요")
+                    .font(PikkoTypography.micro)
+                    .foregroundStyle(.white.opacity(0.58))
+            }
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, PikkoSpacing.md)
+            .padding(.vertical, PikkoSpacing.sm)
+            .background(.black.opacity(0.28))
+            .overlay {
+                RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                    .stroke(PikkoColor.accentSoft.opacity(0.22), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var videoInfo: some View {
@@ -226,15 +257,20 @@ struct VideoPlayerView: View {
         }
     }
 
-    private func retryOverlay(message: String, buttonTitle: String) -> some View {
+    private func retryOverlay(buttonTitle: String) -> some View {
         VStack(spacing: PikkoSpacing.sm) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 26, weight: .semibold))
                 .foregroundStyle(PikkoColor.warmYellow)
 
-            Text(message)
+            Text("영상을 재생할 수 없습니다.")
                 .font(PikkoTypography.bodyStrong)
                 .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+
+            Text("잠시 후 다시 시도해주세요.")
+                .font(PikkoTypography.caption)
+                .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
 
             Button {
@@ -249,15 +285,6 @@ struct VideoPlayerView: View {
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
-
-#if DEBUG
-            if let detailReason = viewModel.viewState.detailReason {
-                Text(detailReason)
-                    .font(PikkoTypography.caption)
-                    .foregroundStyle(.white.opacity(0.74))
-                    .multilineTextAlignment(.center)
-            }
-#endif
         }
         .padding(PikkoSpacing.md)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
