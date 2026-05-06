@@ -1,4 +1,5 @@
 import CoreLocation
+import UIKit
 import XCTest
 @testable import Pikko
 
@@ -350,6 +351,86 @@ final class CommunityComposerFeatureTests: XCTestCase {
         XCTAssertNil(router.pendingRoute)
     }
 
+    func testMediaUploadPreprocessorKeepsSmallFileUnchanged() throws {
+        let file = CommunityPostUploadFile(
+            data: Data([1, 2, 3, 4]),
+            fileName: "small.jpg",
+            mimeType: "image/jpeg"
+        )
+
+        let result = try MediaUploadPreprocessor().process(file, maxBytes: 10)
+
+        XCTAssertEqual(result.file, file)
+        XCTAssertEqual(result.metadata.originalBytes, 4)
+        XCTAssertEqual(result.metadata.finalBytes, 4)
+        XCTAssertFalse(result.metadata.wasResized)
+    }
+
+    func testMediaUploadPreprocessorCompressesLargeImageUnderLimit() throws {
+        let imageData = try XCTUnwrap(makeTestImage(size: CGSize(width: 900, height: 900)).jpegData(compressionQuality: 1.0))
+        let file = CommunityPostUploadFile(
+            data: imageData,
+            fileName: "large.png",
+            mimeType: "image/png"
+        )
+
+        let result = try MediaUploadPreprocessor().process(file, maxBytes: 35_000)
+
+        XCTAssertLessThanOrEqual(result.file.data.count, 35_000)
+        XCTAssertEqual(result.file.mimeType, "image/jpeg")
+        XCTAssertEqual(result.file.fileName, "large.jpg")
+        XCTAssertTrue(result.metadata.wasResized)
+        XCTAssertEqual(result.metadata.originalBytes, imageData.count)
+    }
+
+    func testMediaUploadPreprocessorRejectsImageThatCannotFitLimit() throws {
+        let imageData = try XCTUnwrap(makeTestImage(size: CGSize(width: 20, height: 20)).jpegData(compressionQuality: 1.0))
+        let file = CommunityPostUploadFile(
+            data: imageData,
+            fileName: "too-large.jpg",
+            mimeType: "image/jpeg"
+        )
+
+        XCTAssertThrowsError(try MediaUploadPreprocessor().process(file, maxBytes: 1)) { error in
+            XCTAssertEqual(error as? MediaUploadPreprocessorError, .fileTooLarge)
+            XCTAssertEqual(error.localizedDescription, "파일 크기가 너무 커요. 더 작은 파일을 선택해 주세요.")
+        }
+    }
+
+    func testMediaUploadPreprocessorRejectsOversizedNonImage() {
+        let file = CommunityPostUploadFile(
+            data: Data(repeating: 7, count: 12),
+            fileName: "large.pdf",
+            mimeType: "application/pdf"
+        )
+
+        XCTAssertThrowsError(try MediaUploadPreprocessor().process(file, maxBytes: 10)) { error in
+            XCTAssertEqual(error as? MediaUploadPreprocessorError, .fileTooLarge)
+        }
+    }
+
+    func testCommunityComposerInteractorPreprocessesLargeImageBeforeUpload() async throws {
+        let repository = StubCommunityComposerRepository()
+        let interactor = CommunityComposerInteractor(
+            communityRepository: repository,
+            locationService: StubCommunityComposerLocationService()
+        )
+        let imageData = try XCTUnwrap(makeTestImage(size: CGSize(width: 1400, height: 1400)).jpegData(compressionQuality: 1.0))
+
+        _ = try await interactor.uploadAttachments([
+            CommunityPostUploadFile(
+                data: imageData,
+                fileName: "large.jpg",
+                mimeType: "image/jpeg"
+            )
+        ])
+
+        let uploadedFile = try XCTUnwrap(repository.recordedUploadFiles.first)
+        XCTAssertLessThanOrEqual(uploadedFile.data.count, CommunityUploadConfiguration.maxAttachmentBytes)
+        XCTAssertLessThan(uploadedFile.data.count, imageData.count)
+        XCTAssertEqual(uploadedFile.mimeType, "image/jpeg")
+    }
+
     private func makeCreatedDetail(postID: String) -> CommunityPostDetail {
         CommunityPostDetail(
             summary: CommunityPostSummary(
@@ -376,10 +457,28 @@ final class CommunityComposerFeatureTests: XCTestCase {
     }
 }
 
+private func makeTestImage(size: CGSize) -> UIImage {
+    let renderer = UIGraphicsImageRenderer(size: size)
+    return renderer.image { context in
+        UIColor.systemGreen.setFill()
+        context.fill(CGRect(origin: .zero, size: size))
+
+        UIColor.systemOrange.setStroke()
+        for offset in stride(from: CGFloat(0), through: size.width, by: 8) {
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: offset, y: 0))
+            path.addLine(to: CGPoint(x: size.width - offset, y: size.height))
+            path.lineWidth = 2
+            path.stroke()
+        }
+    }
+}
+
 private final class StubCommunityComposerRepository: CommunityRepository, @unchecked Sendable {
     var uploadResult: Result<[String], Error>
     var createResult: Result<CommunityPostDetail, Error>
     var updateResult: Result<CommunityPostDetail, Error>
+    private(set) var recordedUploadFiles: [CommunityPostUploadFile] = []
     private(set) var recordedCreateSubmission: CommunityPostDraftSubmission?
     private(set) var recordedUpdatedPostID: String?
     private(set) var recordedUpdatedSubmission: CommunityPostDraftSubmission?
@@ -418,7 +517,8 @@ private final class StubCommunityComposerRepository: CommunityRepository, @unche
     }
 
     func uploadPostFiles(_ files: [CommunityPostUploadFile]) async throws -> [String] {
-        try uploadResult.get()
+        recordedUploadFiles = files
+        return try uploadResult.get()
     }
 
     func createPost(_ submission: CommunityPostDraftSubmission) async throws -> CommunityPostDetail {

@@ -45,6 +45,10 @@ struct RootScene: View {
         }
         .onChange(of: sessionStore.isAuthenticated) { _, isAuthenticated in
             guard isAuthenticated else { return }
+            PikkoAppDelegate.fetchCurrentFCMTokenForAuthenticatedSession()
+            Task {
+                await featureBuilderFactory.syncCurrentDeviceTokenIfNeeded(source: "authStateChanged")
+            }
             featureBuilderFactory.routePendingNotificationIfNeeded()
         }
     }

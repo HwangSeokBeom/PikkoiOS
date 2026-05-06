@@ -176,12 +176,26 @@ struct CommunityDetailCommentSectionView: View {
             }
             .padding(.leading, CGFloat(comment.depth) * PikkoSpacing.lg)
             .padding(PikkoSpacing.md)
-            .background(comment.depth == 0 ? PikkoColor.surfaceElevated : PikkoColor.surfaceMuted)
+            .background(commentBackground(for: comment))
+            .overlay {
+                if state.highlightedCommentID == comment.id {
+                    RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                        .stroke(PikkoColor.accentStrong, lineWidth: 2)
+                }
+            }
             .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+            .id(CommunityCommentAnchor.id(comment.id))
             .onAppear {
                 onLoadMoreIfNeeded(comment.id)
             }
         )
+    }
+
+    private func commentBackground(for comment: CommunityDetailCommentRowViewState) -> Color {
+        if state.highlightedCommentID == comment.id {
+            return PikkoColor.accent.opacity(0.16)
+        }
+        return comment.depth == 0 ? PikkoColor.surfaceElevated : PikkoColor.surfaceMuted
     }
 
     private func avatar(path: String?) -> some View {
@@ -197,6 +211,10 @@ struct CommunityDetailCommentSectionView: View {
     }
 }
 
+enum CommunityCommentAnchor: Hashable {
+    case id(String)
+}
+
 struct CommunityDetailCommentComposerBar: View {
     let text: String
     let isSubmitting: Bool
@@ -204,7 +222,6 @@ struct CommunityDetailCommentComposerBar: View {
     let onTextChanged: (String) -> Void
     let onSubmitTapped: () -> Void
     let onAuthTapped: () -> Void
-    @FocusState private var isComposerFocused: Bool
 
     var body: some View {
         let canSubmit = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSubmitting
@@ -234,7 +251,6 @@ struct CommunityDetailCommentComposerBar: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .disabled(requiresAuthentication || isSubmitting)
-            .focused($isComposerFocused)
 
             if requiresAuthentication {
                 Button("로그인") {
@@ -273,7 +289,7 @@ struct CommunityDetailCommentComposerBar: View {
         }
         .padding(.horizontal, PikkoSpacing.xl)
         .padding(.top, PikkoSpacing.sm)
-        .padding(.bottom, PikkoSpacing.sm + (isComposerFocused ? 0 : RootTabBarMetrics.scrollContentBottomInset))
+        .padding(.bottom, PikkoSpacing.sm)
         .background {
             PikkoColor.surface
                 .overlay(alignment: .top) {

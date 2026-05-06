@@ -14,6 +14,7 @@ struct HomeBuilder {
     private let makeStoreSearchView: (String) -> AnyView
     private let makeBannerWebView: (HomeBannerItem) -> AnyView
     private let makeNotificationListView: () -> AnyView
+    private let makeCartView: () -> CartRootView
     private let makeAuthView: () -> AnyView
 
     init(
@@ -28,6 +29,7 @@ struct HomeBuilder {
         makeStoreSearchView: @escaping (String) -> AnyView,
         makeBannerWebView: @escaping (HomeBannerItem) -> AnyView,
         makeNotificationListView: @escaping () -> AnyView,
+        makeCartView: @escaping () -> CartRootView,
         makeAuthView: @escaping () -> AnyView
     ) {
         self.storeRepository = storeRepository
@@ -41,6 +43,7 @@ struct HomeBuilder {
         self.makeStoreSearchView = makeStoreSearchView
         self.makeBannerWebView = makeBannerWebView
         self.makeNotificationListView = makeNotificationListView
+        self.makeCartView = makeCartView
         self.makeAuthView = makeAuthView
     }
 
@@ -66,6 +69,7 @@ struct HomeBuilder {
             makeStoreSearchView: makeStoreSearchView,
             makeBannerWebView: makeBannerWebView,
             makeNotificationListView: makeNotificationListView,
+            makeCartView: makeCartView,
             makeAuthView: makeAuthView,
             resetTrigger: resetTrigger
         )

@@ -55,6 +55,9 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
         }
 
         if let cachedData = await imageCache.data(for: url) {
+#if DEBUG
+            logger.debug("[ImageLoader] cacheHit url=\(url.absoluteString)")
+#endif
             return cachedData
         }
 
@@ -86,7 +89,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             } else if hasLoggedFallback(for: url) {
                 // The placeholder fallback warning was already emitted at the HTTP status boundary.
             } else {
-                logger.warning("Image load failed. url=\(url.absoluteString) error=\(error.localizedDescription)")
+                logger.warning("Image load failed. url=\(diagnosticURL(url)) error=\(error.localizedDescription)")
             }
             throw error
         }
@@ -126,7 +129,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             }
 #if DEBUG
             logger.debug(
-                "Image request completed. url=\(url.absoluteString) status=\(httpResponse.statusCode) hasAuthorization=\(request.value(forHTTPHeaderField: HTTPHeaderField.authorization)?.isEmpty == false) hasSesacKey=\(request.value(forHTTPHeaderField: HTTPHeaderField.sesacKey)?.isEmpty == false)"
+                "[ImageLoader] request url=\(diagnosticURL(url)) status=\(httpResponse.statusCode) hasAuthorization=\(request.value(forHTTPHeaderField: HTTPHeaderField.authorization)?.isEmpty == false) hasSesacKey=\(request.value(forHTTPHeaderField: HTTPHeaderField.sesacKey)?.isEmpty == false)"
             )
 #endif
 
@@ -137,7 +140,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
                  419 where !didRetryAfterRefresh:
                 _ = try await tokenRefreshCoordinator.refreshTokens()
                 return try await fetchImageData(from: url, didRetryAfterRefresh: true)
-            case 444:
+            case 403, 404, 444:
                 logFallbackPlaceholderOnce(url: url, statusCode: httpResponse.statusCode)
                 throw ImageLoadError.notFoundOrBlocked
             default:
@@ -149,7 +152,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
                     break
                 }
                 logger.warning(
-                    "Image request returned non-success status. url=\(url.absoluteString) status=\(httpResponse.statusCode) error=\(error.localizedDescription)"
+                    "Image request returned non-success status. url=\(diagnosticURL(url)) status=\(httpResponse.statusCode) error=\(error.localizedDescription)"
                 )
                 throw error
             }
@@ -161,7 +164,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             guard !hasLoggedFallback(for: url) else {
                 throw NetworkError.transport
             }
-            logger.warning("Image transport failed. url=\(url.absoluteString) error=\(error.localizedDescription)")
+            logger.warning("Image transport failed. url=\(diagnosticURL(url)) error=\(error.localizedDescription)")
             throw NetworkError.transport
         }
     }
@@ -171,7 +174,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             return
         }
         loggedFailedURLs.insert(url)
-        logger.warning("Image unavailable. url=\(url.absoluteString) error=\(statusDescription)")
+        logger.warning("Image unavailable. url=\(diagnosticURL(url)) error=\(statusDescription)")
     }
 
     private func logFallbackPlaceholderOnce(url: URL, statusCode: Int) {
@@ -179,7 +182,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
         guard loggedFallbackKeys.insert(key).inserted else {
             return
         }
-        logger.warning("[ImageLoader] fallbackPlaceholder url=\(url.absoluteString) status=\(statusCode) reason=transport")
+        logger.warning("[ImageLoader] fallbackPlaceholder url=\(diagnosticURL(url)) status=\(statusCode) reason=transport")
     }
 
     private func hasLoggedFallback(for url: URL) -> Bool {
@@ -188,5 +191,14 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
 
     private func fallbackLogKey(url: URL, statusCode: Int) -> String {
         "\(url.absoluteString)|\(statusCode)"
+    }
+
+    private func diagnosticURL(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return "<invalid-url>"
+        }
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? url.path
     }
 }

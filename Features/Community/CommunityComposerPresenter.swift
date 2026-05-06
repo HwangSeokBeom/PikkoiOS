@@ -9,7 +9,6 @@ final class CommunityComposerPresenter: ObservableObject {
     private var hasLoaded = false
     private var draftContext = CommunityComposerDraft.empty
     private let maximumAttachmentCount = 5
-    private let maximumAttachmentBytes = 5 * 1024 * 1024
 
     init(
         interactor: CommunityComposerInteracting,
@@ -100,11 +99,6 @@ final class CommunityComposerPresenter: ObservableObject {
 
         guard draftContext.attachments.count + files.count <= maximumAttachmentCount else {
             viewState.attachmentUploadErrorMessage = "첨부 파일은 최대 \(maximumAttachmentCount)개까지 올릴 수 있어요."
-            return
-        }
-
-        guard files.allSatisfy({ $0.data.count <= maximumAttachmentBytes }) else {
-            viewState.attachmentUploadErrorMessage = "첨부 파일은 1개당 5MB 이하만 업로드할 수 있어요."
             return
         }
 

@@ -1,10 +1,12 @@
 import SwiftUI
+import UIKit
 
 struct CommunityDetailView: View {
     @ObservedObject var presenter: CommunityDetailPresenter
     let imageLoader: any AuthorizedImageLoading
     let onAuthTap: () -> Void
     @State private var showsPostDeletionAlert = false
+    @StateObject private var keyboardObserver = CommunityDetailKeyboardObserver()
 
     var body: some View {
         ZStack {
@@ -30,75 +32,87 @@ struct CommunityDetailView: View {
                 )
                 .padding(PikkoSpacing.xl)
             } else {
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: PikkoSpacing.xl) {
-                        heroCard
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: PikkoSpacing.xl) {
+                            heroCard
 
-                        if let errorMessage = presenter.viewState.errorMessage {
-                            ToastView(message: errorMessage, tone: .warning)
-                        }
+                            if let errorMessage = presenter.viewState.errorMessage {
+                                ToastView(message: errorMessage, tone: .warning)
+                            }
 
-                        if let postCard = presenter.viewState.postCard {
-                            SectionHeader(
-                                title: "게시글"
-                            )
+                            if let postCard = presenter.viewState.postCard {
+                                SectionHeader(
+                                    title: "게시글"
+                                )
 
-                            CommunityCard(
-                                model: postCard,
-                                loader: imageLoader,
+                                CommunityCard(
+                                    model: postCard,
+                                    loader: imageLoader,
+                                    onAuthorChatTapped: { authorID in
+                                        Task { await presenter.send(.authorChatTapped(authorID)) }
+                                    },
+                                    onLikeTapped: {
+                                        Task { await presenter.send(.likeTapped) }
+                                    },
+                                    onStoreSnippetTapped: { storeID in
+                                        Task { await presenter.send(.storeSnippetTapped(storeID)) }
+                                    }
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                                .pikkoShadow(PikkoShadow.card)
+                            }
+
+                            footerCard
+
+                            CommunityDetailCommentSectionView(
+                                state: presenter.viewState.commentSection,
+                                imageLoader: imageLoader,
+                                onRetryTapped: {
+                                    Task { await presenter.send(.commentsRetryTapped) }
+                                },
+                                onAuthTapped: onAuthTap,
+                                onLoadMoreIfNeeded: { commentID in
+                                    Task { await presenter.send(.commentLoadMoreIfNeeded(commentID)) }
+                                },
+                                onEditTapped: { commentID in
+                                    Task { await presenter.send(.commentEditTapped(commentID)) }
+                                },
+                                onEditDraftChanged: { draft in
+                                    Task { await presenter.send(.commentEditDraftChanged(draft)) }
+                                },
+                                onEditSaveTapped: {
+                                    Task { await presenter.send(.commentEditSaveTapped) }
+                                },
+                                onEditCancelTapped: {
+                                    Task { await presenter.send(.commentEditCancelled) }
+                                },
+                                onDeleteConfirmed: { commentID in
+                                    Task { await presenter.send(.commentDeleteConfirmed(commentID)) }
+                                },
                                 onAuthorChatTapped: { authorID in
-                                    Task { await presenter.send(.authorChatTapped(authorID)) }
-                                },
-                                onLikeTapped: {
-                                    Task { await presenter.send(.likeTapped) }
-                                },
-                                onStoreSnippetTapped: { storeID in
-                                    Task { await presenter.send(.storeSnippetTapped(storeID)) }
+                                    Task { await presenter.send(.commentAuthorChatTapped(authorID)) }
                                 }
                             )
-                            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
-                            .pikkoShadow(PikkoShadow.card)
                         }
-
-                        footerCard
-
-                        CommunityDetailCommentSectionView(
-                            state: presenter.viewState.commentSection,
-                            imageLoader: imageLoader,
-                            onRetryTapped: {
-                                Task { await presenter.send(.commentsRetryTapped) }
-                            },
-                            onAuthTapped: onAuthTap,
-                            onLoadMoreIfNeeded: { commentID in
-                                Task { await presenter.send(.commentLoadMoreIfNeeded(commentID)) }
-                            },
-                            onEditTapped: { commentID in
-                                Task { await presenter.send(.commentEditTapped(commentID)) }
-                            },
-                            onEditDraftChanged: { draft in
-                                Task { await presenter.send(.commentEditDraftChanged(draft)) }
-                            },
-                            onEditSaveTapped: {
-                                Task { await presenter.send(.commentEditSaveTapped) }
-                            },
-                            onEditCancelTapped: {
-                                Task { await presenter.send(.commentEditCancelled) }
-                            },
-                            onDeleteConfirmed: { commentID in
-                                Task { await presenter.send(.commentDeleteConfirmed(commentID)) }
-                            },
-                            onAuthorChatTapped: { authorID in
-                                Task { await presenter.send(.commentAuthorChatTapped(authorID)) }
-                            }
-                        )
+                        .padding(.horizontal, PikkoSpacing.xl)
+                        .padding(.top, PikkoSpacing.xl)
+                        .padding(.bottom, PikkoSpacing.xxl + composerReservedBottomInset)
                     }
-                    .padding(.horizontal, PikkoSpacing.xl)
-                    .padding(.top, PikkoSpacing.xl)
-                    .padding(.bottom, PikkoSpacing.xxl + 76 + RootTabBarMetrics.scrollContentBottomInset)
+                    .contentMargins(.bottom, PikkoSpacing.lg, for: .scrollIndicators)
+                    .onChange(of: presenter.viewState.commentSection.highlightedCommentID) { _, commentID in
+                        guard let commentID else { return }
+                        Task { @MainActor in
+                            await Task.yield()
+                            withAnimation(.snappy(duration: 0.28)) {
+                                proxy.scrollTo(CommunityCommentAnchor.id(commentID), anchor: .center)
+                            }
+                        }
+                    }
                 }
             }
         }
-        .safeAreaInset(edge: .bottom) {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             if presenter.viewState.hasLoadedContent {
                 CommunityDetailCommentComposerBar(
                     text: presenter.viewState.commentSection.composerText,
@@ -112,6 +126,8 @@ struct CommunityDetailView: View {
                     },
                     onAuthTapped: onAuthTap
                 )
+                .padding(.bottom, composerBottomAvoidanceInset)
+                .background(PikkoColor.background.opacity(0.98))
             }
         }
         .navigationTitle("게시글 상세")
@@ -184,6 +200,56 @@ struct CommunityDetailView: View {
         .padding(PikkoSpacing.lg)
         .background(PikkoColor.surfaceMuted)
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+    }
+
+    private var composerBottomAvoidanceInset: CGFloat {
+        keyboardObserver.isKeyboardVisible ? 0 : RootTabBarMetrics.contentHeight
+    }
+
+    private var composerReservedBottomInset: CGFloat {
+        88 + composerBottomAvoidanceInset
+    }
+}
+
+@MainActor
+private final class CommunityDetailKeyboardObserver: ObservableObject {
+    @Published private(set) var isKeyboardVisible = false
+
+    init() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardWillChangeFrame(_:)),
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardWillHide(_:)),
+            name: UIResponder.keyboardWillHideNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleKeyboardWillChangeFrame(_ notification: Notification) {
+        guard let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            isKeyboardVisible = false
+            return
+        }
+
+        let windowBounds = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }?
+            .bounds ?? UIScreen.main.bounds
+        isKeyboardVisible = max(0, windowBounds.maxY - endFrame.minY) > 0
+    }
+
+    @objc private func handleKeyboardWillHide(_ notification: Notification) {
+        isKeyboardVisible = false
     }
 }
 

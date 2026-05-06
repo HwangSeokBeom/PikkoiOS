@@ -11,6 +11,7 @@ struct HomeRootView: View {
     private let makeStoreSearchView: (String) -> AnyView
     private let makeBannerWebView: (HomeBannerItem) -> AnyView
     private let makeNotificationListView: () -> AnyView
+    private let makeCartView: () -> CartRootView
     private let makeAuthView: () -> AnyView
     private let resetTrigger: Int
 
@@ -18,6 +19,7 @@ struct HomeRootView: View {
     @State private var presentedSearchQuery: String?
     @State private var presentedBanner: HomeBannerItem?
     @State private var isNotificationListPresented = false
+    @State private var isCartPresented = false
     @State private var isLocationSearchPresented = false
     @Environment(\.openURL) private var openURL
 
@@ -29,6 +31,7 @@ struct HomeRootView: View {
         makeStoreSearchView: @escaping (String) -> AnyView,
         makeBannerWebView: @escaping (HomeBannerItem) -> AnyView,
         makeNotificationListView: @escaping () -> AnyView,
+        makeCartView: @escaping () -> CartRootView,
         makeAuthView: @escaping () -> AnyView,
         resetTrigger: Int = 0
     ) {
@@ -39,6 +42,7 @@ struct HomeRootView: View {
         self.makeStoreSearchView = makeStoreSearchView
         self.makeBannerWebView = makeBannerWebView
         self.makeNotificationListView = makeNotificationListView
+        self.makeCartView = makeCartView
         self.makeAuthView = makeAuthView
         self.resetTrigger = resetTrigger
     }
@@ -49,6 +53,9 @@ struct HomeRootView: View {
             imageLoader: imageLoader,
             onAuthTap: {
                 Task { await presenter.send(.loginRequiredTapped) }
+            },
+            onCartTap: {
+                isCartPresented = true
             },
             resetTrigger: resetTrigger
         )
@@ -98,6 +105,11 @@ struct HomeRootView: View {
         .navigationDestination(isPresented: notificationListPresentedBinding) {
             makeNotificationListView()
         }
+        .sheet(isPresented: $isCartPresented) {
+            NavigationStack {
+                makeCartView()
+            }
+        }
         .navigationDestination(isPresented: locationSearchPresentedBinding) {
             LocationSearchView(
                 onCurrentLocationTap: {
@@ -144,6 +156,7 @@ struct HomeRootView: View {
             presentedSearchQuery = nil
             presentedBanner = nil
             isNotificationListPresented = false
+            isCartPresented = false
             isLocationSearchPresented = false
             router.clearPendingRoute()
             Task { await presenter.send(.notificationUnreadCountReloadRequested) }

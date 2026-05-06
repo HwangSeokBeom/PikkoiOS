@@ -7,12 +7,13 @@ struct HomeHeaderSectionView: View {
     let notificationUnreadCount: Int
     let onLocationTap: () -> Void
     let onNotificationTap: () -> Void
+    let onCartTap: () -> Void
     let onSearchSubmit: () -> Void
     let onPopularKeywordTap: (String) -> Void
     @State private var hasLoggedBellPlacement = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: PikkoSpacing.sm) {
                 Button(action: onLocationTap) {
                     HStack(spacing: 6) {
@@ -40,6 +41,16 @@ struct HomeHeaderSectionView: View {
                     unreadCount: notificationUnreadCount,
                     action: onNotificationTap
                 )
+
+                Button(action: onCartTap) {
+                    Image(systemName: "cart")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(PikkoColor.gray600)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("장바구니")
             }
             .frame(maxWidth: .infinity)
 

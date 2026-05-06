@@ -4,6 +4,7 @@ import SwiftUI
 struct FeatureBuilderFactory {
     private let container: AppDIContainer
     private let appState: AppState
+    private static var inFlightDeviceTokenRegistrationKeys = Set<String>()
 
     init(container: AppDIContainer, appState: AppState) {
         self.container = container
@@ -44,6 +45,9 @@ struct FeatureBuilderFactory {
             },
             makeNotificationListView: {
                 AnyView(makeNotificationListView())
+            },
+            makeCartView: {
+                makeCartView()
             },
             makeAuthView: {
                 AnyView(makeAuthView(context: .protectedResource))
@@ -139,6 +143,9 @@ struct FeatureBuilderFactory {
             makeOrderDetailView: { orderID in
                 AnyView(makeOrderDetailView(orderID: orderID))
             },
+            makeCartView: {
+                makeCartView()
+            },
             onExploreHome: {
                 appState.selectedTab = .home
             }
@@ -197,29 +204,48 @@ struct FeatureBuilderFactory {
         ).build()
     }
 
-    func syncCurrentDeviceTokenIfNeeded() async {
-        guard appState.sessionStore.isAuthenticated,
-              let accessToken = appState.sessionStore.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+    func syncCurrentDeviceTokenIfNeeded(source: String = "deviceTokenSyncStateChanged") async {
+        guard appState.sessionStore.isAuthenticated else {
+            let tokenLength = appState.sessionStore.deviceToken?.count ?? 0
+            Logger(category: "FCM").warning("[FCM] server register deferred reason=unauthenticated tokenLength=\(tokenLength) source=\(source)")
+            return
+        }
+
+        guard let accessToken = appState.sessionStore.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
               !accessToken.isEmpty,
               let deviceToken = appState.sessionStore.deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines),
               !deviceToken.isEmpty else {
             return
         }
 
-        guard !appState.sessionStore.hasSyncedCurrentDeviceToken else { return }
+        let userID = appState.sessionStore.currentUserID ?? "unknown"
+        guard !appState.sessionStore.hasSyncedCurrentDeviceToken else {
+            Logger(category: "FCM").info("[FCM] server register skipped reason=unchangedAndPreviouslyRegistered userId=\(userID) source=\(source)")
+            return
+        }
+
+        let registrationKey = "\(userID)|\(deviceToken)"
+        guard Self.inFlightDeviceTokenRegistrationKeys.insert(registrationKey).inserted else {
+            Logger(category: "FCM").debug("[FCM] server register deduped key=userId:\(userID):tokenLength:\(deviceToken.count) source=\(source)")
+            return
+        }
+        defer {
+            Self.inFlightDeviceTokenRegistrationKeys.remove(registrationKey)
+        }
 
         do {
+            Logger(category: "FCM").info("[FCM] server register start source=\(source) userId=\(userID) tokenLength=\(deviceToken.count)")
             try await container.authRepository.updateDeviceToken(deviceToken)
             appState.sessionStore.markCurrentDeviceTokenSynced()
-            Logger(category: "FCM").debug("[FCM] token uploaded endpoint=/v1/users/deviceToken")
+            Logger(category: "FCM").info("[FCM] server register success source=\(source) userId=\(userID) endpoint=/v1/users/deviceToken")
         } catch let error as NetworkError {
             if case .configuration(let configurationError) = error {
-                Logger.shared.warning("Device token sync skipped due to configuration issue: \(configurationError.userMessage)")
+                Logger(category: "FCM").error("[FCM] server register failed source=\(source) userId=\(userID) error=\(configurationError.userMessage)")
             } else {
-                Logger.shared.debug("Device token sync failed but authentication will continue: \(error.localizedDescription)")
+                Logger(category: "FCM").error("[FCM] server register failed source=\(source) userId=\(userID) error=\(error.localizedDescription)")
             }
         } catch {
-            Logger.shared.debug("Device token sync failed but authentication will continue: \(error.localizedDescription)")
+            Logger(category: "FCM").error("[FCM] server register failed source=\(source) userId=\(userID) error=\(error.localizedDescription)")
         }
     }
 
@@ -258,9 +284,10 @@ struct FeatureBuilderFactory {
         ).build()
     }
 
-    func makeCommunityDetailView(postID: String) -> CommunityDetailRootView {
+    func makeCommunityDetailView(postID: String, initialCommentID: String? = nil) -> CommunityDetailRootView {
         CommunityDetailBuilder(
             postID: postID,
+            initialCommentID: initialCommentID,
             communityRepository: container.communityRepository,
             locationService: container.locationService,
             sessionStore: appState.sessionStore,

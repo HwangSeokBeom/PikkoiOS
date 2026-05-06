@@ -11,6 +11,7 @@ final class CommunityDetailPresenter: ObservableObject {
     private let communityNotificationSnapshotStore: CommunityNotificationSnapshotStore
     private let activeCommunityPostTracker: ActiveCommunityPostTracking
     private let postID: String
+    private let initialCommentID: String?
     private let distanceFormatter = DistanceFormatter()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
 
@@ -21,9 +22,11 @@ final class CommunityDetailPresenter: ObservableObject {
     private var nextCommentCursor: String?
     private var isLoadingMoreComments = false
     private var isUpdatingLikeStatus = false
+    private var hasHandledInitialCommentTarget = false
 
     init(
         postID: String,
+        initialCommentID: String? = nil,
         interactor: CommunityDetailInteracting,
         router: CommunityDetailRouting,
         sessionStore: SessionStore,
@@ -38,6 +41,9 @@ final class CommunityDetailPresenter: ObservableObject {
         self.communityNotificationSnapshotStore = communityNotificationSnapshotStore
         self.activeCommunityPostTracker = activeCommunityPostTracker
         self.postID = postID
+        let normalizedInitialCommentID = initialCommentID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.initialCommentID = normalizedInitialCommentID?.isEmpty == true ? nil : normalizedInitialCommentID
         self.viewState = CommunityDetailViewState(postID: postID)
         self.relativeDateFormatter.locale = Locale(identifier: "ko_KR")
         self.relativeDateFormatter.unitsStyle = .full
@@ -180,6 +186,7 @@ final class CommunityDetailPresenter: ObservableObject {
             }
             viewState.commentSection.isInitialLoading = false
             syncAllViewState()
+            applyInitialCommentTargetIfNeeded()
         } catch {
             nextCommentCursor = nil
             viewState.commentSection.isInitialLoading = false
@@ -476,6 +483,28 @@ final class CommunityDetailPresenter: ObservableObject {
             }
         } else {
             viewState.commentSection.emptyState = nil
+        }
+    }
+
+    private func applyInitialCommentTargetIfNeeded() {
+        guard !hasHandledInitialCommentTarget,
+              let initialCommentID else {
+            return
+        }
+        hasHandledInitialCommentTarget = true
+
+        let found = containsComment(initialCommentID, in: comments)
+        Logger(category: "CommentScroll").debug(
+            "[CommentScroll] target commentId=\(initialCommentID) result=\(found ? "found" : "notFound")"
+        )
+
+        guard found else { return }
+        viewState.commentSection.highlightedCommentID = initialCommentID
+    }
+
+    private func containsComment(_ commentID: String, in comments: [CommunityComment]) -> Bool {
+        comments.contains { comment in
+            comment.id == commentID || containsComment(commentID, in: comment.replies)
         }
     }
 

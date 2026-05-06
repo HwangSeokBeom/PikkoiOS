@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 enum ChatAction {
@@ -11,4 +12,6 @@ enum ChatAction {
     case filesSelected([ChatUploadFile])
     case attachedFileRemoved(String)
     case sendMessageTapped
+    case nearBottomChanged(Bool, distance: CGFloat)
+    case newMessageIndicatorTapped
 }

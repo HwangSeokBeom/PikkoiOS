@@ -28,6 +28,7 @@ final class VideoPlayerViewModel: ObservableObject {
     private var itemStatusObservation: NSKeyValueObservation?
     private var playerStatusObservation: NSKeyValueObservation?
     private var playerTimeControlObservation: NSKeyValueObservation?
+    private var playerTimeObserverToken: Any?
     private var pendingSeekTime: CMTime?
     private var pendingResumeAfterReady = false
     private var playbackGeneration = 0
@@ -120,6 +121,9 @@ final class VideoPlayerViewModel: ObservableObject {
         playerStatusObservation = nil
         playerTimeControlObservation?.invalidate()
         playerTimeControlObservation = nil
+        removePeriodicTimeObserver()
+        viewState.currentTime = 0
+        viewState.duration = nil
     }
 
     func openQualityMenu() {
@@ -248,6 +252,20 @@ final class VideoPlayerViewModel: ObservableObject {
 
     func handleBackTapped() {
         logger.debug("[VideoNavigation] back tapped source=customButton")
+    }
+
+    func seek(toProgress progress: Double) {
+        guard let duration = viewState.duration,
+              duration.isFinite,
+              duration > 0 else {
+            return
+        }
+
+        let clampedProgress = min(max(progress, 0), 1)
+        let seconds = duration * clampedProgress
+        let targetTime = CMTime(seconds: seconds, preferredTimescale: 600)
+        viewState.currentTime = seconds
+        player?.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     func qualityActionTitle(_ title: String, isSelected: Bool) -> String {
@@ -450,6 +468,7 @@ final class VideoPlayerViewModel: ObservableObject {
             player = targetPlayer
             installPlayerObserversIfNeeded(for: targetPlayer)
         }
+        installPeriodicTimeObserverIfNeeded(for: targetPlayer)
 
         installItemStatusObserver(
             for: item,
@@ -838,7 +857,13 @@ final class VideoPlayerViewModel: ObservableObject {
 #if DEBUG
         VideoStreamingDebugLogger.logFinalPlayerURL(action: "create AVURLAsset", url: playbackCandidate.url)
 #endif
-        // Keep the token query intact and inject the same protected-resource headers used by authenticated image loading.
+        // AVPlayer resolves every HLS URI inside the master/variant playlists itself.
+        // When the server uses token query auth, every playlist, subtitle, and segment
+        // URI in the manifest must include that token (for example
+        // subtitles.ko.vtt?token=..., 720p/index.m3u8?token=..., segment001.m4s?token=...)
+        // or the server must authorize child resources from the master token session/cookie.
+        // VTT subtitle responses must start with WEBVTT and use text/vtt or a compatible text content type.
+        // The client cannot append token queries to AVPlayer's internal subtitle/segment requests.
         let asset = AVURLAsset(url: playbackCandidate.url, options: assetOptions)
 #if DEBUG
         VideoStreamingDebugLogger.logFinalPlayerURL(action: "create AVPlayerItem", url: playbackCandidate.url)
@@ -906,6 +931,7 @@ final class VideoPlayerViewModel: ObservableObject {
                     )
                     self.viewState.effectivePlaybackQuality = quality
                     self.viewState.detailReason = nil
+                    self.updatePlaybackTiming(from: observedItem)
                     self.logAccessLog(for: observedItem)
                     let seekTime = self.pendingSeekTime
                     let shouldResume = self.pendingResumeAfterReady
@@ -1088,6 +1114,37 @@ final class VideoPlayerViewModel: ObservableObject {
 
         return error.localizedDescription
     }
+
+    private func installPeriodicTimeObserverIfNeeded(for player: AVPlayer) {
+        removePeriodicTimeObserver()
+        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
+        playerTimeObserverToken = player.addPeriodicTimeObserver(
+            forInterval: interval,
+            queue: .main
+        ) { [weak self, weak player] time in
+            Task { @MainActor in
+                guard let self else { return }
+                self.viewState.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
+                self.updatePlaybackTiming(from: player?.currentItem)
+            }
+        }
+    }
+
+    private func removePeriodicTimeObserver() {
+        guard let playerTimeObserverToken else { return }
+        player?.removeTimeObserver(playerTimeObserverToken)
+        self.playerTimeObserverToken = nil
+    }
+
+    private func updatePlaybackTiming(from item: AVPlayerItem?) {
+        guard let item else {
+            viewState.duration = nil
+            return
+        }
+
+        let durationSeconds = item.duration.seconds
+        viewState.duration = durationSeconds.isFinite && durationSeconds > 0 ? durationSeconds : nil
+    }
 }
 
 private enum HLSAuthMode: String, Sendable, CaseIterable {
@@ -1228,6 +1285,7 @@ private struct HLSProbeResult: Sendable {
     let hasStreamInf: Bool
     let hasExtInf: Bool
     let uriLines: [String]
+    let mediaURIs: [String]
     let tokenLengthPreserved: Bool
     let headerSnapshot: HLSHeaderSnapshot
 
@@ -1370,6 +1428,15 @@ private enum HLSProbeService {
             )
             results.append(result)
             if result.isPlayablePlaylist {
+                if quality == "auto",
+                   selectedQuality == "auto",
+                   probeEntries.count > 1,
+                   shouldPreferVariantPlaylist(over: result) {
+                    logger.warning(
+                        "[HLSDiagnostics] masterPlaylistSkipped reason=subtitleURIWithoutToken fallback=variantPlaylist"
+                    )
+                    continue
+                }
                 if selectedQuality != "auto", quality == "auto", probeEntries.count > 1 {
                     continue
                 }
@@ -1385,6 +1452,13 @@ private enum HLSProbeService {
         }
 
         throw HLSProbeFailure(results: results)
+    }
+
+    private static func shouldPreferVariantPlaylist(over result: HLSProbeResult) -> Bool {
+        result.hasStreamInf
+            && result.mediaURIs.contains {
+                isSubtitleURI($0) && !VideoURLLogDescriptor(rawValue: $0).queryExists
+            }
     }
 
     private static func fetchLegacyComparisonDiagnostics(
@@ -1476,6 +1550,7 @@ private enum HLSProbeService {
                 hasStreamInf: false,
                 hasExtInf: false,
                 uriLines: [],
+                mediaURIs: [],
                 tokenLengthPreserved: tokenLengthPreserved,
                 headerSnapshot: headerSnapshot
             )
@@ -1515,6 +1590,7 @@ private enum HLSProbeService {
                 hasStreamInf: hasStreamInf,
                 hasExtInf: hasExtInf,
                 uriLines: parseURILines(from: body),
+                mediaURIs: parseAttributeURIs(from: body),
                 tokenLengthPreserved: tokenLengthPreserved,
                 headerSnapshot: headerSnapshot
             )
@@ -1529,6 +1605,7 @@ private enum HLSProbeService {
                     "[HLSProbe] status=\(result.statusCode) videoId=\(candidate.requestedVideoID) responseVideoId=\(candidate.responseVideoID) selectedQuality=\(candidate.quality) originalPath=\(pathNormalization.originalPath) normalizedPath=\(descriptor.path) pathNormalization=\(pathNormalization.action.rawValue) resolvedHost=\(descriptor.host) resolvedPort=\(descriptor.port) resolvedPath=\(descriptor.path) queryKeys=\(descriptor.queryKeys) tokenLengthPreserved=\(tokenLengthPreserved) responseMessage=\(result.bodyPrefix ?? "nil") classification=\(result.classification.rawValue) authMode=\(candidate.authMode.rawValue) headerAuthorization=\(headerSnapshot.hasAuthorization) headerSeSACKey=\(headerSnapshot.hasSeSACKey || headerSnapshot.hasLegacySeSACKey) headerContentType=\(headerSnapshot.hasContentType) usesAPIClient=false"
                 )
             }
+            logTokenlessInternalURIsIfNeeded(result)
             return result
         } catch {
             let nsError = error as NSError
@@ -1549,6 +1626,7 @@ private enum HLSProbeService {
                 hasStreamInf: false,
                 hasExtInf: false,
                 uriLines: [],
+                mediaURIs: [],
                 tokenLengthPreserved: tokenLengthPreserved,
                 headerSnapshot: headerSnapshot
             )
@@ -1560,6 +1638,55 @@ private enum HLSProbeService {
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+    }
+
+    private static func parseAttributeURIs(from body: String) -> [String] {
+        body
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.hasPrefix("#EXT-X-MEDIA") || $0.hasPrefix("#EXT-X-I-FRAME-STREAM-INF") }
+            .compactMap(attributeURI)
+    }
+
+    private static func attributeURI(from line: String) -> String? {
+        guard let range = line.range(of: #"URI="([^"]+)""#, options: .regularExpression) else {
+            return nil
+        }
+
+        let matched = String(line[range])
+        guard matched.count > 6 else { return nil }
+        return String(matched.dropFirst(5).dropLast())
+    }
+
+    private static func logTokenlessInternalURIsIfNeeded(_ result: HLSProbeResult) {
+        for uri in result.mediaURIs where isSubtitleURI(uri) && !VideoURLLogDescriptor(rawValue: uri).queryExists {
+            logger.warning(
+                "[HLSDiagnostics] subtitleURIWithoutToken uri=\(maskedURI(uri)) reason=avplayer_internal_request_will_not_preserve_master_query"
+            )
+        }
+
+        if result.hasStreamInf,
+           result.uriLines.contains(where: { $0.hasSuffix(".m3u8") && !VideoURLLogDescriptor(rawValue: $0).queryExists }) {
+            logger.warning(
+                "[HLSDiagnostics] variantURIWithoutToken reason=avplayer_internal_request_will_not_preserve_master_query"
+            )
+        }
+    }
+
+    private static func isSubtitleURI(_ uri: String) -> Bool {
+        let lowercasedURI = uri.lowercased()
+        return lowercasedURI.hasSuffix(".vtt")
+            || lowercasedURI.contains(".vtt?")
+            || lowercasedURI.contains("subtitle")
+            || lowercasedURI.contains("subtitles")
+    }
+
+    private static func maskedURI(_ uri: String) -> String {
+        let descriptor = VideoURLLogDescriptor(rawValue: uri)
+        if descriptor.queryExists {
+            return "\(descriptor.path)?<redacted>"
+        }
+        return descriptor.path
     }
 
     private static func bodyType(body: String, contentType: String?) -> String {
@@ -1746,6 +1873,13 @@ private enum HLSPlaylistDiagnostics {
             )
 
             logPlaylistURIs(name: entry.0, report: tokenPlusSeSACKeyReport)
+            await probeSubtitleIfNeeded(
+                playlistName: entry.0,
+                playlistURL: entry.1,
+                mediaURIs: tokenPlusSeSACKeyReport.mediaURIs,
+                seSACKey: seSACKey,
+                protectedResourceHeaders: protectedResourceHeaders
+            )
             if tokenPlusSeSACKeyReport.hasExtInf {
                 await probeFirstSegment(
                     playlistName: entry.0,
@@ -1759,6 +1893,13 @@ private enum HLSPlaylistDiagnostics {
     }
 
     private static func logPlaylistURIs(name: String, report: HLSProbeResult) {
+        for (index, uri) in report.mediaURIs.prefix(5).enumerated() {
+            let descriptor = VideoURLLogDescriptor(rawValue: uri)
+            logger.debug(
+                "[HLSDiagnostics] mediaURI[\(index)]=\(maskedURI(uri)) queryExists=\(descriptor.queryExists)"
+            )
+        }
+
         for (index, uri) in report.uriLines.prefix(5).enumerated() {
             let descriptor = VideoURLLogDescriptor(rawValue: uri)
             logger.debug(
@@ -1777,6 +1918,41 @@ private enum HLSPlaylistDiagnostics {
            report.uriLines.contains(where: { !VideoURLLogDescriptor(rawValue: $0).queryExists }) {
             logger.warning(
                 "[HLSDiagnostics] segment uri has no query token. Server may reject segment request if token is required."
+            )
+        }
+    }
+
+    private static func probeSubtitleIfNeeded(
+        playlistName: String,
+        playlistURL: URL,
+        mediaURIs: [String],
+        seSACKey: String,
+        protectedResourceHeaders: [String: String]
+    ) async {
+        guard let subtitleURI = mediaURIs.first(where: isSubtitleURI),
+              let subtitleURL = URL(string: subtitleURI, relativeTo: playlistURL)?.absoluteURL else {
+            return
+        }
+
+        let report = await probeTextResource(
+            url: subtitleURL,
+            seSACKey: seSACKey,
+            protectedResourceHeaders: protectedResourceHeaders
+        )
+        let descriptor = VideoURLLogDescriptor(url: subtitleURL)
+        logger.debug(
+            "[HLSDiagnostics] subtitle probe playlist=\(playlistName) status=\(report.statusCode) path=\(descriptor.path) queryExists=\(descriptor.queryExists) contentType=\(report.contentType ?? "nil") firstLine=\(report.firstLine)"
+        )
+        if !descriptor.queryExists {
+            logger.warning(
+                "[HLSDiagnostics] subtitleURIWithoutToken uri=\(maskedURI(subtitleURI)) reason=avplayer_internal_request_will_not_preserve_master_query"
+            )
+        }
+        if report.statusCode >= 200,
+           report.statusCode < 300,
+           report.firstLine.uppercased() != "WEBVTT" {
+            logger.warning(
+                "[HLSDiagnostics] subtitleInvalidVTT path=\(descriptor.path) reason=first_line_must_be_WEBVTT"
             )
         }
     }
@@ -1859,6 +2035,47 @@ private enum HLSPlaylistDiagnostics {
         }
     }
 
+    private static func probeTextResource(
+        url: URL,
+        seSACKey: String,
+        protectedResourceHeaders: [String: String]
+    ) async -> (statusCode: Int, contentType: String?, firstLine: String) {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+        HLSPlaybackHeaderOptions.applyHeaders(
+            to: &request,
+            authMode: .tokenPlusProtectedResourceHeaders,
+            seSACKey: seSACKey,
+            protectedResourceHeaders: protectedResourceHeaders
+        )
+        request.setValue("bytes=0-512", forHTTPHeaderField: HTTPHeaderField.range)
+
+        do {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.httpAdditionalHeaders = nil
+            configuration.protocolClasses = nil
+            let session = URLSession(configuration: configuration)
+            let (data, response) = try await session.data(for: request)
+            let firstLine = String(data: data, encoding: .utf8)?
+                .split(whereSeparator: \.isNewline)
+                .first
+                .map(String.init) ?? "<empty>"
+            let httpResponse = response as? HTTPURLResponse
+            return (
+                httpResponse?.statusCode ?? -1,
+                httpResponse?.value(forHTTPHeaderField: HTTPHeaderField.contentType),
+                firstLine
+            )
+        } catch {
+            let nsError = error as NSError
+            logger.warning(
+                "[HLSDiagnostics] text probe failed domain=\(nsError.domain) code=\(nsError.code) path=\(VideoURLLogDescriptor(url: url).path)"
+            )
+            return (-1, nil, "<error>")
+        }
+    }
+
     private static func copyQueryIfNeeded(to url: URL, from sourceURL: URL) -> URL {
         guard !VideoURLLogDescriptor(url: url).queryExists,
               let sourceComponents = URLComponents(url: sourceURL, resolvingAgainstBaseURL: false),
@@ -1870,6 +2087,14 @@ private enum HLSPlaylistDiagnostics {
 
         components.percentEncodedQuery = sourceQuery
         return components.url ?? url
+    }
+
+    private static func isSubtitleURI(_ uri: String) -> Bool {
+        let lowercasedURI = uri.lowercased()
+        return lowercasedURI.hasSuffix(".vtt")
+            || lowercasedURI.contains(".vtt?")
+            || lowercasedURI.contains("subtitle")
+            || lowercasedURI.contains("subtitles")
     }
 
     private static func maskedURI(_ uri: String) -> String {

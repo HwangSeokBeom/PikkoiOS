@@ -8,6 +8,14 @@ Swagger previously implied token-only HLS playback, but the server requires SeSA
 
 HLS playback uses the `stream_url` and `qualities[].url` values returned by the stream API for manifest playback, preserving the original query string token. The app injects only `SeSACKey` through `AVURLAssetHTTPHeaderFieldsKey` and does not add `Authorization` or `Content-Type` to HLS GET requests.
 
+AVPlayer follows every URI inside the HLS playlists itself. If the server uses token query authentication, the master playlist must include that token on every internal URI that also requires authorization, including variant playlists, subtitles, and media segments:
+
+- `URI="subtitles.ko.vtt?token=<TOKEN>"`
+- `720p/index.m3u8?token=<TOKEN>`
+- `segment001.m4s?token=<TOKEN>`
+
+Alternatively, the streaming server must authorize child resources through the master token session/cookie. VTT subtitle responses must start with `WEBVTT` and use `text/vtt` or a compatible text content type. The client cannot append query tokens to AVPlayer's internal subtitle or segment requests after playback starts.
+
 If the manifest probe receives JSON instead of an HLS playlist, the client classifies the response before creating the `AVPlayerItem`:
 
 - `HTTP 200` with `application/vnd.apple.mpegurl`, `application/x-mpegURL`, `audio/mpegurl`, or a body containing `#EXTM3U`: valid HLS

@@ -2148,7 +2148,7 @@ struct DeveloperDiagnosticsRootView: View {
         appendLog(
             method: "NOTIFICATION",
             path: "AppNotificationRepository",
-            payload: "source=appInternal,label=\(label)",
+            payload: "source=appInternalDebug,label=\(label)",
             status: summary,
             response: recentNotificationTestResult
         )

@@ -41,18 +41,18 @@ struct CommunityInteractor: CommunityInteracting {
         do {
             #if DEBUG
             Logger.shared.debug(
-                "[CommunitySort] category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) orderBy=\(selectedSort.requestOrderBy.rawValue)"
+                "[CommunityFilter] selected distance=\(selectedDistance.title) direction=\(selectedSort.direction.rawValue) orderBy=\(selectedSort.requestOrderBy.rawValue)"
             )
             #endif
             if let query = normalizedQuery(query) {
                 let referenceLocation = await resolveReferenceLocation()
-                #if DEBUG
-                Logger.shared.debug(
-                    "[CommunityList] request query cursor=nil category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) distance=\(selectedDistance.title) hasLocation=\(referenceLocation != nil)"
-                )
-                Logger.shared.debug("[CommunityDistance] selected latExists=\(referenceLocation?.latitude != nil) lonExists=\(referenceLocation?.longitude != nil)")
-                #endif
-                let posts = try await communityRepository.searchPosts(title: query)
+            #if DEBUG
+            Logger.shared.debug(
+                "[CommunityList] request category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) distance=\(selectedDistance.title) hasLocation=\(referenceLocation != nil) cursor=nil"
+            )
+            logLocation(referenceLocation: referenceLocation)
+            #endif
+            let posts = try await communityRepository.searchPosts(title: query)
                 #if DEBUG
                 Logger.shared.debug("[CommunityList] response count=\(posts.count) nextCursor=nil")
                 #endif
@@ -67,9 +67,9 @@ struct CommunityInteractor: CommunityInteracting {
             let locationContext = try await resolveLocationContext(requestIfNeeded: true)
             #if DEBUG
             Logger.shared.debug(
-                "[CommunityList] request query cursor=nil category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil)"
+                "[CommunityList] request category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil) cursor=nil"
             )
-            Logger.shared.debug("[CommunityDistance] selected latExists=\(locationContext.referenceLocation?.latitude != nil) lonExists=\(locationContext.referenceLocation?.longitude != nil)")
+            logLocation(referenceLocation: locationContext.referenceLocation)
             #endif
             let page = try await communityRepository.fetchGeolocationPosts(
                 category: nil,
@@ -107,14 +107,14 @@ struct CommunityInteractor: CommunityInteracting {
             let locationContext = try await resolveLocationContext(requestIfNeeded: false)
             #if DEBUG
             Logger.shared.debug(
-                "[CommunitySort] category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) orderBy=\(selectedSort.requestOrderBy.rawValue)"
+                "[CommunityFilter] selected distance=\(selectedDistance.title) direction=\(selectedSort.direction.rawValue) orderBy=\(selectedSort.requestOrderBy.rawValue)"
             )
             #endif
             #if DEBUG
             Logger.shared.debug(
-                "[CommunityList] request query cursor=\(nextCursor) category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil)"
+                "[CommunityList] request category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) distance=\(selectedDistance.title) hasLocation=\(locationContext.referenceLocation != nil) cursor=\(nextCursor)"
             )
-            Logger.shared.debug("[CommunityDistance] selected latExists=\(locationContext.referenceLocation?.latitude != nil) lonExists=\(locationContext.referenceLocation?.longitude != nil)")
+            logLocation(referenceLocation: locationContext.referenceLocation)
             #endif
             let page = try await communityRepository.fetchGeolocationPosts(
                 category: nil,
@@ -226,10 +226,7 @@ struct CommunityInteractor: CommunityInteracting {
         }
 
         guard requestIfNeeded else {
-            #if DEBUG
-            Logger.shared.info("[CommunityLocation] location pending, skip distance error")
-            #endif
-            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
+            throw CommunityFeedError.locationRequired(message: "현재 위치를 확인한 뒤 다시 시도해 주세요.")
         }
 
         do {
@@ -246,24 +243,24 @@ struct CommunityInteractor: CommunityInteracting {
         } catch LocationServiceError.authorizationNotDetermined {
             locationService.requestWhenInUseAuthorization()
             #if DEBUG
-            Logger.shared.info("[CommunityLocation] location pending, skip distance error")
+            Logger.shared.info("[CommunityLocation] location pending, waitingForPermission")
             #endif
-            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
+            throw CommunityFeedError.locationRequired(message: "위치 권한을 허용한 뒤 다시 시도해 주세요.")
         } catch LocationServiceError.unauthorized, LocationServiceError.servicesDisabled {
             #if DEBUG
-            Logger.shared.info("[CommunityLocation] location unavailable, skip distance error")
+            Logger.shared.info("[CommunityLocation] location unavailable permission=\(locationService.authorizationStatus.debugName)")
             #endif
-            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
+            throw CommunityFeedError.locationRequired(message: "거리순 게시글을 보려면 위치 권한이 필요해요.")
         } catch LocationServiceError.noLocationAvailable {
             #if DEBUG
-            Logger.shared.info("[CommunityLocation] location pending, skip distance error")
+            Logger.shared.info("[CommunityLocation] location pending, noLocationAvailable")
             #endif
-            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
+            throw CommunityFeedError.locationRequired(message: "현재 위치를 확인한 뒤 다시 시도해 주세요.")
         } catch {
             #if DEBUG
-            Logger.shared.info("[CommunityLocation] location pending, skip distance error")
+            Logger.shared.info("[CommunityLocation] location pending, error=\(error.localizedDescription)")
             #endif
-            return CommunityLocationContext(referenceLocation: nil, longitude: nil, latitude: nil)
+            throw CommunityFeedError.locationRequired(message: "현재 위치를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.")
         }
     }
 
@@ -318,10 +315,37 @@ struct CommunityInteractor: CommunityInteracting {
             return .unavailable(message: networkError.localizedDescription)
         }
     }
+
+    private func logLocation(referenceLocation: CommunityReferenceLocation?) {
+        #if DEBUG
+        Logger.shared.debug(
+            "[CommunityLocation] latExists=\(referenceLocation?.latitude != nil) lonExists=\(referenceLocation?.longitude != nil) permission=\(locationService.authorizationStatus.debugName)"
+        )
+        #endif
+    }
 }
 
 private struct CommunityLocationContext {
     let referenceLocation: CommunityReferenceLocation?
     let longitude: Double?
     let latitude: Double?
+}
+
+private extension CLAuthorizationStatus {
+    var debugName: String {
+        switch self {
+        case .notDetermined:
+            return "notDetermined"
+        case .restricted:
+            return "restricted"
+        case .denied:
+            return "denied"
+        case .authorizedAlways:
+            return "authorizedAlways"
+        case .authorizedWhenInUse:
+            return "authorizedWhenInUse"
+        @unknown default:
+            return "unknown"
+        }
+    }
 }

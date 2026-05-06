@@ -8,7 +8,7 @@ struct HomeView: View {
     private enum HomeLayout {
         static let horizontalInset: CGFloat = 16
         static let sectionSpacing: CGFloat = 18
-        static let topPadding: CGFloat = 16
+        static let topPadding: CGFloat = 4
         static let bottomInset: CGFloat = RootTabBarMetrics.scrollContentBottomInset
     }
 
@@ -16,6 +16,7 @@ struct HomeView: View {
 
     let imageLoader: any AuthorizedImageLoading
     let onAuthTap: () -> Void
+    let onCartTap: () -> Void
     let resetTrigger: Int
 
     var body: some View {
@@ -69,6 +70,7 @@ struct HomeView: View {
                                 onNotificationTap: {
                                     Task { await presenter.send(.notificationButtonTapped) }
                                 },
+                                onCartTap: onCartTap,
                                 onSearchSubmit: {
                                     Task { await presenter.send(.searchSubmitted) }
                                 },
@@ -155,7 +157,10 @@ struct HomeView: View {
                 }
             }
         }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
     }
 
     private var searchTextBinding: Binding<String> {

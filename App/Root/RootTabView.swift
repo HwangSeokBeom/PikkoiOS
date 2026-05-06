@@ -12,7 +12,6 @@ struct RootTabView: View {
     @State private var profilePath = NavigationPath()
     @State private var homeResetTrigger = 0
     @State private var videoResetTrigger = 0
-    @State private var isQuickActionPresented = false
     @State private var presentedNotificationRoute: NotificationRoutePresentation?
     @StateObject private var keyboardObserver = RootTabKeyboardObserver()
 
@@ -58,9 +57,6 @@ struct RootTabView: View {
                     selectedTab: appState.selectedTab,
                     onSelect: { tab in
                         handleTabSelection(tab)
-                    },
-                    onQuickAction: {
-                        isQuickActionPresented = true
                     }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -70,12 +66,9 @@ struct RootTabView: View {
             .easeOut(duration: keyboardObserver.animationDuration),
             value: keyboardObserver.isKeyboardVisible
         )
-        .sheet(isPresented: $isQuickActionPresented) {
-            NavigationStack {
-                featureBuilderFactory.makeCartView()
-            }
-        }
-        .sheet(item: $presentedNotificationRoute) { presentation in
+        .sheet(item: $presentedNotificationRoute, onDismiss: {
+            appState.activeNotificationRoute = nil
+        }) { presentation in
             NavigationStack {
                 destinationView(for: presentation.route)
             }
@@ -110,14 +103,14 @@ struct RootTabView: View {
             featureBuilderFactory.makeOrderDetailView(orderID: orderCode)
         case .chatRoom(let roomId, _, let title):
             featureBuilderFactory.makeChatView(target: .room(roomID: roomId, title: title ?? "채팅", target: nil))
-        case .communityPost(let postId, _):
-            featureBuilderFactory.makeCommunityDetailView(postID: postId)
+        case .communityPost(let postId, let commentId):
+            featureBuilderFactory.makeCommunityDetailView(postID: postId, initialCommentID: commentId)
         case .orderList:
             featureBuilderFactory.makeOrderView()
         case .communityList:
             featureBuilderFactory.makeCommunityView()
         case .none:
-            EmptyView()
+            featureBuilderFactory.makeNotificationListView()
         }
     }
 
@@ -131,18 +124,24 @@ struct RootTabView: View {
             appState.selectedTab = .community
         case .orderDetail:
             appState.selectedTab = .order
+            appState.activeNotificationRoute = route
             presentedNotificationRoute = NotificationRoutePresentation(route: route)
         case .paymentReceipt:
             appState.selectedTab = .order
+            appState.activeNotificationRoute = route
             presentedNotificationRoute = NotificationRoutePresentation(route: route)
         case .chatRoom:
             appState.selectedTab = .profile
+            appState.activeNotificationRoute = route
             presentedNotificationRoute = NotificationRoutePresentation(route: route)
         case .communityPost:
             appState.selectedTab = .community
+            appState.activeNotificationRoute = route
             presentedNotificationRoute = NotificationRoutePresentation(route: route)
         case .none:
-            break
+            appState.selectedTab = .profile
+            appState.activeNotificationRoute = route
+            presentedNotificationRoute = NotificationRoutePresentation(route: route)
         }
 
         appState.pendingNotificationRoute = nil

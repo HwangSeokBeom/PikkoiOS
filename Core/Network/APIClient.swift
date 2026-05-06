@@ -4,6 +4,7 @@ final class APIClient: APIClientProtocol {
     private let session: URLSession
     private let requestBuilder: RequestBuilder
     private let tokenRefreshCoordinator: TokenRefreshCoordinator
+    private let responseCache = APIResponseCache()
 
     init(
         session: URLSession,
@@ -27,28 +28,144 @@ final class APIClient: APIClientProtocol {
         didRetryAfterRefresh: Bool
     ) async throws -> ResponseDTO {
         do {
-            let request = try await requestBuilder.build(for: endpoint)
-            logRequestBodyIfNeeded(endpoint: endpoint, request: request)
-            logRequestStartedIfNeeded(endpoint: endpoint)
+            let preparedResponse = try await executePreparedResponse(
+                endpoint,
+                didRetryTransport: didRetryTransport,
+                didRetryAfterRefresh: didRetryAfterRefresh
+            )
+            return try decode(
+                ResponseDTO.self,
+                from: preparedResponse.data,
+                response: preparedResponse.response,
+                request: preparedResponse.request,
+                statusCode: preparedResponse.response.statusCode,
+                endpoint: endpoint
+            )
+        } catch let error as NetworkError {
+            if endpoint.authorizationPolicy.requiresAuthenticatedSession,
+               error.shouldInvalidateSessionImmediately {
+                await tokenRefreshCoordinator.invalidateSession()
+            }
+            throw error
+        } catch {
+            if error is CancellationError || Task.isCancelled {
+                throw CancellationError()
+            }
+
+            if let urlError = error as? URLError,
+               urlError.code == .cancelled {
+                throw CancellationError()
+            }
+
+            if endpoint.method.isTransportRetryEligible,
+               !didRetryTransport,
+               error is URLError {
+                return try await execute(
+                    endpoint,
+                    didRetryTransport: true,
+                    didRetryAfterRefresh: didRetryAfterRefresh
+                )
+            }
+
+            throw NetworkError.transport
+        }
+    }
+
+    private func executePreparedResponse<ResponseDTO: Decodable & Sendable>(
+        _ endpoint: Endpoint<ResponseDTO>,
+        didRetryTransport: Bool,
+        didRetryAfterRefresh: Bool
+    ) async throws -> PreparedAPIResponse {
+        let request = try await requestBuilder.build(for: endpoint)
+        logRequestBodyIfNeeded(endpoint: endpoint, request: request)
+        logRequestStartedIfNeeded(endpoint: endpoint)
+
+        if let cacheDescriptor = cacheDescriptor(
+            for: endpoint,
+            request: request,
+            didRetryAfterRefresh: didRetryAfterRefresh
+        ) {
+            if let cached = await responseCache.cachedResponse(
+                for: cacheDescriptor.key,
+                maxAge: cacheDescriptor.ttl
+            ) {
+                Logger.shared.debug("[Cache] hit key=\(cacheDescriptor.diagnosticKey)")
+                Logger.shared.debug("[NetworkDedup] key=\(cacheDescriptor.diagnosticKey) action=skipped")
+                return cached.preparedResponse(request: request)
+            }
+
+            Logger.shared.debug("[Cache] miss key=\(cacheDescriptor.diagnosticKey)")
+            let taskResult = await responseCache.inFlightTask(for: cacheDescriptor.key) {
+                Task<CachedAPIResponse, Error> {
+                    let response = try await performNetworkRequest(
+                        endpoint,
+                        request: request,
+                        didRetryTransport: didRetryTransport,
+                        didRetryAfterRefresh: didRetryAfterRefresh
+                    )
+                    return CachedAPIResponse(
+                        data: response.data,
+                        url: response.response.url ?? request.url,
+                        statusCode: response.response.statusCode,
+                        headers: stringHeaders(from: response.response)
+                    )
+                }
+            }
+
+            if taskResult.isNew {
+                Logger.shared.debug("[NetworkDedup] key=\(cacheDescriptor.diagnosticKey) action=new")
+            } else {
+                Logger.shared.debug("[NetworkDedup] key=\(cacheDescriptor.diagnosticKey) action=reuse")
+            }
+
+            do {
+                let cachedResponse = try await taskResult.task.value
+                await responseCache.store(cachedResponse, for: cacheDescriptor.key)
+                await responseCache.removeInFlightTask(for: cacheDescriptor.key)
+                return cachedResponse.preparedResponse(request: request)
+            } catch {
+                await responseCache.removeInFlightTask(for: cacheDescriptor.key)
+                throw error
+            }
+        }
+
+        return try await performNetworkRequest(
+            endpoint,
+            request: request,
+            didRetryTransport: didRetryTransport,
+            didRetryAfterRefresh: didRetryAfterRefresh
+        )
+    }
+
+    private func performNetworkRequest<ResponseDTO: Decodable & Sendable>(
+        _ endpoint: Endpoint<ResponseDTO>,
+        request: URLRequest,
+        didRetryTransport: Bool,
+        didRetryAfterRefresh: Bool
+    ) async throws -> PreparedAPIResponse {
+        let requestID = UUID().uuidString
+        let startTime = CFAbsoluteTimeGetCurrent()
+        Logger.shared.debug(
+            "[Network] request method=\(endpoint.method.rawValue) path=\(endpoint.path) requestID=\(requestID)"
+        )
+
+        do {
             let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw NetworkError.transport
             }
+            let durationMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1_000)
+            Logger.shared.debug(
+                "[Network] response path=\(endpoint.path) status=\(httpResponse.statusCode) durationMs=\(durationMs) requestID=\(requestID)"
+            )
 
             switch httpResponse.statusCode {
             case 200..<300:
-                return try decode(
-                    ResponseDTO.self,
-                    from: data,
-                    response: httpResponse,
-                    request: request,
-                    statusCode: httpResponse.statusCode,
-                    endpoint: endpoint
-                )
+                return PreparedAPIResponse(data: data, response: httpResponse, request: request)
             case 401 where shouldAttemptRefresh(for: endpoint, didRetryAfterRefresh: didRetryAfterRefresh),
                  419 where shouldAttemptRefresh(for: endpoint, didRetryAfterRefresh: didRetryAfterRefresh):
                 _ = try await tokenRefreshCoordinator.refreshTokens()
-                return try await execute(
+                return try await executePreparedResponse(
                     endpoint,
                     didRetryTransport: didRetryTransport,
                     didRetryAfterRefresh: true
@@ -92,10 +209,6 @@ final class APIClient: APIClientProtocol {
                 throw mappedError
             }
         } catch let error as NetworkError {
-            if endpoint.authorizationPolicy.requiresAuthenticatedSession,
-               error.shouldInvalidateSessionImmediately {
-                await tokenRefreshCoordinator.invalidateSession()
-            }
             throw error
         } catch {
             if error is CancellationError || Task.isCancelled {
@@ -110,7 +223,7 @@ final class APIClient: APIClientProtocol {
             if endpoint.method.isTransportRetryEligible,
                !didRetryTransport,
                error is URLError {
-                return try await execute(
+                return try await executePreparedResponse(
                     endpoint,
                     didRetryTransport: true,
                     didRetryAfterRefresh: didRetryAfterRefresh
@@ -182,6 +295,78 @@ final class APIClient: APIClientProtocol {
         endpoint.method == .get
             && endpoint.path.hasPrefix("/v1/videos/")
             && endpoint.path.hasSuffix("/stream")
+    }
+
+    private func cacheDescriptor<ResponseDTO: Decodable & Sendable>(
+        for endpoint: Endpoint<ResponseDTO>,
+        request: URLRequest,
+        didRetryAfterRefresh: Bool
+    ) -> APICacheDescriptor? {
+        guard endpoint.method == .get,
+              endpoint.body == nil,
+              endpoint.authorizationPolicy != .refreshToken,
+              !didRetryAfterRefresh,
+              !isVideoStreamEndpoint(endpoint),
+              let url = request.url,
+              let ttl = cacheTTL(for: endpoint) else {
+            return nil
+        }
+
+        let authorizationHash = request
+            .value(forHTTPHeaderField: HTTPHeaderField.authorization)
+            .map { String($0.hashValue) } ?? "none"
+        let responseType = String(describing: ResponseDTO.self)
+        let key = [
+            endpoint.method.rawValue,
+            url.absoluteString,
+            "authHash=\(authorizationHash)",
+            "response=\(responseType)"
+        ].joined(separator: "|")
+        let queryHash = url.query.map { String($0.hashValue) } ?? "none"
+        let diagnosticKey = "\(endpoint.method.rawValue) \(endpoint.path) queryHash=\(queryHash) response=\(responseType)"
+
+        return APICacheDescriptor(key: key, diagnosticKey: diagnosticKey, ttl: ttl)
+    }
+
+    private func cacheTTL<ResponseDTO: Decodable & Sendable>(
+        for endpoint: Endpoint<ResponseDTO>
+    ) -> TimeInterval? {
+        guard endpoint.method == .get else { return nil }
+
+        if endpoint.path == "/v1/videos" {
+            return 60
+        }
+
+        if endpoint.path.hasPrefix("/v1/banners") {
+            return 300
+        }
+
+        if endpoint.path.contains("/popular-stores")
+            || endpoint.path.contains("/searches-popular")
+            || endpoint.path.hasPrefix("/v1/stores") {
+            return 60
+        }
+
+        if endpoint.path.hasPrefix("/v1/orders")
+            || endpoint.path.hasPrefix("/v1/notifications")
+            || endpoint.path.hasPrefix("/v1/carts")
+            || endpoint.path.hasPrefix("/v1/users/me") {
+            return 8
+        }
+
+        if endpoint.path.hasPrefix("/v1/posts")
+            || endpoint.path.hasPrefix("/v1/comments") {
+            return 12
+        }
+
+        return endpoint.authorizationPolicy.requiresAuthenticatedSession ? 15 : 60
+    }
+
+    private func stringHeaders(from response: HTTPURLResponse) -> [String: String] {
+        response.allHeaderFields.reduce(into: [String: String]()) { result, pair in
+            guard let key = pair.key as? String else { return }
+            result[key] = "\(pair.value)"
+        }
     }
 
     private func logFailurePayloadIfNeeded<ResponseDTO: Decodable & Sendable>(
@@ -359,5 +544,92 @@ final class APIClient: APIClientProtocol {
 
     private func firstBytesHex(_ data: Data) -> String {
         data.prefix(64).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+private struct APICacheDescriptor: Sendable {
+    let key: String
+    let diagnosticKey: String
+    let ttl: TimeInterval
+}
+
+private struct PreparedAPIResponse: Sendable {
+    let data: Data
+    let response: HTTPURLResponse
+    let request: URLRequest
+}
+
+private struct CachedAPIResponse: Sendable {
+    let data: Data
+    let url: URL?
+    let statusCode: Int
+    let headers: [String: String]
+
+    func preparedResponse(request: URLRequest) -> PreparedAPIResponse {
+        let responseURL = url ?? request.url ?? URL(string: "https://invalid.local")!
+        let response = HTTPURLResponse(
+            url: responseURL,
+            statusCode: statusCode,
+            httpVersion: nil,
+            headerFields: headers
+        )!
+        return PreparedAPIResponse(data: data, response: response, request: request)
+    }
+}
+
+private actor APIResponseCache {
+    private struct Entry {
+        let response: CachedAPIResponse
+        let storedAt: Date
+    }
+
+    private var storage: [String: Entry] = [:]
+    private var inFlightTasks: [String: Task<CachedAPIResponse, Error>] = [:]
+    private let maxEntryCount = 120
+
+    func cachedResponse(for key: String, maxAge: TimeInterval) -> CachedAPIResponse? {
+        guard let entry = storage[key] else {
+            return nil
+        }
+
+        if Date().timeIntervalSince(entry.storedAt) <= maxAge {
+            return entry.response
+        }
+
+        storage[key] = nil
+        return nil
+    }
+
+    func store(_ response: CachedAPIResponse, for key: String) {
+        storage[key] = Entry(response: response, storedAt: Date())
+        trimIfNeeded()
+    }
+
+    func inFlightTask(
+        for key: String,
+        create: @Sendable () -> Task<CachedAPIResponse, Error>
+    ) -> (task: Task<CachedAPIResponse, Error>, isNew: Bool) {
+        if let task = inFlightTasks[key] {
+            return (task, false)
+        }
+        let task = create()
+        inFlightTasks[key] = task
+        return (task, true)
+    }
+
+    func removeInFlightTask(for key: String) {
+        inFlightTasks[key] = nil
+    }
+
+    private func trimIfNeeded() {
+        guard storage.count > maxEntryCount else { return }
+        let overflowCount = storage.count - maxEntryCount
+        let keysToRemove = storage
+            .sorted { $0.value.storedAt < $1.value.storedAt }
+            .prefix(overflowCount)
+            .map(\.key)
+        for key in keysToRemove {
+            storage[key] = nil
+        }
     }
 }

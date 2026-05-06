@@ -35,6 +35,11 @@ final class NotificationListPresenter: ObservableObject {
             guard let notification = notifications.first(where: { $0.id == id }) else { return }
             interactor.markAsRead(id: id)
             reload()
+            if notification.route == .none {
+                Logger(category: "NotificationTap").warning("[NotificationTap] routeUnavailable notificationId=\(id) reason=missingMetadata")
+            } else {
+                Logger(category: "NotificationTap").debug("[NotificationTap] source=notificationCenter notificationId=\(id) route=\(notification.route.debugDescription)")
+            }
             router.route(to: notification.route)
         case .markAllAsReadTapped:
             interactor.markAllAsRead()

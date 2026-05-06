@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import ImageIO
 
 struct AuthorizedAsyncImage: View {
     private let logger = Logger(category: "AuthorizedAsyncImage")
@@ -16,6 +17,7 @@ struct AuthorizedAsyncImage: View {
     var contentMode: ContentMode = .fill
     var cornerRadius: CGFloat = PikkoRadius.card
     var showsProgress = true
+    var downsampleMaxPixelSize: CGFloat = 1_200
 
     @State private var phase: Phase = .idle
 
@@ -49,26 +51,73 @@ struct AuthorizedAsyncImage: View {
         }
     }
 
-    @MainActor
     private func load() async {
         guard let path, !path.isEmpty else {
-            phase = .failure
+            await MainActor.run { phase = .failure }
             return
         }
 
-        phase = .loading
+        await MainActor.run { phase = .loading }
 
         do {
             let data = try await loader.imageData(for: path)
-            guard let uiImage = UIImage(data: data) else {
+            guard let uiImage = await ImageDownsampler.downsample(
+                data: data,
+                maxPixelSize: downsampleMaxPixelSize,
+                logger: logger
+            ) else {
                 logger.warning("Image decode failed. path=\(path)")
-                phase = .failure
+                await MainActor.run { phase = .failure }
                 return
             }
-            phase = .success(Image(uiImage: uiImage))
+            await MainActor.run {
+                phase = .success(Image(uiImage: uiImage))
+            }
         } catch {
-            phase = .failure
+            await MainActor.run { phase = .failure }
         }
+    }
+}
+
+private enum ImageDownsampler {
+    static func downsample(
+        data: Data,
+        maxPixelSize: CGFloat,
+        logger: Logger
+    ) async -> UIImage? {
+        let start = CFAbsoluteTimeGetCurrent()
+        let image = await Task.detached(priority: .utility) {
+            makeDownsampledImage(data: data, maxPixelSize: maxPixelSize)
+        }.value
+
+#if DEBUG
+        if let image {
+            let durationMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            logger.debug(
+                "[ImageDecode] originalSize=\(data.count) downsampledSize=\(Int(image.size.width))x\(Int(image.size.height)) durationMs=\(durationMs)"
+            )
+        }
+#endif
+        return image
+    }
+
+    private static func makeDownsampledImage(data: Data, maxPixelSize: CGFloat) -> UIImage? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
+            return UIImage(data: data)
+        }
+
+        let downsampleOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(1, Int(maxPixelSize))
+        ] as CFDictionary
+
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, downsampleOptions) else {
+            return UIImage(data: data)
+        }
+        return UIImage(cgImage: cgImage)
     }
 }
 

@@ -14,6 +14,7 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
     private let initialDraft: CommunityComposerDraft?
     private let communityRepository: CommunityRepository
     private let locationService: any LocationServiceProtocol
+    private let uploadPreprocessor = MediaUploadPreprocessor()
 
     init(
         mode: CommunityComposerMode = .create,
@@ -50,7 +51,13 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
         }
 
         do {
-            return try await communityRepository.uploadPostFiles(files)
+            let processedFiles = try files.map {
+                try uploadPreprocessor.process(
+                    $0,
+                    maxBytes: CommunityUploadConfiguration.maxAttachmentBytes
+                ).file
+            }
+            return try await communityRepository.uploadPostFiles(processedFiles)
         } catch {
             throw mapUploadError(error)
         }
@@ -247,6 +254,10 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
     }
 
     private func mapUploadError(_ error: Error) -> CommunityComposerFeatureError {
+        if let preprocessingError = error as? MediaUploadPreprocessorError {
+            return .validation(message: preprocessingError.localizedDescription)
+        }
+
         guard let networkError = error as? NetworkError else {
             return .unavailable(message: error.localizedDescription)
         }

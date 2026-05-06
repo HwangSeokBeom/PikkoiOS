@@ -58,12 +58,13 @@ final class DefaultAppNotificationService: AppNotificationService {
     func handleRemoteNotificationPayload(_ rawPayload: [String: String]) {
         let payload = RemoteNotificationPayload(rawPayload: rawPayload)
         diagnosticsStore.recordRemotePayload(payload.rawPayload)
-        Logger(category: "FCM").debugVerbose("[FCM] payload received keys=\(payload.rawPayload.keys.sorted().joined(separator: ","))")
+        Logger(category: "RemotePush").debug("[RemotePush] received payload keys=\(payload.rawPayload.keys.sorted().joined(separator: ",")) messageId=\(payload.messageID) type=\(payload.type ?? "unknown") source=\(payload.source ?? "unknown")")
         guard let notification = makeNotification(from: payload) else {
             Logger(category: "Notification").debugVerbose("[Notification] remote payload ignored type=unknown")
+            Logger(category: "Push").warning("[Push] missingRoutePayload keys=\(payload.rawPayload.keys.sorted().joined(separator: ","))")
             return
         }
-        save(notification, source: "remotePush")
+        save(notification, source: "remoteFCM")
     }
 
     func handleRemoteNotificationTapPayload(_ userInfo: [AnyHashable: Any]) {
@@ -73,13 +74,18 @@ final class DefaultAppNotificationService: AppNotificationService {
     func handleRemoteNotificationTapPayload(_ rawPayload: [String: String]) {
         let payload = RemoteNotificationPayload(rawPayload: rawPayload)
         diagnosticsStore.recordRemotePayload(payload.rawPayload)
+        let parsedRoute = NotificationRouteParser.parse(rawPayload: rawPayload, source: .remoteFCM)?.route
         if let notification = makeNotification(from: payload) {
-            save(notification, source: "remotePush")
+            save(notification, source: "remoteFCM")
             markAsRead(id: notification.id)
             diagnosticsStore.recordRemoteTapRoute(notification.route.debugDescription, pendingRoute: nil)
             router.route(to: notification.route)
+        } else if let parsedRoute, parsedRoute != .none {
+            diagnosticsStore.recordRemoteTapRoute(parsedRoute.debugDescription, pendingRoute: nil)
+            router.route(to: parsedRoute)
         } else {
             diagnosticsStore.recordRemoteTapRoute(AppNotificationRoute.none.debugDescription, pendingRoute: nil)
+            Logger(category: "Push").warning("[Push] missingRoutePayload keys=\(payload.rawPayload.keys.sorted().joined(separator: ","))")
             router.route(to: .none)
         }
     }
@@ -93,7 +99,7 @@ final class DefaultAppNotificationService: AppNotificationService {
         if payload.isChatMessage,
            let roomId = payload.string(for: RemoteNotificationPayload.chatRoomKeys),
            activeChatRoomTracker.activeRoomId == roomId {
-            Logger(category: "NotificationPresentation").debug("[NotificationPresentation] foreground banner suppressed source=remote reason=activeChatRoom roomId=\(roomId)")
+            Logger(category: "NotificationPresentation").debug("[NotificationPresentation] foreground banner suppressed source=remoteFCM reason=activeChatRoom roomId=\(roomId)")
             return true
         }
 
@@ -101,7 +107,7 @@ final class DefaultAppNotificationService: AppNotificationService {
            let postId = payload.string(for: RemoteNotificationPayload.postKeys),
            activeCommunityPostTracker.activePostId == postId,
            !payload.isCommunityMention {
-            Logger(category: "NotificationPresentation").debug("[NotificationPresentation] foreground banner suppressed source=remote reason=activePost postId=\(postId)")
+            Logger(category: "NotificationPresentation").debug("[NotificationPresentation] foreground banner suppressed source=remoteFCM reason=activePost postId=\(postId)")
             return true
         }
 
@@ -113,11 +119,11 @@ final class DefaultAppNotificationService: AppNotificationService {
         let normalizedOrderCode = orderCode.trimmed
         let normalizedStatus = currentStatus.trimmed
         guard !normalizedOrderCode.isEmpty, !normalizedStatus.isEmpty else {
-            return logSkippedNotification(id: "-", type: .orderStatus, reason: "invalidPayload", source: "appInternal")
+            return logSkippedNotification(id: "-", type: .orderStatus, reason: "invalidPayload", source: "appInternalDebug")
         }
         guard previousStatus?.trimmed != normalizedStatus else {
             let id = Self.stableID(parts: ["order", normalizedOrderCode, normalizedStatus])
-            return logSkippedNotification(id: id, type: .orderStatus, reason: "unchangedStatus", source: "appInternal")
+            return logSkippedNotification(id: id, type: .orderStatus, reason: "unchangedStatus", source: "appInternalDebug")
         }
 
         let id = Self.stableID(parts: ["order", normalizedOrderCode, normalizedStatus])
@@ -135,22 +141,22 @@ final class DefaultAppNotificationService: AppNotificationService {
         )
 
         Logger(category: "OrderNotification").debug("[OrderNotification] status changed orderCode=\(normalizedOrderCode) previous=\(previousStatus ?? "nil") current=\(normalizedStatus)")
-        return save(notification, source: "appInternal")
+        return save(notification, source: "appInternalDebug")
     }
 
     @discardableResult
     func handleChatMessageReceived(roomId: String, storeId: String?, title: String?, messageId: String?, senderId: String?, preview: String) -> AppNotificationSaveResult {
         let normalizedRoomId = roomId.trimmed
         guard !normalizedRoomId.isEmpty else {
-            return logSkippedNotification(id: "-", type: .chatMessage, reason: "invalidPayload", source: "appInternal")
+            return logSkippedNotification(id: "-", type: .chatMessage, reason: "invalidPayload", source: "appInternalDebug")
         }
         guard activeChatRoomTracker.activeRoomId != normalizedRoomId else {
             let id = messageId?.trimmed.nilIfEmpty ?? Self.stableID(parts: ["chat", normalizedRoomId, senderId?.trimmed ?? "-", preview.trimmed, Self.timeBucket()])
-            return logSkippedNotification(id: id, type: .chatMessage, reason: "activeChatRoom", source: "appInternal")
+            return logSkippedNotification(id: id, type: .chatMessage, reason: "activeChatRoom", source: "appInternalDebug")
         }
         if let currentUserID = currentUserIDProvider?(), senderId?.trimmed == currentUserID {
             let id = messageId?.trimmed.nilIfEmpty ?? Self.stableID(parts: ["chat", normalizedRoomId, senderId?.trimmed ?? "-", preview.trimmed, Self.timeBucket()])
-            return logSkippedNotification(id: id, type: .chatMessage, reason: "ownAction", source: "appInternal")
+            return logSkippedNotification(id: id, type: .chatMessage, reason: "ownAction", source: "appInternalDebug")
         }
 
         let normalizedMessageId = messageId?.trimmed.nilIfEmpty
@@ -167,7 +173,7 @@ final class DefaultAppNotificationService: AppNotificationService {
             route: .chatRoom(roomId: normalizedRoomId, storeId: storeId?.trimmed.nilIfEmpty, title: displayTitle),
             metadata: AppNotificationMetadata(roomId: normalizedRoomId, storeId: storeId?.trimmed.nilIfEmpty, messageId: normalizedMessageId, senderId: senderId?.trimmed.nilIfEmpty)
         )
-        return save(notification, source: "appInternal")
+        return save(notification, source: "appInternalDebug")
     }
 
     @discardableResult
@@ -249,25 +255,22 @@ final class DefaultAppNotificationService: AppNotificationService {
     }
 
     private func makeNotification(from payload: RemoteNotificationPayload) -> AppNotification? {
-        if payload.isChatMessage,
-           let roomId = payload.string(for: RemoteNotificationPayload.chatRoomKeys) {
+        let route = NotificationRouteParser.parse(rawPayload: payload.rawPayload, source: .remoteFCM)?.route
+        switch route {
+        case .chatRoom(let roomId, _, _):
             return payload.chatNotification(roomId: roomId)
-        }
-        if payload.isOrderStatus,
-           let orderCode = payload.string(for: RemoteNotificationPayload.orderCodeKeys) {
+        case .orderDetail(let orderCode):
             return payload.orderNotification(orderCode: orderCode)
-        }
-        if payload.isCommunityComment,
-           let postId = payload.string(for: RemoteNotificationPayload.postKeys) {
+        case .communityPost(let postId, _):
+            if payload.isCommunityLike {
+                return payload.communityNotification(postId: postId, type: .communityLike, eventType: "like")
+            }
+            if payload.isCommunityMention {
+                return payload.communityNotification(postId: postId, type: .communityMention, eventType: "mention")
+            }
             return payload.communityNotification(postId: postId, type: .communityComment, eventType: "comment")
-        }
-        if payload.isCommunityLike,
-           let postId = payload.string(for: RemoteNotificationPayload.postKeys) {
-            return payload.communityNotification(postId: postId, type: .communityLike, eventType: "like")
-        }
-        if payload.isCommunityMention,
-           let postId = payload.string(for: RemoteNotificationPayload.postKeys) {
-            return payload.communityNotification(postId: postId, type: .communityMention, eventType: "mention")
+        default:
+            break
         }
         guard payload.title != nil || payload.body != nil else { return nil }
         return payload.systemNotification()
@@ -290,17 +293,17 @@ final class DefaultAppNotificationService: AppNotificationService {
         let normalizedActorUserId = actorUserId?.trimmed.nilIfEmpty
         let id = Self.stableID(parts: ["community", normalizedPostId, normalizedCommentId ?? "-", normalizedActorUserId ?? "-", eventType])
 
-        Logger(category: "CommunityNotification").debug("[CommunityNotification] \(eventType) detected postId=\(normalizedPostId.isEmpty ? "-" : normalizedPostId) commentId=\(normalizedCommentId ?? "-") actorUserId=\(normalizedActorUserId ?? "-") source=appInternal")
+        Logger(category: "CommunityNotification").debug("[CommunityNotification] \(eventType) detected postId=\(normalizedPostId.isEmpty ? "-" : normalizedPostId) commentId=\(normalizedCommentId ?? "-") actorUserId=\(normalizedActorUserId ?? "-") source=appInternalDebug")
 
         guard !normalizedPostId.isEmpty else {
-            return logSkippedNotification(id: "-", type: type, reason: "invalidPayload", source: "appInternal")
+            return logSkippedNotification(id: "-", type: type, reason: "invalidPayload", source: "appInternalDebug")
         }
         if let currentUserID = currentUserIDProvider?(),
            normalizedActorUserId == currentUserID {
-            return logSkippedNotification(id: id, type: type, reason: "ownAction", source: "appInternal")
+            return logSkippedNotification(id: id, type: type, reason: "ownAction", source: "appInternalDebug")
         }
         if activeCommunityPostTracker.activePostId == normalizedPostId, type != .communityMention {
-            return logSkippedNotification(id: id, type: type, reason: "activePost", source: "appInternal")
+            return logSkippedNotification(id: id, type: type, reason: "activePost", source: "appInternalDebug")
         }
 
         let notification = AppNotification(
@@ -313,7 +316,7 @@ final class DefaultAppNotificationService: AppNotificationService {
             route: .communityPost(postId: normalizedPostId, commentId: normalizedCommentId),
             metadata: AppNotificationMetadata(postId: normalizedPostId, commentId: normalizedCommentId, actorUserId: normalizedActorUserId, communityEventType: eventType)
         )
-        return save(notification, source: "appInternal")
+        return save(notification, source: "appInternalDebug")
     }
 
     @discardableResult
@@ -416,21 +419,21 @@ final class NoopAppNotificationService: AppNotificationService {
 }
 
 private struct RemoteNotificationPayload {
-    static let typeKeys = ["type", "notification_type", "event", "category"]
+    static let typeKeys = ["type", "notificationType", "notification_type", "eventType", "event_type", "event", "category"]
     static let titleKeys = ["title"]
     static let bodyKeys = ["body", "message", "preview", "content"]
-    static let orderCodeKeys = ["order_code", "orderCode", "order_id", "orderId"]
+    static let orderCodeKeys = ["orderCode", "order_code", "orderId", "order_id"]
     static let orderStatusKeys = ["status", "order_status", "orderStatus"]
     static let storeNameKeys = ["store_name", "storeName"]
-    static let chatRoomKeys = ["room_id", "roomId", "chat_room_id", "chatRoomId"]
-    static let storeIdKeys = ["store_id", "storeId"]
-    static let messageIdKeys = ["message_id", "messageId", "chat_id", "chatId", "gcm.message_id", "google.c.a.c_id"]
-    static let senderIdKeys = ["sender_id", "senderId"]
-    static let postKeys = ["post_id", "postId", "community_post_id", "communityPostId"]
-    static let commentKeys = ["comment_id", "commentId", "reply_id", "replyId"]
-    static let actorUserKeys = ["actor_user_id", "actorUserId", "actor_id", "actorId"]
+    static let chatRoomKeys = ["chatRoomId", "chat_room_id", "roomId", "room_id"]
+    static let storeIdKeys = ["storeId", "store_id"]
+    static let messageIdKeys = ["messageId", "message_id", "chatId", "chat_id", "gcm.message_id", "google.message_id", "google.c.a.c_id"]
+    static let senderIdKeys = ["senderId", "sender_id"]
+    static let postKeys = ["postId", "post_id", "communityPostId", "community_post_id"]
+    static let commentKeys = ["commentId", "comment_id", "replyId", "reply_id"]
+    static let actorUserKeys = ["actorUserId", "actor_user_id", "actorId", "actor_id"]
     static let actorNameKeys = ["actor_name", "actorName"]
-    static let communityEventKeys = ["event_type", "eventType", "community_event_type", "communityEventType"]
+    static let communityEventKeys = ["eventType", "event_type", "communityEventType", "community_event_type"]
     static let previewKeys = ["preview", "content", "comment_preview", "commentPreview", "body", "message"]
 
     let rawPayload: [String: String]
@@ -440,26 +443,14 @@ private struct RemoteNotificationPayload {
     }
 
     init(userInfo: [AnyHashable: Any]) {
-        var values: [String: String] = [:]
-        for (key, value) in userInfo {
-            guard let key = key as? String else { continue }
-            if let string = value as? String {
-                values[key] = string
-            } else if let number = value as? NSNumber {
-                values[key] = number.stringValue
-            } else if let dictionary = value as? [String: Any] {
-                for (nestedKey, nestedValue) in dictionary {
-                    if let string = nestedValue as? String {
-                        values[nestedKey] = string
-                    }
-                }
-            }
-        }
-        rawPayload = values
+        rawPayload = NotificationRouteParser.flattenedPayload(from: userInfo)
     }
 
     var title: String? { string(for: Self.titleKeys) }
     var body: String? { string(for: Self.bodyKeys) }
+    var type: String? { string(for: Self.typeKeys) }
+    var source: String? { string(for: ["source", "debug_source"]) }
+    var messageID: String { string(for: Self.messageIdKeys) ?? "unknown" }
     var typeValue: String { string(for: Self.typeKeys)?.lowercased() ?? "" }
     var communityEventValue: String { string(for: Self.communityEventKeys)?.lowercased() ?? "" }
 

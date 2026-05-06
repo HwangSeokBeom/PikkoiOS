@@ -38,7 +38,9 @@ struct VideoListView: View {
                 content
             }
         }
-        .pikkoScreen(title: "영상")
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .refreshable {
             await presenter.send(.refreshRequested)
         }
@@ -51,9 +53,6 @@ struct VideoListView: View {
                     Color.clear
                         .frame(height: 0)
                         .id(ScrollAnchor.top)
-
-                    header
-
                     if let errorMessage = presenter.viewState.errorMessage {
                         ToastView(message: errorMessage, tone: .warning)
                     }
@@ -95,18 +94,5 @@ struct VideoListView: View {
                 Task { await presenter.send(.refreshRequested) }
             }
         }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
-            Text("영상")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(PikkoColor.primaryText)
-
-            Text("픽업 메뉴를 영상으로 미리 확인해보세요.")
-                .font(PikkoTypography.body)
-                .foregroundStyle(PikkoColor.secondaryText)
-        }
-        .padding(.bottom, PikkoSpacing.xs)
     }
 }

@@ -10,6 +10,7 @@ struct OrderBuilder {
     private let imageLoader: any AuthorizedImageLoading
     private let makeAuthView: () -> AnyView
     private let makeOrderDetailView: (String) -> AnyView
+    private let makeCartView: () -> CartRootView
     private let onExploreHome: () -> Void
 
     init(
@@ -21,6 +22,7 @@ struct OrderBuilder {
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping () -> AnyView,
         makeOrderDetailView: @escaping (String) -> AnyView,
+        makeCartView: @escaping () -> CartRootView,
         onExploreHome: @escaping () -> Void
     ) {
         self.initialOrderID = initialOrderID
@@ -31,6 +33,7 @@ struct OrderBuilder {
         self.imageLoader = imageLoader
         self.makeAuthView = makeAuthView
         self.makeOrderDetailView = makeOrderDetailView
+        self.makeCartView = makeCartView
         self.onExploreHome = onExploreHome
     }
 
@@ -50,7 +53,8 @@ struct OrderBuilder {
             router: router,
             imageLoader: imageLoader,
             makeAuthView: makeAuthView,
-            makeOrderDetailView: makeOrderDetailView
+            makeOrderDetailView: makeOrderDetailView,
+            makeCartView: makeCartView
         )
     }
 }

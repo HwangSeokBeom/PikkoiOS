@@ -20,6 +20,8 @@ struct VideoPlayerViewState: Equatable {
     var isQualityMenuPresented = false
     var isLikeUpdating = false
     var toastMessage: String?
+    var currentTime: Double = 0
+    var duration: Double?
 
     var qualityTitle: String {
         if userSelectedQuality == "auto" {
@@ -30,5 +32,12 @@ struct VideoPlayerViewState: Equatable {
             return "자동"
         }
         return userSelectedQuality
+    }
+
+    var playbackProgress: Double {
+        guard let duration, duration.isFinite, duration > 0 else {
+            return 0
+        }
+        return min(max(currentTime / duration, 0), 1)
     }
 }

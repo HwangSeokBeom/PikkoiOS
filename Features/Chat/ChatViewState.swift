@@ -41,6 +41,18 @@ struct ChatMessageRowViewState: Equatable, Identifiable {
     }
 }
 
+enum ChatScrollTarget: Equatable {
+    case bottom
+    case message(id: String)
+}
+
+struct ChatScrollCommand: Equatable, Identifiable {
+    let id: Int
+    let target: ChatScrollTarget
+    let reason: String
+    let animated: Bool
+}
+
 struct ChatViewState: Equatable {
     var mode: ChatScreenMode = .roomList
     var title = "채팅"
@@ -59,6 +71,9 @@ struct ChatViewState: Equatable {
     var primaryActionTitle: String?
     var requiresAuthentication = false
     var isExternalDetailPresentation = false
+    var scrollCommand: ChatScrollCommand?
+    var showsNewMessageIndicator = false
+    var newMessageCount = 0
 
     var showsEmptyState: Bool {
         !isLoading && mode == .roomList && rooms.isEmpty && emptyTitle != nil
@@ -70,7 +85,6 @@ struct ChatViewState: Equatable {
 
     var canSend: Bool {
         selectedRoomID != nil
-            && !isLoading
             && !isSending
             && !isUploadingFiles
             && (

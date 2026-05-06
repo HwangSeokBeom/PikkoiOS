@@ -22,6 +22,8 @@ final class ChatPresenter: ObservableObject {
     private var messageRequestID = 0
     private var realtimeRoomID: String?
     private var currentContext: ChatRoomContext?
+    private var isNearBottom = true
+    private var scrollCommandID = 0
     private var cancellables = Set<AnyCancellable>()
 
     init(
@@ -89,26 +91,40 @@ final class ChatPresenter: ObservableObject {
                 await send(.refreshRequested)
             }
         case .roomTapped(let roomID):
+            if viewState.mode == .roomDetail, viewState.selectedRoomID == normalizedRouteRoomID(from: roomID) {
+                Logger.shared.debug("[ChatNavigation] skipDuplicatePush roomId=\(viewState.selectedRoomID ?? "-")")
+                return
+            }
             guard let entry = listEntries.first(where: { $0.id == roomID }) else { return }
             switch entry {
             case .storeScoped(let summary):
+                Logger.shared.debug("[ChatNavigation] push roomId=\(summary.serverRoomID) reason=storeScopedRow")
                 selectedRoom = nil
                 await showLocalConversation(summary)
             case .server(let room):
+                Logger.shared.debug("[ChatNavigation] push roomId=\(room.id) reason=serverRoomRow")
                 selectedRoom = room
                 await showRoom(room)
             }
         case .backToRoomsTapped:
             guard interactor.target == nil else { return }
+            let pathCountBefore = viewState.mode == .roomDetail ? 1 : 0
             selectedRoom = nil
             messages = []
+            isNearBottom = true
             realtimeRoomID = nil
+            messageRequestID += 1
             activeChatRoomTracker.activeRoomId = nil
             interactor.stopRealtime()
             viewState.mode = .roomList
             viewState.title = "채팅"
             viewState.messages = []
+            viewState.showsNewMessageIndicator = false
+            viewState.newMessageCount = 0
             applyRooms()
+            Logger.shared.debug(
+                "[ChatNavigation] pop from=chatRoom pathCountBefore=\(pathCountBefore) pathCountAfter=0"
+            )
         case .messageTextChanged(let text):
             viewState.messageText = text
         case .filesSelected(let files):
@@ -117,6 +133,18 @@ final class ChatPresenter: ObservableObject {
             viewState.attachedFilePaths.removeAll { $0 == path }
         case .sendMessageTapped:
             await sendMessage()
+        case .nearBottomChanged(let nearBottom, let distance):
+            guard isNearBottom != nearBottom else { return }
+            isNearBottom = nearBottom
+            Logger.shared.debug("[ChatScrollState] nearBottom=\(nearBottom) distance=\(distance)")
+            if nearBottom {
+                viewState.showsNewMessageIndicator = false
+                viewState.newMessageCount = 0
+            }
+        case .newMessageIndicatorTapped:
+            viewState.showsNewMessageIndicator = false
+            viewState.newMessageCount = 0
+            enqueueScroll(target: .bottom, reason: "newMessageIndicator", animated: true)
         }
     }
 
@@ -183,6 +211,11 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func openExistingRoom(roomID: String, title: String) async {
+        if viewState.mode == .roomDetail, viewState.selectedRoomID == roomID {
+            Logger.shared.debug("[ChatNavigation] skipDuplicatePush roomId=\(roomID)")
+            return
+        }
+        Logger.shared.debug("[ChatNavigation] push roomId=\(roomID) reason=externalRoomTarget")
         let cachedContext = interactor.cachedStoreContext(roomID: roomID)
         let displayTitle = cachedContext?.storeName.nilIfEmpty
             ?? title.nilIfEmpty
@@ -204,6 +237,10 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func showRoom(_ room: ChatRoom) async {
+        guard viewState.selectedRoomID != room.id || viewState.mode != .roomDetail else {
+            Logger.shared.debug("[ChatNavigation] skipDuplicatePush roomId=\(room.id)")
+            return
+        }
         viewState.mode = .roomDetail
         viewState.selectedRoomID = room.id
         applyContext(interactor.makeContext(for: room, entryPoint: .chatList))
@@ -211,6 +248,11 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func showLocalConversation(_ summary: ChatLocalConversationSummary) async {
+        if viewState.mode == .roomDetail,
+           viewState.selectedRoomID == summary.serverRoomID {
+            Logger.shared.debug("[ChatNavigation] skipDuplicatePush roomId=\(summary.serverRoomID)")
+            return
+        }
         viewState.mode = .roomDetail
         viewState.selectedRoomID = summary.serverRoomID
         applyContext(interactor.makeContext(for: summary))
@@ -242,6 +284,7 @@ final class ChatPresenter: ObservableObject {
             guard requestID == messageRequestID else { return }
             messages = loadedMessages
             applyMessages()
+            enqueueInitialScroll()
             if currentContext?.hasRoomIDCollision != true {
                 viewState.errorMessage = nil
             }
@@ -265,6 +308,7 @@ final class ChatPresenter: ObservableObject {
                 self.merge(message)
                 self.updateRoomList(with: message)
                 self.applyMessages()
+                self.applyScrollPolicyForReceivedMessage(message)
             }
         } catch {
             Logger.shared.warning("[Chat] realtime connection failed: \(error.localizedDescription)")
@@ -309,6 +353,7 @@ final class ChatPresenter: ObservableObject {
             guard requestID == messageRequestID else { return }
             messages = loadedMessages
             applyMessages()
+            enqueueScroll(target: .bottom, reason: "refresh", animated: false)
             if currentContext?.hasRoomIDCollision != true {
                 viewState.errorMessage = nil
             }
@@ -352,6 +397,7 @@ final class ChatPresenter: ObservableObject {
             viewState.attachedFilePaths = []
             Logger.shared.debug("[ChatSend] optimisticAppend localTemporaryId=\(localTemporaryID) messageCount=\(messages.count)")
             applyMessages()
+            applyScrollAction(.optimisticAppend, localTemporaryId: localTemporaryID)
             let message = try await interactor.sendMessage(scope: scope, content: content, files: files)
             let serverChatID = message.effectiveServerChatID ?? message.id
             Logger.shared.debug("[ChatSend] postSuccess localTemporaryId=\(localTemporaryID) serverChatId=\(serverChatID)")
@@ -377,6 +423,7 @@ final class ChatPresenter: ObservableObject {
             messages = try await interactor.replacePendingMessage(localID: localTemporaryID, with: message, scope: scope)
             updateRoomList(with: message)
             applyMessages()
+            applyScrollAction(.echoReplace(localTemporaryId: localTemporaryID), localTemporaryId: localTemporaryID)
         } catch {
             if let pendingMessageID {
                 messages = (try? await interactor.markMessageFailed(messageID: pendingMessageID, scope: currentScope(roomID: roomID))) ?? messages
@@ -428,7 +475,10 @@ final class ChatPresenter: ObservableObject {
         viewState.messages = []
         viewState.selectedRoomID = nil
         currentContext = nil
+        isNearBottom = true
         activeChatRoomTracker.activeRoomId = nil
+        viewState.showsNewMessageIndicator = false
+        viewState.newMessageCount = 0
         viewState.emptyTitle = viewState.rooms.isEmpty ? "아직 채팅방이 없어요" : nil
         viewState.emptyMessage = viewState.rooms.isEmpty ? "상대방과 대화를 시작하면 여기에 표시돼요." : nil
         viewState.primaryActionTitle = viewState.rooms.isEmpty ? "다시 불러오기" : nil
@@ -567,6 +617,8 @@ final class ChatPresenter: ObservableObject {
         currentContext = context
         activeChatRoomTracker.activeRoomId = context.roomID
         viewState.title = context.displayTitle
+        Logger.shared.debug("[ChatRoute] entered source=\(context.entryPoint.logValue) roomId=\(context.roomID)")
+        Logger.shared.debug("[ChatRoomState] roomId=\(context.roomID) metadataLoaded=\(context.storeName != nil || context.opponentID != nil) composerEnabled=\(viewState.selectedRoomID != nil)")
         Logger.shared.debug(
             "[ChatNavigation] source=\(context.entryPoint.logValue) roomId=\(context.roomID) storeId=\(context.storeID ?? "-") opponentId=\(context.opponentID ?? "-") title=\(context.displayTitle)"
         )
@@ -592,11 +644,71 @@ final class ChatPresenter: ObservableObject {
         )
     }
 
+    private func enqueueInitialScroll() {
+        let action = ChatScrollPolicy.action(for: .initialLoad(targetMessageId: nil))
+        Logger.shared.debug("[ChatScroll] initialScroll reason=deepLink target=latest")
+        applyScrollActionResult(action, localTemporaryId: nil)
+    }
+
+    private func applyScrollPolicyForReceivedMessage(_ message: ChatMessage) {
+        let senderIsCurrentUser = message.sender.id == interactor.currentUserID
+        if senderIsCurrentUser {
+            applyScrollAction(.echoReplace(localTemporaryId: message.effectiveLocalTemporaryID), localTemporaryId: message.effectiveLocalTemporaryID)
+            return
+        }
+
+        let action = ChatScrollPolicy.action(for: .messageReceived(senderIsCurrentUser: false, isNearBottom: isNearBottom))
+        Logger.shared.debug("[ChatScroll] messageReceived sender=other isNearBottom=\(isNearBottom) action=\(action.logValue)")
+        applyScrollActionResult(action, localTemporaryId: nil)
+    }
+
+    private func applyScrollAction(_ input: ChatScrollInput, localTemporaryId: String?) {
+        let action = ChatScrollPolicy.action(for: input)
+        switch input {
+        case .optimisticAppend:
+            Logger.shared.debug("[ChatScroll] messageAppended sender=self action=scrollToBottom reason=optimistic")
+        case .echoReplace:
+            Logger.shared.debug("[ChatScroll] echoReplace action=keepPosition localTemporaryId=\(localTemporaryId ?? "-")")
+        case .paginationPrepend:
+            Logger.shared.debug("[ChatScroll] paginationPrepend action=preservePosition")
+        case .initialLoad, .messageReceived:
+            break
+        }
+        applyScrollActionResult(action, localTemporaryId: localTemporaryId)
+    }
+
+    private func applyScrollActionResult(_ action: ChatScrollActionResult, localTemporaryId: String?) {
+        switch action {
+        case .scrollToBottom(let reason):
+            enqueueScroll(target: .bottom, reason: reason, animated: true)
+        case .scrollToMessage(let id, let reason):
+            enqueueScroll(target: .message(id: id), reason: reason, animated: true)
+        case .showNewMessageIndicator:
+            viewState.newMessageCount += 1
+            viewState.showsNewMessageIndicator = true
+            Logger.shared.debug("[ChatScroll] messageReceived sender=other isNearBottom=false action=showNewMessageIndicator")
+        case .keepPosition:
+            _ = localTemporaryId
+        case .preservePosition:
+            break
+        }
+    }
+
+    private func enqueueScroll(target: ChatScrollTarget, reason: String, animated: Bool) {
+        scrollCommandID += 1
+        viewState.scrollCommand = ChatScrollCommand(id: scrollCommandID, target: target, reason: reason, animated: animated)
+        Logger.shared.debug("[ChatScroll] enqueue target=\(target.logValue) reason=\(reason)")
+    }
+
     private func currentScope(roomID: String) -> ChatRoomScope {
         if let currentContext, currentContext.roomID == roomID {
             return currentContext.localCacheScope
         }
         return ChatRoomScope(roomID: roomID, storeID: nil, opponentID: nil)
+    }
+
+    private func normalizedRouteRoomID(from rowID: String) -> String {
+        rowID.hasPrefix("server:") ? String(rowID.dropFirst("server:".count)) : rowID
     }
 
     private func deduplicatedRooms(_ rooms: [ChatRoom]) -> [ChatRoom] {

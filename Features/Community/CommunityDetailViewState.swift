@@ -36,6 +36,7 @@ struct CommunityDetailCommentSectionState: Equatable {
     var composerText = ""
     var editingCommentID: String?
     var editingDraftText = ""
+    var highlightedCommentID: String?
     var emptyState: CommunityDetailCommentEmptyState?
     var requiresAuthentication = false
 }

@@ -9,10 +9,12 @@ struct ChatRootView: View {
         static let composerBottomPadding: CGFloat = PikkoSpacing.sm
         static let messageListBottomGap: CGFloat = PikkoSpacing.lg
         static let geometryTolerance: CGFloat = 1
+        static let nearBottomThreshold: CGFloat = 140
     }
 
     private enum CoordinateSpaceName {
         static let roomDetailRoot = "ChatRoomDetailRoot"
+        static let messages = "ChatMessagesScroll"
     }
 
     @StateObject private var presenter: ChatPresenter
@@ -147,7 +149,7 @@ struct ChatRootView: View {
 
     private var roomDetailView: some View {
         GeometryReader { rootProxy in
-            roomDetailContent(containerWidth: rootProxy.size.width)
+            roomDetailContent(containerSize: rootProxy.size)
                 .coordinateSpace(name: CoordinateSpaceName.roomDetailRoot)
                 .onAppear {
                     isRoomDetailVisible = true
@@ -169,7 +171,7 @@ struct ChatRootView: View {
         }
     }
 
-    private func roomDetailContent(containerWidth: CGFloat) -> some View {
+    private func roomDetailContent(containerSize: CGSize) -> some View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: PikkoSpacing.sm) {
@@ -205,11 +207,24 @@ struct ChatRootView: View {
                                 .id(message.id)
                         }
                     }
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id(ChatBottomAnchor.id)
+                        .background(
+                            GeometryReader { bottomProxy in
+                                Color.clear.preference(
+                                    key: ChatBottomDistancePreferenceKey.self,
+                                    value: bottomProxy.frame(in: .named(CoordinateSpaceName.messages)).maxY
+                                )
+                            }
+                        )
                 }
                 .padding(.horizontal, PikkoSpacing.xl)
                 .padding(.top, PikkoSpacing.lg)
                 .padding(.bottom, messageListBottomInset)
             }
+            .coordinateSpace(name: CoordinateSpaceName.messages)
             .scrollDismissesKeyboard(.interactively)
             .contentMargins(.bottom, messageListBottomInset, for: .scrollIndicators)
             .onAppear {
@@ -221,17 +236,25 @@ struct ChatRootView: View {
             .onChange(of: keyboardObserver.keyboardHeight) { _, _ in
                 updateMessageListInsets()
             }
-            .onChange(of: presenter.viewState.messages.last?.id) { _, id in
-                guard let id else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(id, anchor: .bottom)
-                }
+            .onPreferenceChange(ChatBottomDistancePreferenceKey.self) { bottomY in
+                updateNearBottomState(bottomY: bottomY, containerHeight: containerSize.height)
+            }
+            .onChange(of: presenter.viewState.scrollCommand) { _, command in
+                guard let command else { return }
+                executeScrollCommand(command, proxy: proxy)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if presenter.viewState.mode == .roomDetail {
-                messageComposer(containerWidth: containerWidth)
+                messageComposer(containerWidth: containerSize.width)
                     .zIndex(10)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if presenter.viewState.showsNewMessageIndicator {
+                newMessageIndicator
+                    .padding(.bottom, measuredComposerHeight + composerBottomPadding + PikkoSpacing.sm)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(.easeOut(duration: keyboardObserver.animationDuration), value: keyboardObserver.keyboardHeight)
@@ -252,12 +275,34 @@ struct ChatRootView: View {
     }
 
     private var customTabBarAvoidanceHeight: CGFloat {
-        RootTabBarMetrics.contentHeight + RootTabBarMetrics.floatingCenterOverlap
+        RootTabBarMetrics.contentHeight
+    }
+
+    private var newMessageIndicator: some View {
+        Button {
+            Task { await presenter.send(.newMessageIndicatorTapped) }
+        } label: {
+            HStack(spacing: PikkoSpacing.xs) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                Text(presenter.viewState.newMessageCount > 1 ? "새 메시지 \(presenter.viewState.newMessageCount)개" : "새 메시지")
+                    .font(PikkoTypography.captionStrong)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, PikkoSpacing.md)
+            .frame(height: 36)
+            .background(PikkoColor.accent)
+            .clipShape(Capsule())
+            .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+        }
+        .buttonStyle(.plain)
     }
 
     private func messageComposer(containerWidth: CGFloat) -> some View {
         let isUploadingFiles = presenter.viewState.isUploadingFiles
         let resolvedContainerWidth = max(containerWidth, 0)
+        let roomIdExists = presenter.viewState.selectedRoomID != nil
+        Logger.shared.debug("[ChatComposer] render visible=true roomIdExists=\(roomIdExists) inputEnabled=\(presenter.viewState.canSend) reason=roomDetail")
         return VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
             if !presenter.viewState.attachedFilePaths.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -450,6 +495,36 @@ struct ChatRootView: View {
             )
         }
         await presenter.send(.filesSelected(files))
+    }
+
+    private func executeScrollCommand(_ command: ChatScrollCommand, proxy: ScrollViewProxy) {
+        let action = {
+            switch command.target {
+            case .bottom:
+                proxy.scrollTo(ChatBottomAnchor.id, anchor: .bottom)
+            case .message(let id):
+                proxy.scrollTo(id, anchor: .center)
+            }
+        }
+
+        Logger.shared.debug("[ChatScroll] execute target=\(command.target.logValue) animated=\(command.animated)")
+        if command.animated {
+            withAnimation(.easeOut(duration: 0.22)) {
+                action()
+            }
+        } else {
+            action()
+        }
+    }
+
+    private func updateNearBottomState(bottomY: CGFloat, containerHeight: CGFloat) {
+        guard bottomY.isFinite, containerHeight.isFinite, containerHeight > 0 else { return }
+        let visibleBottom = containerHeight - measuredComposerHeight - composerBottomPadding
+        let distance = max(0, bottomY - visibleBottom)
+        let nearBottom = distance <= Layout.nearBottomThreshold
+        Task {
+            await presenter.send(.nearBottomChanged(nearBottom, distance: distance))
+        }
     }
 
     private func updateMeasuredComposerHeight(_ height: CGFloat) {
@@ -770,6 +845,18 @@ private struct ChatComposerHeightPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+private enum ChatBottomAnchor {
+    static let id = "chat-bottom-anchor"
+}
+
+private struct ChatBottomDistancePreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 

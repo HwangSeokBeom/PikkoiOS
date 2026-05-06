@@ -378,17 +378,6 @@ private extension CommunityComposerView {
         let contentType = item.supportedContentTypes.first
         let baseName = "community-\(Int(Date().timeIntervalSince1970))-\(index)"
 
-        if contentType?.conforms(to: .image) == true,
-           let image = UIImage(data: rawData),
-           let jpegData = image.jpegData(compressionQuality: 0.88),
-           !jpegData.isEmpty {
-            return CommunityPostUploadFile(
-                data: jpegData,
-                fileName: "\(baseName).jpg",
-                mimeType: "image/jpeg"
-            )
-        }
-
         let fileExtension = contentType?.preferredFilenameExtension ?? "bin"
         let mimeType = contentType?.preferredMIMEType ?? "application/octet-stream"
 

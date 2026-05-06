@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 struct CommunityDetailBuilder {
     private let postID: String
+    private let initialCommentID: String?
     private let communityRepository: CommunityRepository
     private let locationService: any LocationServiceProtocol
     private let sessionStore: SessionStore
@@ -17,6 +18,7 @@ struct CommunityDetailBuilder {
 
     init(
         postID: String,
+        initialCommentID: String? = nil,
         communityRepository: CommunityRepository,
         locationService: any LocationServiceProtocol,
         sessionStore: SessionStore,
@@ -30,6 +32,7 @@ struct CommunityDetailBuilder {
         makeChatView: @escaping (ChatTarget) -> AnyView
     ) {
         self.postID = postID
+        self.initialCommentID = initialCommentID
         self.communityRepository = communityRepository
         self.locationService = locationService
         self.sessionStore = sessionStore
@@ -53,6 +56,7 @@ struct CommunityDetailBuilder {
         )
         let presenter = CommunityDetailPresenter(
             postID: postID,
+            initialCommentID: initialCommentID,
             interactor: interactor,
             router: router,
             sessionStore: sessionStore,

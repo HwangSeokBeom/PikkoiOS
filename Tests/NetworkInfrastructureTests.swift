@@ -449,6 +449,131 @@ final class NetworkInfrastructureTests: XCTestCase {
         XCTAssertEqual(storedTokens, StoredTokens(accessToken: "new-access", refreshToken: "new-refresh"))
     }
 
+    func testAPIClientDeduplicatesConcurrentGETRequests() async throws {
+        let tokenStore = StubTokenStore(
+            tokens: StoredTokens(accessToken: "access-token", refreshToken: "refresh-token")
+        )
+        let configuration = AppConfiguration(
+            environment: .development,
+            baseURL: URL(string: "https://example.com")!,
+            seSACKey: "test-sesac-key"
+        )
+        let requestBuilder = RequestBuilder(configuration: configuration, tokenStore: tokenStore)
+
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: sessionConfiguration)
+
+        let refreshCoordinator = TokenRefreshCoordinator(
+            session: session,
+            requestBuilder: requestBuilder,
+            tokenStore: tokenStore
+        )
+        let apiClient = APIClient(
+            session: session,
+            requestBuilder: requestBuilder,
+            tokenRefreshCoordinator: refreshCoordinator
+        )
+
+        final class RequestCounter {
+            private let lock = NSLock()
+            private(set) var count = 0
+
+            func increment() {
+                lock.lock()
+                count += 1
+                lock.unlock()
+            }
+        }
+
+        let counter = RequestCounter()
+        URLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/stores")
+            counter.increment()
+            Thread.sleep(forTimeInterval: 0.1)
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                #"{"value":"ok"}"#.data(using: .utf8)!
+            )
+        }
+
+        let endpoint = Endpoint<TestResponseDTO>(
+            path: "/v1/stores",
+            method: .get,
+            authorizationPolicy: .accessToken
+        )
+
+        async let first = apiClient.execute(endpoint)
+        async let second = apiClient.execute(endpoint)
+        let responses = try await [first, second]
+
+        XCTAssertEqual(responses, [TestResponseDTO(value: "ok"), TestResponseDTO(value: "ok")])
+        XCTAssertEqual(counter.count, 1)
+    }
+
+    func testAPIClientReturnsCachedGETResponseWithinTTL() async throws {
+        let tokenStore = StubTokenStore(
+            tokens: StoredTokens(accessToken: "access-token", refreshToken: "refresh-token")
+        )
+        let configuration = AppConfiguration(
+            environment: .development,
+            baseURL: URL(string: "https://example.com")!,
+            seSACKey: "test-sesac-key"
+        )
+        let requestBuilder = RequestBuilder(configuration: configuration, tokenStore: tokenStore)
+
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: sessionConfiguration)
+
+        let refreshCoordinator = TokenRefreshCoordinator(
+            session: session,
+            requestBuilder: requestBuilder,
+            tokenStore: tokenStore
+        )
+        let apiClient = APIClient(
+            session: session,
+            requestBuilder: requestBuilder,
+            tokenRefreshCoordinator: refreshCoordinator
+        )
+
+        final class RequestCounter {
+            var count = 0
+        }
+
+        let counter = RequestCounter()
+        URLProtocolStub.requestHandler = { request in
+            counter.count += 1
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                #"{"value":"cached"}"#.data(using: .utf8)!
+            )
+        }
+
+        let endpoint = Endpoint<TestResponseDTO>(
+            path: "/v1/stores",
+            method: .get,
+            authorizationPolicy: .accessToken
+        )
+
+        let first = try await apiClient.execute(endpoint)
+        let second = try await apiClient.execute(endpoint)
+
+        XCTAssertEqual(first, TestResponseDTO(value: "cached"))
+        XCTAssertEqual(second, TestResponseDTO(value: "cached"))
+        XCTAssertEqual(counter.count, 1)
+    }
+
     func testAPIClientRefreshesOn419AndRetriesOriginalRequestOnce() async throws {
         let tokenStore = StubTokenStore(
             tokens: StoredTokens(accessToken: "expired-access", refreshToken: "refresh-token")

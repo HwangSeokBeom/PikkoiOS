@@ -22,12 +22,16 @@ struct Logger: Sendable {
     }
 
     func debug(_ message: String) {
+#if DEBUG
         log(message, level: .debug)
+#endif
     }
 
     func debugVerbose(_ message: String) {
+#if DEBUG
         guard Self.isVerboseDebugEnabled else { return }
         log(message, level: .debug)
+#endif
     }
 
     func info(_ message: String) {
@@ -160,9 +164,7 @@ enum SensitiveLogRedactor {
             return "exists=false"
         }
 
-        let prefix = String(token.prefix(4))
-        let suffix = token.count > 8 ? String(token.suffix(4)) : ""
-        return "exists=true prefix=\(prefix)...suffix=\(suffix) length=\(token.count)"
+        return "exists=true length=\(token.count)"
     }
 
     private static func redactValues(for key: String, in message: String) -> String {

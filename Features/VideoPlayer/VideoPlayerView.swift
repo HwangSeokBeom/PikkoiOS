@@ -91,6 +91,7 @@ struct VideoPlayerView: View {
             }
 
             overlayContent
+            playbackControlBar
         }
         .aspectRatio(16 / 9, contentMode: .fit)
         .overlay {
@@ -122,28 +123,82 @@ struct VideoPlayerView: View {
             }
             .buttonStyle(.plain)
         case .playing:
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    Button {
-                        viewModel.pause()
-                    } label: {
-                        Image(systemName: "pause.fill")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 38, height: 38)
-                            .background(.black.opacity(0.45))
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(PikkoSpacing.sm)
-            }
+            EmptyView()
         case .failed:
             retryOverlay(buttonTitle: "재시도")
         case .expiredOrUnavailable:
             retryOverlay(buttonTitle: "재시도")
+        }
+    }
+
+    @ViewBuilder
+    private var playbackControlBar: some View {
+        switch viewModel.viewState.playbackState {
+        case .ready, .playing, .paused:
+            VStack {
+                Spacer()
+                VStack(spacing: 6) {
+                    HStack(spacing: PikkoSpacing.xs) {
+                        Button {
+                            if case .playing = viewModel.viewState.playbackState {
+                                viewModel.pause()
+                            } else {
+                                viewModel.play()
+                            }
+                        } label: {
+                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 34)
+                                .background(.white.opacity(0.16))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isPlaying ? "일시정지" : "재생")
+
+                        Text(VideoDurationFormatter.string(from: viewModel.viewState.currentTime))
+                            .font(PikkoTypography.micro)
+                            .foregroundStyle(.white.opacity(0.86))
+                            .monospacedDigit()
+                            .frame(width: 44, alignment: .leading)
+
+                        Slider(
+                            value: Binding(
+                                get: { viewModel.viewState.playbackProgress },
+                                set: { progress in
+                                    viewModel.seek(toProgress: progress)
+                                }
+                            ),
+                            in: 0...1
+                        )
+                        .tint(PikkoColor.accent)
+                        .disabled(viewModel.viewState.duration == nil)
+                        .accessibilityLabel("재생 진행률")
+
+                        Text(durationText)
+                            .font(PikkoTypography.micro)
+                            .foregroundStyle(.white.opacity(0.86))
+                            .monospacedDigit()
+                            .frame(width: 44, alignment: .trailing)
+                    }
+                }
+                .padding(.horizontal, PikkoSpacing.sm)
+                .padding(.top, PikkoSpacing.xs)
+                .padding(.bottom, PikkoSpacing.xs)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            .black.opacity(0),
+                            .black.opacity(0.62),
+                            .black.opacity(0.78)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+        case .idle, .loadingStream, .failed, .expiredOrUnavailable:
+            EmptyView()
         }
     }
 
@@ -392,6 +447,20 @@ struct VideoPlayerView: View {
             return viewModel.viewState.effectivePlaybackQuality == quality
         }
         return viewModel.viewState.userSelectedQuality == quality
+    }
+
+    private var isPlaying: Bool {
+        if case .playing = viewModel.viewState.playbackState {
+            return true
+        }
+        return false
+    }
+
+    private var durationText: String {
+        guard let duration = viewModel.viewState.duration else {
+            return "--:--"
+        }
+        return VideoDurationFormatter.string(from: duration)
     }
 }
 

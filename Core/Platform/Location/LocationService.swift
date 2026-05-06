@@ -60,7 +60,11 @@ final class LocationService: NSObject, LocationServiceProtocol {
                 locationManager.requestLocation()
             }
         case .notDetermined:
-            throw LocationServiceError.authorizationNotDetermined
+            return try await withCheckedThrowingContinuation { continuation in
+                finishPendingLocationRequest(with: .failure(LocationServiceError.noLocationAvailable))
+                pendingLocationRequest = continuation
+                requestWhenInUseAuthorization()
+            }
         case .restricted, .denied:
             throw LocationServiceError.unauthorized
         @unknown default:

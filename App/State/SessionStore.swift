@@ -14,6 +14,7 @@ final class SessionStore: ObservableObject {
 
     @Published private(set) var currentSession: UserSession?
     @Published private(set) var deviceToken: String?
+    @Published private(set) var lastDeviceTokenSource: String?
     private let tokenStore: any TokenStore
     private let userDefaultsStore: any UserDefaultsStoring
     private let sessionSnapshotStore: any SessionSnapshotStoring
@@ -111,6 +112,7 @@ final class SessionStore: ObservableObject {
 
         currentSession = session
         Logger.shared.debug("[Auth] auth state changed authenticated")
+        Logger(category: "FCM").info("[FCM] authAuthenticated trigger token registration")
         return true
     }
 
@@ -175,14 +177,16 @@ final class SessionStore: ObservableObject {
         }
 
         if self.deviceToken == normalizedToken {
-            Logger(category: "FCM").debug("[FCM] token save skipped reason=unchanged source=\(source)")
+            Logger(category: "FCM").debug("[FCM] local token unchanged cached=true serverRegistrationKnown=\(hasSyncedCurrentDeviceToken) userId=\(currentUserID ?? "nil") source=\(source) tokenLength=\(normalizedToken?.count ?? 0)")
+            lastDeviceTokenSource = source
             return
         }
 
         self.deviceToken = normalizedToken
+        lastDeviceTokenSource = source
         userDefaultsStore.set(normalizedToken, forKey: StorageKey.deviceToken)
         clearSyncedDeviceTokenState()
-        Logger(category: "FCM").debug("[FCM] token saved locally source=\(source) \(SensitiveLogRedactor.summary(for: normalizedToken))")
+        Logger(category: "FCM").debug("[FCM] token saved locally source=\(source) serverRegistrationKnown=false \(SensitiveLogRedactor.summary(for: normalizedToken))")
     }
 
     func markCurrentDeviceTokenSynced() {

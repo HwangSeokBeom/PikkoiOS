@@ -144,7 +144,10 @@ final class CommunityPresenter: ObservableObject {
 
         #if DEBUG
         Logger.shared.debug(
-            "[CommunityList] \(isRefresh ? "refresh started" : "reload") requestID=\(requestID) category=\(viewState.selectedSort.category.id) direction=\(viewState.selectedSort.direction.rawValue) orderBy=\(viewState.selectedSort.requestOrderBy.rawValue) query=\(activeQuery ?? "") distance=\(viewState.selectedDistance.title) hasLocation=\(viewState.hasReferenceLocation)"
+            "[CommunityFilter] selected distance=\(viewState.selectedDistance.title) direction=\(viewState.selectedSort.direction.rawValue) orderBy=\(viewState.selectedSort.requestOrderBy.rawValue)"
+        )
+        Logger.shared.debug(
+            "[CommunityList] \(isRefresh ? "refresh started" : "reload") requestID=\(requestID) category=\(viewState.selectedSort.category.id) direction=\(viewState.selectedSort.direction.rawValue) distance=\(viewState.selectedDistance.title) hasLocation=\(viewState.hasReferenceLocation) cursor=\(viewState.nextCursor ?? "nil")"
         )
         #endif
 
@@ -257,7 +260,7 @@ final class CommunityPresenter: ObservableObject {
                 #endif
             } else {
                 #if DEBUG
-                Logger.shared.info("[CommunityLocation] location pending, skip distance error")
+                Logger.shared.info("[CommunityLocation] latExists=false lonExists=false permission=unavailable")
                 #endif
             }
         }
@@ -319,7 +322,7 @@ final class CommunityPresenter: ObservableObject {
         viewState.nextCursor = nil
         #if DEBUG
         Logger.shared.debug(
-            "[CommunitySort] category=\(selectedSort.category.id) direction=\(selectedSort.direction.rawValue) orderBy=\(selectedSort.requestOrderBy.rawValue)"
+            "[CommunityFilter] selected distance=\(viewState.selectedDistance.title) direction=\(selectedSort.direction.rawValue) orderBy=\(selectedSort.requestOrderBy.rawValue)"
         )
         #endif
         await loadFeed(isRefresh: false)
