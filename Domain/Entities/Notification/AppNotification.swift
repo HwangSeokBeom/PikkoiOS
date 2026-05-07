@@ -34,7 +34,7 @@ struct AppNotification: Codable, Equatable, Identifiable {
     let metadata: AppNotificationMetadata
 }
 
-enum AppNotificationRoute: Codable, Equatable {
+enum AppNotificationRoute: Codable, Equatable, Sendable {
     case orderDetail(orderCode: String)
     case orderList
     case chatRoom(roomId: String, storeId: String?, title: String?)

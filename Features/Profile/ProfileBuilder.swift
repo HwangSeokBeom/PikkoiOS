@@ -53,7 +53,8 @@ struct ProfileBuilder {
         let presenter = ProfilePresenter(
             interactor: interactor,
             router: router,
-            sessionStore: sessionStore
+            sessionStore: sessionStore,
+            imageLoader: imageLoader
         )
         return ProfileRootView(
             presenter: presenter,

@@ -7,16 +7,20 @@ final class ProfilePresenter: ObservableObject {
     private let interactor: ProfileInteracting
     private let router: ProfileRouting
     private let sessionStore: SessionStore
+    private let imageLoader: any AuthorizedImageLoading
+    private let imagePreprocessor = ProfileImagePreprocessor()
     private var hasLoaded = false
 
     init(
         interactor: ProfileInteracting,
         router: ProfileRouting,
-        sessionStore: SessionStore
+        sessionStore: SessionStore,
+        imageLoader: any AuthorizedImageLoading
     ) {
         self.interactor = interactor
         self.router = router
         self.sessionStore = sessionStore
+        self.imageLoader = imageLoader
     }
 
     func send(_ action: ProfileAction) async {
@@ -98,17 +102,38 @@ final class ProfilePresenter: ObservableObject {
         viewState.isUploadingProfileImage = true
 
         do {
+            let processed: ProfileImagePreprocessResult
+            do {
+                processed = try imagePreprocessor.process(data: data, originalFileName: fileName)
+#if DEBUG
+                Logger(category: "ProfileImage").debug("[ProfileImage] resize result mimeType=\(processed.mimeType) bytes=\(processed.data.count) underLimit=\(processed.isUnderLimit)")
+#endif
+            } catch {
+#if DEBUG
+                Logger(category: "ProfileImage").warning("[ProfileImage] failed stage=resize status=none message=\(error.localizedDescription)")
+#endif
+                throw error
+            }
+
+#if DEBUG
+            Logger(category: "ProfileImage").debug("[ProfileImage] upload request path=/v1/users/profile/image fieldName=profile bytes=\(processed.data.count)")
+#endif
             let uploadedPath = try await interactor.uploadProfileImage(
-                data: data,
-                fileName: fileName,
-                mimeType: "image/jpeg"
+                data: processed.data,
+                fileName: processed.fileName,
+                mimeType: processed.mimeType
             )
+#if DEBUG
+            Logger(category: "ProfileImage").debug("[ProfileImage] upload response profileImageExists=\(!uploadedPath.isEmpty)")
+#endif
             viewState.editorProfileImagePath = uploadedPath
             viewState.profileImageUploadErrorMessage = nil
             viewState.editorInfoMessage = "프로필 이미지를 업로드했어요."
         } catch {
             viewState.profileImageUploadErrorMessage = resolveEditorMessage(from: error, fallback: "프로필 이미지를 업로드하지 못했어요.")
-            Logger.shared.warning("Profile image upload failed: \(error.localizedDescription)")
+#if DEBUG
+            Logger(category: "ProfileImage").warning("[ProfileImage] failed stage=upload status=\(statusCodeDescription(from: error)) message=\(error.localizedDescription)")
+#endif
         }
 
         viewState.isUploadingProfileImage = false
@@ -132,6 +157,10 @@ final class ProfilePresenter: ObservableObject {
         viewState.isSavingProfile = true
 
         do {
+            let oldProfileImagePath = viewState.profileImagePath
+#if DEBUG
+            Logger(category: "ProfileImage").debug("[ProfileImage] profile update request path=/v1/users/me/profile profileImageExists=\(viewState.editorProfileImagePath?.isEmpty == false)")
+#endif
             let profile = try await interactor.updateProfile(
                 nick: viewState.editorNick,
                 phoneNumber: viewState.editorPhoneNumber,
@@ -142,6 +171,10 @@ final class ProfilePresenter: ObservableObject {
                 nick: profile.nick,
                 profileImagePath: profile.profileImagePath
             )
+#if DEBUG
+            Logger(category: "ProfileImage").debug("[ProfileImage] currentUser updated oldProfileImageExists=\(oldProfileImagePath?.isEmpty == false) newProfileImageExists=\(profile.profileImagePath?.isEmpty == false)")
+#endif
+            await invalidateProfileImageCache(oldPath: oldProfileImagePath, newPath: profile.profileImagePath)
 
             viewState.displayName = profile.nick
             viewState.email = profile.email
@@ -160,7 +193,25 @@ final class ProfilePresenter: ObservableObject {
         } catch {
             viewState.isSavingProfile = false
             viewState.editorErrorMessage = resolveEditorMessage(from: error, fallback: "프로필을 저장하지 못했어요.")
-            Logger.shared.warning("Profile update failed: \(error.localizedDescription)")
+#if DEBUG
+            Logger(category: "ProfileImage").warning("[ProfileImage] failed stage=profileUpdate status=\(statusCodeDescription(from: error)) message=\(error.localizedDescription)")
+#endif
+        }
+    }
+
+    private func invalidateProfileImageCache(oldPath: String?, newPath: String?) async {
+        let paths = [oldPath, newPath].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        for path in Set(paths) {
+            do {
+                try await imageLoader.removeCachedImage(for: path)
+#if DEBUG
+                Logger(category: "ProfileImage").debug("[ProfileImage] imageCache invalidated path=\(path)")
+#endif
+            } catch {
+#if DEBUG
+                Logger(category: "ProfileImage").warning("[ProfileImage] failed stage=stateUpdate status=none message=\(error.localizedDescription)")
+#endif
+            }
         }
     }
 
@@ -220,5 +271,34 @@ final class ProfilePresenter: ObservableObject {
         }
 
         return fallback
+    }
+
+    private func statusCodeDescription(from error: Error) -> String {
+        guard let networkError = error as? NetworkError else {
+            return "none"
+        }
+
+        switch networkError {
+        case .invalidRequest:
+            return "400"
+        case .unauthorized, .authenticationFailed:
+            return "401"
+        case .forbidden:
+            return "403"
+        case .notFound:
+            return "404"
+        case .conflict:
+            return "409"
+        case .accessTokenExpired:
+            return "419"
+        case .refreshTokenExpired:
+            return "418"
+        case .rateLimited:
+            return "429"
+        case .server:
+            return "5xx"
+        case .abnormalRequest, .businessAuthorization, .configuration, .transport, .decoding:
+            return "unknown"
+        }
     }
 }

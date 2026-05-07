@@ -2,7 +2,43 @@ import XCTest
 @testable import Pikko
 
 final class PushRouteParserTests: XCTestCase {
-    func testChatPayloadCreatesChatRoute() {
+    func testRoomIDPayloadCreatesChatRoute() {
+        let result = NotificationRouteParser.parse(
+            rawPayload: [
+                "eventType": "chat_message",
+                "room_id": "room-1"
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, .chatRoom(roomId: "room-1", storeId: nil, title: nil))
+    }
+
+    func testUnknownTypeWithRoomIDCreatesChatRoute() {
+        let result = NotificationRouteParser.parse(
+            rawPayload: [
+                "type": "unknown",
+                "room_id": "room-1"
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, .chatRoom(roomId: "room-1", storeId: nil, title: nil))
+    }
+
+    func testRoomIdPayloadCreatesChatRoute() {
+        let result = NotificationRouteParser.parse(
+            rawPayload: [
+                "type": "chat",
+                "roomId": "room-1"
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, .chatRoom(roomId: "room-1", storeId: nil, title: nil))
+    }
+
+    func testChatRoomIdPayloadCreatesChatRoute() {
         let result = NotificationRouteParser.parse(
             rawPayload: [
                 "notificationType": "chat_message",
@@ -16,11 +52,24 @@ final class PushRouteParserTests: XCTestCase {
         XCTAssertEqual(result?.route, .chatRoom(roomId: "room-1", storeId: "store-1", title: "문의"))
     }
 
-    func testCommunityCommentPayloadCreatesPostRouteWithComment() {
+    func testPostIDAndCommentIDPayloadCreatesPostRouteWithComment() {
+        let result = NotificationRouteParser.parse(
+            rawPayload: [
+                "eventType": "post_comment",
+                "post_id": "post-1",
+                "comment_id": "comment-1"
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, .communityPost(postId: "post-1", commentId: "comment-1"))
+    }
+
+    func testPostIdAndCommentIdPayloadCreatesPostRouteWithComment() {
         let result = NotificationRouteParser.parse(
             rawPayload: [
                 "type": "community_comment",
-                "communityPostId": "post-1",
+                "postId": "post-1",
                 "commentId": "comment-1"
             ],
             source: .remoteFCM
@@ -29,11 +78,11 @@ final class PushRouteParserTests: XCTestCase {
         XCTAssertEqual(result?.route, .communityPost(postId: "post-1", commentId: "comment-1"))
     }
 
-    func testCommunityLikePayloadCreatesPostRouteWithoutComment() {
+    func testCommunityPostIdLikePayloadCreatesPostRouteWithoutComment() {
         let result = NotificationRouteParser.parse(
             rawPayload: [
-                "eventType": "like",
-                "postId": "post-1"
+                "eventType": "community_like",
+                "communityPostId": "post-1"
             ],
             source: .remoteFCM
         )
@@ -41,7 +90,31 @@ final class PushRouteParserTests: XCTestCase {
         XCTAssertEqual(result?.route, .communityPost(postId: "post-1", commentId: nil))
     }
 
-    func testOrderPayloadCreatesOrderDetailRoute() {
+    func testPostIDOnlyPayloadCreatesPostRouteWithoutComment() {
+        let result = NotificationRouteParser.parse(
+            rawPayload: [
+                "eventType": "post_like",
+                "post_id": "post-1"
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, .communityPost(postId: "post-1", commentId: nil))
+    }
+
+    func testOrderCodeSnakePayloadCreatesOrderDetailRoute() {
+        let result = NotificationRouteParser.parse(
+            rawPayload: [
+                "eventType": "order_status_changed",
+                "order_code": "order-1"
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, .orderDetail(orderCode: "order-1"))
+    }
+
+    func testOrderCodeCamelPayloadCreatesOrderDetailRoute() {
         let result = NotificationRouteParser.parse(
             rawPayload: [
                 "type": "order_status",
@@ -53,13 +126,25 @@ final class PushRouteParserTests: XCTestCase {
         XCTAssertEqual(result?.route, .orderDetail(orderCode: "order-1"))
     }
 
-    func testMissingRequiredKeyReturnsNil() {
+    func testOrderIdPayloadCreatesOrderRouteByListLookupIdentifier() {
+        let result = NotificationRouteParser.parse(
+            rawPayload: [
+                "notificationType": "order",
+                "order_id": "order-id-1"
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, .orderDetail(orderCode: "order-id-1"))
+    }
+
+    func testMissingRequiredKeyFallsBackToNone() {
         let result = NotificationRouteParser.parse(
             rawPayload: ["type": "chat_message"],
             source: .remoteFCM
         )
 
-        XCTAssertNil(result)
+        XCTAssertEqual(result?.route, AppNotificationRoute.none)
     }
 
     func testUnknownTypeFallsBackToNone() {
@@ -69,6 +154,48 @@ final class PushRouteParserTests: XCTestCase {
         )
 
         XCTAssertEqual(result?.route, AppNotificationRoute.none)
+    }
+
+    func testTitleBodyOnlyTestPushFallsBackToNone() {
+        let result = NotificationRouteParser.parse(
+            rawPayload: [
+                "title": "테스트",
+                "body": "본문"
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, AppNotificationRoute.none)
+    }
+
+    func testApsOnlyPayloadFallsBackToNone() {
+        let result = NotificationRouteParser.parse(
+            userInfo: [
+                "aps": [
+                    "alert": [
+                        "title": "테스트",
+                        "body": "본문"
+                    ]
+                ]
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, AppNotificationRoute.none)
+    }
+
+    func testDataKeysWinOverNotificationText() {
+        let result = NotificationRouteParser.parse(
+            rawPayload: [
+                "title": "주문 order-should-not-be-parsed",
+                "body": "post-should-not-be-parsed",
+                "eventType": "post_comment",
+                "postId": "post-1"
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, .communityPost(postId: "post-1", commentId: nil))
     }
 
     func testLocalNotificationIsNotTreatedAsRemoteFCM() {

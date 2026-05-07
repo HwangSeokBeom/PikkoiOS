@@ -23,6 +23,10 @@ final class CommunityDetailPresenter: ObservableObject {
     private var isLoadingMoreComments = false
     private var isUpdatingLikeStatus = false
     private var hasHandledInitialCommentTarget = false
+    private var commentRequestID = 0
+    private var pendingCommentIDs = Set<String>()
+    private var failedCommentIDs = Set<String>()
+    private var submittingCommentDraftKeys = Set<String>()
 
     init(
         postID: String,
@@ -141,6 +145,8 @@ final class CommunityDetailPresenter: ObservableObject {
 
     private func loadComments(reset: Bool) async {
         guard detail != nil else { return }
+        commentRequestID += 1
+        let requestID = commentRequestID
 
         if reset {
             viewState.commentSection.isInitialLoading = comments.isEmpty
@@ -161,6 +167,7 @@ final class CommunityDetailPresenter: ObservableObject {
 
             do {
                 let page = try await interactor.loadComments(nextCursor: nextCommentCursor)
+                guard requestID == commentRequestID else { return }
                 comments = appendUniqueComments(existing: comments, incoming: page.items)
                 self.nextCommentCursor = page.nextCursor
                 syncDetailComments()
@@ -168,6 +175,7 @@ final class CommunityDetailPresenter: ObservableObject {
                 isLoadingMoreComments = false
                 syncAllViewState()
             } catch {
+                guard requestID == commentRequestID else { return }
                 viewState.commentSection.isLoadingMore = false
                 isLoadingMoreComments = false
                 applyCommentFailure(error)
@@ -178,7 +186,8 @@ final class CommunityDetailPresenter: ObservableObject {
 
         do {
             let page = try await interactor.loadComments(nextCursor: nil)
-            comments = page.items
+            guard requestID == commentRequestID else { return }
+            comments = mergeReloadedComments(existing: comments, incoming: page.items)
             nextCommentCursor = page.nextCursor
             syncDetailComments()
             if let detail {
@@ -188,6 +197,7 @@ final class CommunityDetailPresenter: ObservableObject {
             syncAllViewState()
             applyInitialCommentTargetIfNeeded()
         } catch {
+            guard requestID == commentRequestID else { return }
             nextCommentCursor = nil
             viewState.commentSection.isInitialLoading = false
             applyCommentFailure(error)
@@ -300,29 +310,47 @@ final class CommunityDetailPresenter: ObservableObject {
             return
         }
 
+        let draftKey = normalizedCommentDraftKey(draft)
+        guard submittingCommentDraftKeys.insert(draftKey).inserted else {
+            return
+        }
+        let localTemporaryID = "local-comment-\(UUID().uuidString)"
+        pendingCommentIDs.insert(localTemporaryID)
+        failedCommentIDs.remove(localTemporaryID)
+        comments = prependComment(makeOptimisticComment(id: localTemporaryID, content: draft), to: comments)
+        viewState.commentSection.composerText = ""
         viewState.commentSection.isSubmittingComment = true
         syncCommentSectionState()
         #if DEBUG
-        Logger.shared.debug("[CommunityComment] submit postID=\(viewState.postID)")
+        Logger.shared.debug("[CommunityComment] submit postID=\(viewState.postID) localTemporaryId=\(localTemporaryID)")
         #endif
 
         do {
             let createdComment = try await interactor.createComment(content: draft)
-            comments = prependComment(createdComment, to: comments)
-            viewState.commentSection.composerText = ""
+            pendingCommentIDs.remove(localTemporaryID)
+            comments = replaceOptimisticComment(
+                localTemporaryID: localTemporaryID,
+                with: createdComment,
+                in: comments
+            )
             viewState.commentSection.errorMessage = nil
             viewState.commentSection.requiresAuthentication = false
             viewState.commentSection.isSubmittingComment = false
+            submittingCommentDraftKeys.remove(draftKey)
             syncDetailComments()
             syncAllViewState()
             if let detail {
                 postCommunityChange(summary: detail.summary)
             }
             #if DEBUG
-            Logger.shared.debug("[CommunityComment] success commentID=\(createdComment.id)")
+            Logger.shared.debug("[CommunityComment] success localTemporaryId=\(localTemporaryID) commentID=\(createdComment.id)")
             #endif
         } catch {
+            pendingCommentIDs.remove(localTemporaryID)
+            failedCommentIDs.insert(localTemporaryID)
+            submittingCommentDraftKeys.remove(draftKey)
             viewState.commentSection.isSubmittingComment = false
+            syncAllViewState()
             applyCommentFailure(error)
         }
     }
@@ -794,6 +822,8 @@ final class CommunityDetailPresenter: ObservableObject {
             content: comment.isHidden ? "삭제된 댓글입니다." : comment.content,
             isMine: comment.isMine,
             isHidden: comment.isHidden,
+            isPending: pendingCommentIDs.contains(comment.id),
+            isFailed: failedCommentIDs.contains(comment.id),
             depth: depth,
             replies: comment.replies.map { makeCommentRowState(from: $0, depth: depth + 1) }
         )
@@ -819,6 +849,63 @@ final class CommunityDetailPresenter: ObservableObject {
         to comments: [CommunityComment]
     ) -> [CommunityComment] {
         [comment] + comments.filter { $0.id != comment.id }
+    }
+
+    private func mergeReloadedComments(
+        existing: [CommunityComment],
+        incoming: [CommunityComment]
+    ) -> [CommunityComment] {
+        let optimistic = existing.filter { comment in
+            pendingCommentIDs.contains(comment.id) || failedCommentIDs.contains(comment.id)
+        }
+        let incomingIDs = Set(incoming.map(\.id))
+        return optimistic.filter { !incomingIDs.contains($0.id) } + incoming
+    }
+
+    private func replaceOptimisticComment(
+        localTemporaryID: String,
+        with serverComment: CommunityComment,
+        in comments: [CommunityComment]
+    ) -> [CommunityComment] {
+        var didReplace = false
+        var result = comments.compactMap { comment -> CommunityComment? in
+            if comment.id == serverComment.id {
+                return nil
+            }
+            if comment.id == localTemporaryID {
+                didReplace = true
+                return serverComment
+            }
+            return comment
+        }
+        if !didReplace,
+           !result.contains(where: { $0.id == serverComment.id }) {
+            result.insert(serverComment, at: 0)
+        }
+        return result
+    }
+
+    private func makeOptimisticComment(id: String, content: String) -> CommunityComment {
+        CommunityComment(
+            id: id,
+            postID: viewState.postID,
+            parentCommentID: nil,
+            author: CommunityPostAuthor(
+                id: sessionStore.currentUserID ?? "me",
+                nick: sessionStore.nick ?? "나",
+                profileImagePath: sessionStore.profileImagePath
+            ),
+            content: content,
+            createdAt: Date(),
+            updatedAt: nil,
+            isMine: true,
+            isHidden: false,
+            replies: []
+        )
+    }
+
+    private func normalizedCommentDraftKey(_ draft: String) -> String {
+        "\(viewState.postID)|\(sessionStore.currentUserID ?? "guest")|\(draft)"
     }
 
     private func replaceComment(

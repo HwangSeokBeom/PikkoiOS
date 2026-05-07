@@ -58,6 +58,8 @@ struct CommunityDetailCommentRowViewState: Equatable, Identifiable {
     let content: String
     let isMine: Bool
     let isHidden: Bool
+    let isPending: Bool
+    let isFailed: Bool
     let depth: Int
     let replies: [CommunityDetailCommentRowViewState]
 }

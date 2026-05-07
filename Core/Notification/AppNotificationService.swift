@@ -1,6 +1,64 @@
 import Foundation
 import UserNotifications
 
+enum PushNotificationLifecycle: String, Sendable {
+    case launchOptions
+    case didReceiveRemoteNotification
+    case willPresent
+    case didReceive
+}
+
+struct PushNotificationEvent: Sendable {
+    let rawPayload: [String: String]
+    let parsedRoute: AppNotificationRoute?
+    let messageId: String?
+    let actionIdentifier: String?
+    let lifecycle: PushNotificationLifecycle
+    let source: NotificationRouteSource
+    let isTap: Bool
+
+    var logMessageId: String {
+        messageId ?? "unknown"
+    }
+}
+
+enum PushNotificationEventFactory {
+    static func makeEvent(
+        userInfo: [AnyHashable: Any],
+        actionIdentifier: String?,
+        lifecycle: PushNotificationLifecycle,
+        source: NotificationRouteSource,
+        isTap: Bool
+    ) -> PushNotificationEvent {
+        makeEvent(
+            rawPayload: NotificationRouteParser.flattenedPayload(from: userInfo),
+            actionIdentifier: actionIdentifier,
+            lifecycle: lifecycle,
+            source: source,
+            isTap: isTap
+        )
+    }
+
+    static func makeEvent(
+        rawPayload: [String: String],
+        actionIdentifier: String?,
+        lifecycle: PushNotificationLifecycle,
+        source: NotificationRouteSource,
+        isTap: Bool
+    ) -> PushNotificationEvent {
+        let route = NotificationRouteParser.parse(rawPayload: rawPayload, source: source)?.route
+        return PushNotificationEvent(
+            rawPayload: rawPayload,
+            parsedRoute: route,
+            messageId: NotificationRouteParser.messageID(from: rawPayload),
+            actionIdentifier: actionIdentifier,
+            lifecycle: lifecycle,
+            source: source,
+            isTap: isTap
+        )
+    }
+}
+
 @MainActor
 protocol AppNotificationService: AnyObject {
     var unreadCountChanged: ((Int) -> Void)? { get set }
@@ -8,8 +66,10 @@ protocol AppNotificationService: AnyObject {
 
     func handleRemoteNotificationPayload(_ userInfo: [AnyHashable: Any])
     func handleRemoteNotificationPayload(_ rawPayload: [String: String])
+    func handlePushNotificationEvent(_ event: PushNotificationEvent)
     func handleRemoteNotificationTapPayload(_ userInfo: [AnyHashable: Any])
     func handleRemoteNotificationTapPayload(_ rawPayload: [String: String])
+    func handleRemoteNotificationTapPayload(_ rawPayload: [String: String], parsedRoute: AppNotificationRoute?, messageId: String?, source: NotificationRouteSource)
     func shouldSuppressForegroundBanner(for userInfo: [AnyHashable: Any]) -> Bool
     func shouldSuppressForegroundBanner(for rawPayload: [String: String]) -> Bool
     @discardableResult func handleOrderStatusChanged(orderCode: String, previousStatus: String?, currentStatus: String, storeName: String?) -> AppNotificationSaveResult
@@ -36,19 +96,22 @@ final class DefaultAppNotificationService: AppNotificationService {
     private let activeChatRoomTracker: ActiveChatRoomTracking
     private let activeCommunityPostTracker: ActiveCommunityPostTracking
     private let diagnosticsStore: NotificationDiagnosticsStore
+    private let dedupeStore: PushNotificationDedupeStore
 
     init(
         repository: AppNotificationRepository,
         router: AppNotificationRouting,
         activeChatRoomTracker: ActiveChatRoomTracking,
         activeCommunityPostTracker: ActiveCommunityPostTracking,
-        diagnosticsStore: NotificationDiagnosticsStore
+        diagnosticsStore: NotificationDiagnosticsStore,
+        dedupeStore: PushNotificationDedupeStore = PushNotificationDedupeStore()
     ) {
         self.repository = repository
         self.router = router
         self.activeChatRoomTracker = activeChatRoomTracker
         self.activeCommunityPostTracker = activeCommunityPostTracker
         self.diagnosticsStore = diagnosticsStore
+        self.dedupeStore = dedupeStore
     }
 
     func handleRemoteNotificationPayload(_ userInfo: [AnyHashable: Any]) {
@@ -56,15 +119,49 @@ final class DefaultAppNotificationService: AppNotificationService {
     }
 
     func handleRemoteNotificationPayload(_ rawPayload: [String: String]) {
+        handlePushNotificationEvent(PushNotificationEventFactory.makeEvent(
+            rawPayload: rawPayload,
+            actionIdentifier: nil,
+            lifecycle: .didReceiveRemoteNotification,
+            source: .remoteFCM,
+            isTap: false
+        ))
+    }
+
+    func handlePushNotificationEvent(_ event: PushNotificationEvent) {
+        let rawPayload = event.rawPayload
         let payload = RemoteNotificationPayload(rawPayload: rawPayload)
         diagnosticsStore.recordRemotePayload(payload.rawPayload)
         Logger(category: "RemotePush").debug("[RemotePush] received payload keys=\(payload.rawPayload.keys.sorted().joined(separator: ",")) messageId=\(payload.messageID) type=\(payload.type ?? "unknown") source=\(payload.source ?? "unknown")")
-        guard let notification = makeNotification(from: payload) else {
-            Logger(category: "Notification").debugVerbose("[Notification] remote payload ignored type=unknown")
+        let normalizedMessageId = event.messageId ?? payload.messageID.nilIfUnknown
+        let routeForNavigation: AppNotificationRoute
+
+        if let notification = makeNotification(from: payload, parsedRoute: event.parsedRoute) {
+            saveIfNeeded(notification, source: event.source.rawValue, messageId: normalizedMessageId)
+            if event.isTap {
+                markAsReadIfNeeded(id: notification.id, messageId: normalizedMessageId)
+                diagnosticsStore.recordRemoteTapRoute(notification.route.debugDescription, pendingRoute: nil)
+            }
+            routeForNavigation = event.parsedRoute ?? notification.route
+        } else if let parsedRoute = event.parsedRoute, parsedRoute != .none {
+            if event.isTap {
+                diagnosticsStore.recordRemoteTapRoute(parsedRoute.debugDescription, pendingRoute: nil)
+            }
+            routeForNavigation = parsedRoute
+        } else {
+            if event.isTap {
+                diagnosticsStore.recordRemoteTapRoute(AppNotificationRoute.none.debugDescription, pendingRoute: nil)
+            }
             Logger(category: "Push").warning("[Push] missingRoutePayload keys=\(payload.rawPayload.keys.sorted().joined(separator: ","))")
-            return
+            routeForNavigation = .none
         }
-        save(notification, source: "remoteFCM")
+
+        guard event.isTap else { return }
+        router.handleNotificationTap(
+            route: routeForNavigation,
+            messageId: normalizedMessageId,
+            source: event.source
+        )
     }
 
     func handleRemoteNotificationTapPayload(_ userInfo: [AnyHashable: Any]) {
@@ -72,22 +169,30 @@ final class DefaultAppNotificationService: AppNotificationService {
     }
 
     func handleRemoteNotificationTapPayload(_ rawPayload: [String: String]) {
-        let payload = RemoteNotificationPayload(rawPayload: rawPayload)
-        diagnosticsStore.recordRemotePayload(payload.rawPayload)
-        let parsedRoute = NotificationRouteParser.parse(rawPayload: rawPayload, source: .remoteFCM)?.route
-        if let notification = makeNotification(from: payload) {
-            save(notification, source: "remoteFCM")
-            markAsRead(id: notification.id)
-            diagnosticsStore.recordRemoteTapRoute(notification.route.debugDescription, pendingRoute: nil)
-            router.route(to: notification.route)
-        } else if let parsedRoute, parsedRoute != .none {
-            diagnosticsStore.recordRemoteTapRoute(parsedRoute.debugDescription, pendingRoute: nil)
-            router.route(to: parsedRoute)
-        } else {
-            diagnosticsStore.recordRemoteTapRoute(AppNotificationRoute.none.debugDescription, pendingRoute: nil)
-            Logger(category: "Push").warning("[Push] missingRoutePayload keys=\(payload.rawPayload.keys.sorted().joined(separator: ","))")
-            router.route(to: .none)
-        }
+        handlePushNotificationEvent(PushNotificationEventFactory.makeEvent(
+            rawPayload: rawPayload,
+            actionIdentifier: nil,
+            lifecycle: .didReceive,
+            source: .remoteFCM,
+            isTap: true
+        ))
+    }
+
+    func handleRemoteNotificationTapPayload(
+        _ rawPayload: [String: String],
+        parsedRoute: AppNotificationRoute?,
+        messageId: String?,
+        source: NotificationRouteSource
+    ) {
+        handlePushNotificationEvent(PushNotificationEvent(
+            rawPayload: rawPayload,
+            parsedRoute: parsedRoute,
+            messageId: messageId?.nilIfUnknown,
+            actionIdentifier: nil,
+            lifecycle: .didReceive,
+            source: source,
+            isTap: true
+        ))
     }
 
     func shouldSuppressForegroundBanner(for userInfo: [AnyHashable: Any]) -> Bool {
@@ -254,8 +359,8 @@ final class DefaultAppNotificationService: AppNotificationService {
         repository.unreadCount()
     }
 
-    private func makeNotification(from payload: RemoteNotificationPayload) -> AppNotification? {
-        let route = NotificationRouteParser.parse(rawPayload: payload.rawPayload, source: .remoteFCM)?.route
+    private func makeNotification(from payload: RemoteNotificationPayload, parsedRoute: AppNotificationRoute? = nil) -> AppNotification? {
+        let route = parsedRoute ?? NotificationRouteParser.parse(rawPayload: payload.rawPayload, source: .remoteFCM)?.route
         switch route {
         case .chatRoom(let roomId, _, _):
             return payload.chatNotification(roomId: roomId)
@@ -274,6 +379,22 @@ final class DefaultAppNotificationService: AppNotificationService {
         }
         guard payload.title != nil || payload.body != nil else { return nil }
         return payload.systemNotification()
+    }
+
+    @discardableResult
+    private func saveIfNeeded(_ notification: AppNotification, source: String, messageId: String?) -> AppNotificationSaveResult {
+        let key = messageId.map { "notification:\($0)" }
+            ?? "notification:\(notification.id)"
+        guard dedupeStore.accept(key: key, phase: .save) else {
+            return .duplicate(id: notification.id)
+        }
+        return save(notification, source: source)
+    }
+
+    private func markAsReadIfNeeded(id: String, messageId: String?) {
+        let key = messageId.map { "read:\($0)" } ?? "read:\(id)"
+        guard dedupeStore.accept(key: key, phase: .read) else { return }
+        markAsRead(id: id)
     }
 
     @discardableResult
@@ -401,8 +522,10 @@ final class NoopAppNotificationService: AppNotificationService {
 
     func handleRemoteNotificationPayload(_ userInfo: [AnyHashable: Any]) {}
     func handleRemoteNotificationPayload(_ rawPayload: [String: String]) {}
+    func handlePushNotificationEvent(_ event: PushNotificationEvent) {}
     func handleRemoteNotificationTapPayload(_ userInfo: [AnyHashable: Any]) {}
     func handleRemoteNotificationTapPayload(_ rawPayload: [String: String]) {}
+    func handleRemoteNotificationTapPayload(_ rawPayload: [String: String], parsedRoute: AppNotificationRoute?, messageId: String?, source: NotificationRouteSource) {}
     func shouldSuppressForegroundBanner(for userInfo: [AnyHashable: Any]) -> Bool { false }
     func shouldSuppressForegroundBanner(for rawPayload: [String: String]) -> Bool { false }
     func handleOrderStatusChanged(orderCode: String, previousStatus: String?, currentStatus: String, storeName: String?) -> AppNotificationSaveResult { .skipped(reason: "noop") }
@@ -427,7 +550,7 @@ private struct RemoteNotificationPayload {
     static let storeNameKeys = ["store_name", "storeName"]
     static let chatRoomKeys = ["chatRoomId", "chat_room_id", "roomId", "room_id"]
     static let storeIdKeys = ["storeId", "store_id"]
-    static let messageIdKeys = ["messageId", "message_id", "chatId", "chat_id", "gcm.message_id", "google.message_id", "google.c.a.c_id"]
+    static let messageIdKeys = ["gcm.message_id", "google.message_id", "message_id", "messageId", "aps.thread-id", "chatId", "chat_id", "google.c.a.c_id"]
     static let senderIdKeys = ["senderId", "sender_id"]
     static let postKeys = ["postId", "post_id", "communityPostId", "community_post_id"]
     static let commentKeys = ["commentId", "comment_id", "replyId", "reply_id"]
@@ -598,5 +721,13 @@ private extension String {
 
     var nilIfEmpty: String? {
         isEmpty ? nil : self
+    }
+
+    var nilIfUnknown: String? {
+        let normalized = trimmed
+        guard !normalized.isEmpty, normalized != "unknown" else {
+            return nil
+        }
+        return normalized
     }
 }

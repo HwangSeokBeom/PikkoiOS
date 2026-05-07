@@ -23,6 +23,65 @@ final class ActiveCommunityPostTracker: ActiveCommunityPostTracking {
 @MainActor
 final class PendingNotificationRouteStore {
     var pendingRoute: AppNotificationRoute?
+    var pendingMessageId: String?
+    var pendingSource: NotificationRouteSource?
+    var pendingDedupeKey: String?
+
+    func store(
+        route: AppNotificationRoute,
+        messageId: String?,
+        source: NotificationRouteSource,
+        dedupeKey: String
+    ) {
+        pendingRoute = route
+        pendingMessageId = messageId
+        pendingSource = source
+        pendingDedupeKey = dedupeKey
+    }
+
+    func clear() {
+        pendingRoute = nil
+        pendingMessageId = nil
+        pendingSource = nil
+        pendingDedupeKey = nil
+    }
+}
+
+enum PushNotificationDedupePhase: String {
+    case save
+    case read
+    case navigate
+}
+
+@MainActor
+final class PushNotificationDedupeStore {
+    private var acceptedKeys: [String: Date] = [:]
+    private let ttl: TimeInterval
+    private let now: () -> Date
+
+    init(ttl: TimeInterval = 30, now: @escaping () -> Date = Date.init) {
+        self.ttl = ttl
+        self.now = now
+    }
+
+    func accept(key: String, phase: PushNotificationDedupePhase) -> Bool {
+        pruneExpiredKeys()
+        let currentDate = now()
+        if let acceptedAt = acceptedKeys[key],
+           currentDate.timeIntervalSince(acceptedAt) < ttl {
+            Logger(category: "PushDedupe").debug("[PushDedupe] duplicate ignored key=\(key) phase=\(phase.rawValue)")
+            return false
+        }
+
+        acceptedKeys[key] = currentDate
+        Logger(category: "PushDedupe").debug("[PushDedupe] accepted key=\(key) phase=\(phase.rawValue)")
+        return true
+    }
+
+    private func pruneExpiredKeys() {
+        let currentDate = now()
+        acceptedKeys = acceptedKeys.filter { currentDate.timeIntervalSince($0.value) < ttl }
+    }
 }
 
 struct OrderStatusSnapshot: Codable, Equatable {

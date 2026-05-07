@@ -298,8 +298,10 @@ final class ChatPresenter: ObservableObject {
             return
         }
 
-        guard realtimeRoomID != scope.roomID else { return }
-        realtimeRoomID = scope.roomID
+        guard realtimeRoomID != scope.roomID else {
+            Logger.shared.debug("[ChatViewModel] connectSocket skipped reason=alreadyActive roomId=\(scope.roomID)")
+            return
+        }
         Logger.shared.debug("[ChatViewModel] connectSocket afterSync=true scope=\(scope.localCacheKey)")
         do {
             try await interactor.startRealtime(scope: scope) { [weak self] message in
@@ -310,7 +312,11 @@ final class ChatPresenter: ObservableObject {
                 self.applyMessages()
                 self.applyScrollPolicyForReceivedMessage(message)
             }
+            realtimeRoomID = scope.roomID
         } catch {
+            if realtimeRoomID == scope.roomID {
+                realtimeRoomID = nil
+            }
             Logger.shared.warning("[Chat] realtime connection failed: \(error.localizedDescription)")
         }
     }

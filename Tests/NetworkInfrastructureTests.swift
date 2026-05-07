@@ -108,7 +108,7 @@ final class NetworkInfrastructureTests: XCTestCase {
         XCTAssertNil(object["provider"])
     }
 
-    func testKakaoLoginRejectsMissingDeviceTokenBeforeSendingEmptyString() async throws {
+    func testKakaoLoginAllowsMissingOptionalDeviceToken() async throws {
         let apiClient = RecordingAPIClient(
             response: LoginResponseDTO(
                 userID: "server-user",
@@ -121,27 +121,28 @@ final class NetworkInfrastructureTests: XCTestCase {
         )
         let dataSource = AuthRemoteDataSource(apiClient: apiClient)
 
-        do {
-            _ = try await dataSource.signIn(
-                with: SocialLoginCredential(
-                    provider: .kakao,
-                    accessToken: "kakao-oauth-token",
-                    idToken: "kakao-id-token",
-                    authorizationCode: nil,
-                    email: nil,
-                    nickname: nil,
-                    rawNonce: nil,
-                    userIdentifier: nil
-                ),
-                deviceToken: nil
-            )
-            XCTFail("Expected missing device token to fail before sending")
-        } catch let error as NetworkError {
-            XCTAssertEqual(error, .invalidRequest)
+        _ = try await dataSource.signIn(
+            with: SocialLoginCredential(
+                provider: .kakao,
+                accessToken: "kakao-oauth-token",
+                idToken: "kakao-id-token",
+                authorizationCode: nil,
+                email: nil,
+                nickname: nil,
+                rawNonce: nil,
+                userIdentifier: nil
+            ),
+            deviceToken: nil
+        )
+
+        XCTAssertEqual(apiClient.recordedPath, "/v1/users/login/kakao")
+        guard case let .json(payload)? = apiClient.recordedBody else {
+            return XCTFail("Expected Kakao login JSON body")
         }
 
-        XCTAssertNil(apiClient.recordedPath)
-        XCTAssertNil(apiClient.recordedBody)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: String])
+        XCTAssertEqual(object["oauthToken"], "kakao-oauth-token")
+        XCTAssertNil(object["deviceToken"])
     }
 
     func testLoginResponseDecodesSwaggerMixedCaseKeys() throws {
@@ -291,6 +292,33 @@ final class NetworkInfrastructureTests: XCTestCase {
         XCTAssertTrue(payloadString.contains("name=\"files\"; filename=\"review.jpg\""))
         XCTAssertTrue(payloadString.contains("Content-Type: image/jpeg"))
         XCTAssertTrue(boundary.isEmpty == false)
+    }
+
+    func testProfileImageUploadBuildsMultipartProfileField() async throws {
+        let apiClient = RecordingAPIClient(
+            response: ProfileImageUploadResponseDTO(profileImage: "/data/profiles/uploaded.jpg")
+        )
+        let dataSource = AuthRemoteDataSource(apiClient: apiClient)
+
+        let response = try await dataSource.uploadProfileImage(
+            data: Data("profile-image-bytes".utf8),
+            fileName: "profile.jpg",
+            mimeType: "image/jpeg"
+        )
+
+        XCTAssertEqual(response.profileImage, "/data/profiles/uploaded.jpg")
+        XCTAssertEqual(apiClient.recordedPath, "/v1/users/profile/image")
+        XCTAssertEqual(apiClient.recordedMethod, .post)
+        XCTAssertEqual(apiClient.recordedAuthorizationPolicy, .accessToken)
+
+        guard case let .multipart(payload, boundary)? = apiClient.recordedBody else {
+            return XCTFail("Expected multipart request body")
+        }
+
+        let payloadString = String(decoding: payload, as: UTF8.self)
+        XCTAssertTrue(payloadString.contains("name=\"profile\"; filename=\"profile.jpg\""))
+        XCTAssertFalse(payloadString.contains("name=\"files\""))
+        XCTAssertFalse(boundary.isEmpty)
     }
 
     func testRequestBuilderRejectsRelativeV1BaseURL() async {
@@ -572,6 +600,130 @@ final class NetworkInfrastructureTests: XCTestCase {
         XCTAssertEqual(first, TestResponseDTO(value: "cached"))
         XCTAssertEqual(second, TestResponseDTO(value: "cached"))
         XCTAssertEqual(counter.count, 1)
+    }
+
+    func testAPIClientDoesNotDeduplicateConcurrentPOSTDeviceTokenRequests() async throws {
+        let tokenStore = StubTokenStore(
+            tokens: StoredTokens(accessToken: "access-token", refreshToken: "refresh-token")
+        )
+        let configuration = AppConfiguration(
+            environment: .development,
+            baseURL: URL(string: "https://example.com")!,
+            seSACKey: "test-sesac-key"
+        )
+        let requestBuilder = RequestBuilder(configuration: configuration, tokenStore: tokenStore)
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: sessionConfiguration)
+        let apiClient = APIClient(
+            session: session,
+            requestBuilder: requestBuilder,
+            tokenRefreshCoordinator: TokenRefreshCoordinator(
+                session: session,
+                requestBuilder: requestBuilder,
+                tokenStore: tokenStore
+            )
+        )
+
+        final class RequestCounter {
+            private let lock = NSLock()
+            private(set) var count = 0
+
+            func increment() {
+                lock.lock()
+                count += 1
+                lock.unlock()
+            }
+        }
+
+        let counter = RequestCounter()
+        URLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/users/deviceToken")
+            XCTAssertEqual(request.httpMethod, "PUT")
+            counter.increment()
+            Thread.sleep(forTimeInterval: 0.1)
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data()
+            )
+        }
+
+        let body = RequestBody.json(try NetworkCoding.makeJSONEncoder().encode(DeviceTokenRequestDTO(deviceToken: "device-token")))
+        let endpoint = Endpoint<EmptyResponse>(
+            path: "/v1/users/deviceToken",
+            method: .put,
+            body: body,
+            authorizationPolicy: .accessToken
+        )
+
+        async let first: EmptyResponse = apiClient.execute(endpoint)
+        async let second: EmptyResponse = apiClient.execute(endpoint)
+        _ = try await [first, second]
+
+        XCTAssertEqual(counter.count, 2)
+    }
+
+    func testAPIClientDoesNotDeduplicateConcurrentMultipartProfileUploads() async throws {
+        let tokenStore = StubTokenStore(
+            tokens: StoredTokens(accessToken: "access-token", refreshToken: "refresh-token")
+        )
+        let configuration = AppConfiguration(
+            environment: .development,
+            baseURL: URL(string: "https://example.com")!,
+            seSACKey: "test-sesac-key"
+        )
+        let requestBuilder = RequestBuilder(configuration: configuration, tokenStore: tokenStore)
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: sessionConfiguration)
+        let apiClient = APIClient(
+            session: session,
+            requestBuilder: requestBuilder,
+            tokenRefreshCoordinator: TokenRefreshCoordinator(
+                session: session,
+                requestBuilder: requestBuilder,
+                tokenStore: tokenStore
+            )
+        )
+
+        final class RequestCounter {
+            private let lock = NSLock()
+            private(set) var count = 0
+
+            func increment() {
+                lock.lock()
+                count += 1
+                lock.unlock()
+            }
+        }
+
+        let counter = RequestCounter()
+        URLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/users/profile/image")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Content-Type")?.contains("multipart/form-data") == true)
+            counter.increment()
+            Thread.sleep(forTimeInterval: 0.1)
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                #"{"profileImage":"/data/profiles/uploaded.jpg"}"#.data(using: .utf8)!
+            )
+        }
+
+        var builder = MultipartFormDataBuilder()
+        builder.addFile(fieldName: "profile", fileName: "profile.jpg", mimeType: "image/jpeg", fileData: Data("bytes".utf8))
+        let endpoint = Endpoint<ProfileImageUploadResponseDTO>(
+            path: "/v1/users/profile/image",
+            method: .post,
+            body: builder.build(),
+            authorizationPolicy: .accessToken
+        )
+
+        async let first: ProfileImageUploadResponseDTO = apiClient.execute(endpoint)
+        async let second: ProfileImageUploadResponseDTO = apiClient.execute(endpoint)
+        _ = try await [first, second]
+
+        XCTAssertEqual(counter.count, 2)
     }
 
     func testAPIClientRefreshesOn419AndRetriesOriginalRequestOnce() async throws {

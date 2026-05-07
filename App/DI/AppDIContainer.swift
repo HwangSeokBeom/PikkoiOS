@@ -129,6 +129,7 @@ final class AppDIContainer {
             remoteDataSource: ChatRemoteDataSource(apiClient: resolvedAPIClient),
             mapper: chatMapper
         )
+        resolvedNotificationRouter.setChatRouteHydrator(DefaultChatRouteHydrator(chatRepository: resolvedChatRepository))
         let resolvedChatLocalDataSource = CoreDataChatLocalDataSource()
         let resolvedOrderRepository = OrderRepositoryImpl(
             remoteDataSource: OrderRemoteDataSource(apiClient: resolvedAPIClient),

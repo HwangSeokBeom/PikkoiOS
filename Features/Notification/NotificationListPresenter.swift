@@ -37,6 +37,7 @@ final class NotificationListPresenter: ObservableObject {
             reload()
             if notification.route == .none {
                 Logger(category: "NotificationTap").warning("[NotificationTap] routeUnavailable notificationId=\(id) reason=missingMetadata")
+                return
             } else {
                 Logger(category: "NotificationTap").debug("[NotificationTap] source=notificationCenter notificationId=\(id) route=\(notification.route.debugDescription)")
             }

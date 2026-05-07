@@ -6,6 +6,7 @@ final class DeepLinkCoordinatorTests: XCTestCase {
     func testAuthenticatedRouteExecutesImmediately() {
         let appState = makeAppState(authenticated: true, launchPhase: .ready)
         let router = makeRouter(attachedTo: appState)
+        router.setNavigationReady(true)
         let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
 
         router.route(to: route)
@@ -18,6 +19,7 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         let store = PendingNotificationRouteStore()
         let router = AppNotificationRouter(pendingRouteStore: store)
         router.attach(appState: appState)
+        router.setNavigationReady(true)
         let route = AppNotificationRoute.communityPost(postId: "post-1", commentId: "comment-1")
 
         router.route(to: route)
@@ -31,6 +33,7 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         let store = PendingNotificationRouteStore()
         let router = AppNotificationRouter(pendingRouteStore: store)
         router.attach(appState: appState)
+        router.setNavigationReady(true)
         let route = AppNotificationRoute.orderDetail(orderCode: "order-1")
         router.route(to: route)
 
@@ -47,6 +50,7 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         let store = PendingNotificationRouteStore()
         let router = AppNotificationRouter(pendingRouteStore: store)
         router.attach(appState: appState)
+        router.setNavigationReady(true)
         let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
 
         router.route(to: route)
@@ -64,6 +68,7 @@ final class DeepLinkCoordinatorTests: XCTestCase {
             now: { currentDate }
         )
         router.attach(appState: appState)
+        router.setNavigationReady(true)
         let firstRoute = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
         let secondRoute = AppNotificationRoute.orderDetail(orderCode: "order-1")
 
@@ -78,10 +83,64 @@ final class DeepLinkCoordinatorTests: XCTestCase {
     func testAlreadyAtDestinationSkipsDuplicatePush() {
         let appState = makeAppState(authenticated: true, launchPhase: .ready)
         let router = makeRouter(attachedTo: appState)
+        router.setNavigationReady(true)
         let route = AppNotificationRoute.communityPost(postId: "post-1", commentId: nil)
         appState.activeNotificationRoute = route
 
         router.route(to: route)
+
+        XCTAssertNil(appState.pendingNotificationRoute)
+    }
+
+    func testDifferentIdentifierAtSameDestinationTypeIsAllowed() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let router = makeRouter(attachedTo: appState)
+        router.setNavigationReady(true)
+        appState.activeNotificationRoute = .communityPost(postId: "post-1", commentId: nil)
+        let route = AppNotificationRoute.communityPost(postId: "post-2", commentId: nil)
+
+        router.route(to: route)
+
+        XCTAssertEqual(appState.pendingNotificationRoute, route)
+    }
+
+    func testUnknownNoticeRouteFallsBackToNotificationCenter() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let router = makeRouter(attachedTo: appState)
+        router.setNavigationReady(true)
+
+        router.route(to: .none)
+
+        XCTAssertEqual(appState.pendingNotificationRoute, AppNotificationRoute.none)
+    }
+
+    func testNavigationNotReadyStoresPendingRouteUntilRootReady() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let store = PendingNotificationRouteStore()
+        let router = AppNotificationRouter(pendingRouteStore: store)
+        router.attach(appState: appState)
+        let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
+
+        router.handleNotificationTap(route: route, messageId: "message-1", source: .remoteFCM)
+
+        XCTAssertEqual(store.pendingRoute, route)
+        XCTAssertNil(appState.pendingNotificationRoute)
+
+        router.setNavigationReady(true)
+
+        XCTAssertNil(store.pendingRoute)
+        XCTAssertEqual(appState.pendingNotificationRoute, route)
+    }
+
+    func testSameRemoteMessageTapIsDedupedByMessageIdAndRoute() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let router = makeRouter(attachedTo: appState)
+        router.setNavigationReady(true)
+        let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
+
+        router.handleNotificationTap(route: route, messageId: "message-1", source: .remoteFCM)
+        appState.pendingNotificationRoute = nil
+        router.handleNotificationTap(route: route, messageId: "message-1", source: .remoteFCM)
 
         XCTAssertNil(appState.pendingNotificationRoute)
     }

@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 
+@MainActor
 struct RootTabView: View {
     @ObservedObject private var appState: AppState
     let featureBuilderFactory: FeatureBuilderFactory
@@ -14,6 +15,8 @@ struct RootTabView: View {
     @State private var videoResetTrigger = 0
     @State private var didLogInitialTabReload = false
     @State private var presentedNotificationRoute: NotificationRoutePresentation?
+    @State private var notificationNavigationQueue: [AppNotificationRoute] = []
+    @State private var isDrainingNotificationNavigationQueue = false
     @StateObject private var keyboardObserver = RootTabKeyboardObserver()
 
     init(
@@ -73,13 +76,25 @@ struct RootTabView: View {
                 destinationView(for: presentation.route)
             }
         }
+        .overlay(alignment: .top) {
+            if let toast = appState.globalToast {
+                ToastView(message: toast.message, tone: .warning)
+                    .padding(.top, PikkoSpacing.xl)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .id(toast.id)
+            }
+        }
         .onAppear {
             logInitialTabReloadIfNeeded()
+            featureBuilderFactory.setNotificationNavigationReady(true)
             featureBuilderFactory.routePendingNotificationIfNeeded()
-            handleNotificationRoute(appState.pendingNotificationRoute)
+            scheduleNotificationRoute(appState.pendingNotificationRoute)
+        }
+        .onDisappear {
+            featureBuilderFactory.setNotificationNavigationReady(false)
         }
         .onChange(of: appState.pendingNotificationRoute) { _, route in
-            handleNotificationRoute(route)
+            scheduleNotificationRoute(route)
         }
     }
 
@@ -132,37 +147,125 @@ struct RootTabView: View {
         }
     }
 
-    private func handleNotificationRoute(_ route: AppNotificationRoute?) {
+    private func scheduleNotificationRoute(_ route: AppNotificationRoute?) {
         guard let route else { return }
+        Task { @MainActor in
+            await Task.yield()
+            enqueueNotificationRoute(route)
+        }
+    }
+
+    private func enqueueNotificationRoute(_ route: AppNotificationRoute) {
+        guard !notificationNavigationQueue.contains(route) else {
+            Logger(category: "NavigationQueue").debug("[NavigationQueue] deferred reason=duplicatePending route=\(route.logRouteName) \(route.logIdentifier)")
+            return
+        }
+
+        notificationNavigationQueue.append(route)
+        Logger(category: "NavigationQueue").debug("[NavigationQueue] enqueue route=\(route.logRouteName) \(route.logIdentifier) source=remoteFCM")
+        drainNotificationNavigationQueueIfNeeded()
+    }
+
+    private func drainNotificationNavigationQueueIfNeeded() {
+        guard !isDrainingNotificationNavigationQueue else { return }
+        isDrainingNotificationNavigationQueue = true
+        Task { @MainActor in
+            var didDeferRoute = false
+            defer {
+                isDrainingNotificationNavigationQueue = false
+                if !didDeferRoute, !notificationNavigationQueue.isEmpty {
+                    drainNotificationNavigationQueueIfNeeded()
+                }
+            }
+
+            Logger(category: "NavigationQueue").debug("[NavigationQueue] drain start pendingCount=\(notificationNavigationQueue.count)")
+            while !notificationNavigationQueue.isEmpty {
+                let route = notificationNavigationQueue.removeFirst()
+                let didComplete = await performNotificationNavigation(route)
+                if !didComplete {
+                    didDeferRoute = true
+                    break
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    private func performNotificationNavigation(_ route: AppNotificationRoute) async -> Bool {
+        guard appState.launchPhase == .ready, appState.sessionStore.isAuthenticated else {
+            notificationNavigationQueue.insert(route, at: 0)
+            Logger(category: "NavigationQueue").debug("[NavigationQueue] deferred reason=authNotReady route=\(route.logRouteName) \(route.logIdentifier)")
+            return false
+        }
+
+        let targetTab = targetTab(for: route)
+        if appState.selectedTab != targetTab {
+            let previousTab = appState.selectedTab
+            Logger(category: "NavigationQueue").debug("[NavigationQueue] selectTab target=\(targetTab.rawValue) previous=\(previousTab.rawValue) route=\(route.logRouteName)")
+            appState.selectedTab = targetTab
+            await Task.yield()
+        }
+
+        guard appState.selectedTab == targetTab else {
+            notificationNavigationQueue.insert(route, at: 0)
+            Logger(category: "NavigationQueue").debug("[NavigationQueue] deferred reason=targetTabNotReady route=\(route.logRouteName) \(route.logIdentifier)")
+            return false
+        }
+
+        Logger(category: "NavigationQueue").debug("[NavigationQueue] targetReady tab=\(targetTab.rawValue)")
 
         switch route {
         case .orderList:
-            appState.selectedTab = .order
+            Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate success destination=orders")
         case .communityList:
-            appState.selectedTab = .community
+            Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate success destination=community")
         case .orderDetail:
-            appState.selectedTab = .order
             appState.activeNotificationRoute = route
+            await Task.yield()
             presentedNotificationRoute = NotificationRoutePresentation(route: route)
+            Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate success destination=order")
         case .paymentReceipt:
-            appState.selectedTab = .order
             appState.activeNotificationRoute = route
+            await Task.yield()
             presentedNotificationRoute = NotificationRoutePresentation(route: route)
+            Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate success destination=order")
         case .chatRoom:
-            appState.selectedTab = .profile
+            guard case .chatRoom(let roomId, _, _) = route, !roomId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                Logger(category: "DeepLink").error("[DeepLink] navigate failed reason=missingRoomId route=chat")
+                Logger(category: "NavigationQueue").error("[NavigationQueue] failed route=chat roomId=- reason=missingRoomId")
+                return true
+            }
             appState.activeNotificationRoute = route
+            await Task.yield()
             presentedNotificationRoute = NotificationRoutePresentation(route: route)
+            Logger(category: "NavigationQueue").info("[NavigationQueue] push route=chat roomId=\(roomId) tab=\(targetTab.rawValue)")
+            Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate success destination=chat")
         case .communityPost:
-            appState.selectedTab = .community
             appState.activeNotificationRoute = route
+            await Task.yield()
             presentedNotificationRoute = NotificationRoutePresentation(route: route)
+            Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate success destination=post")
         case .none:
-            appState.selectedTab = .profile
             appState.activeNotificationRoute = route
+            await Task.yield()
             presentedNotificationRoute = NotificationRoutePresentation(route: route)
+            Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate fallback destination=notificationCenter reason=noCustomData")
         }
 
         appState.pendingNotificationRoute = nil
+        Logger(category: "NavigationQueue").debug("[NavigationQueue] complete route=\(route.logRouteName) \(route.logIdentifier)")
+        return true
+    }
+
+    private func targetTab(for route: AppNotificationRoute) -> RootTab {
+        switch route {
+        case .orderDetail, .orderList, .paymentReceipt:
+            return .order
+        case .communityPost, .communityList:
+            return .community
+        case .chatRoom, .none:
+            return .profile
+        }
     }
 
     private func logInitialTabReloadIfNeeded() {
@@ -189,6 +292,40 @@ struct RootTabView: View {
 private struct NotificationRoutePresentation: Identifiable {
     let id = UUID()
     let route: AppNotificationRoute
+}
+
+private extension AppNotificationRoute {
+    var logRouteName: String {
+        switch self {
+        case .orderDetail:
+            return "orderDetail"
+        case .orderList:
+            return "orderList"
+        case .chatRoom:
+            return "chat"
+        case .communityPost:
+            return "communityPost"
+        case .communityList:
+            return "communityList"
+        case .paymentReceipt:
+            return "paymentReceipt"
+        case .none:
+            return "none"
+        }
+    }
+
+    var logIdentifier: String {
+        switch self {
+        case .orderDetail(let orderCode), .paymentReceipt(let orderCode):
+            return "orderCode=\(orderCode)"
+        case .chatRoom(let roomId, _, _):
+            return "roomId=\(roomId)"
+        case .communityPost(let postId, let commentId):
+            return "postId=\(postId) commentIdExists=\(commentId != nil)"
+        case .orderList, .communityList, .none:
+            return ""
+        }
+    }
 }
 
 @MainActor

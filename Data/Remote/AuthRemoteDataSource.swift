@@ -35,6 +35,7 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
     }
 
     func signIn(with credential: SocialLoginCredential, deviceToken: String?) async throws -> LoginResponseDTO {
+        logDeviceTokenIncluded(endpoint: endpointPath(for: credential.provider), label: "login", deviceToken: deviceToken)
         let endpoint = Endpoint<LoginResponseDTO>(
             path: endpointPath(for: credential.provider),
             method: .post,
@@ -46,6 +47,7 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
     }
 
     func signIn(email: String, password: String, deviceToken: String?) async throws -> LoginResponseDTO {
+        logDeviceTokenIncluded(endpoint: "/v1/users/login", label: "login", deviceToken: deviceToken)
         let body = RequestBody.json(
             try NetworkCoding.makeJSONEncoder().encode(
                 EmailLoginRequestDTO(email: email, password: password, deviceToken: deviceToken)
@@ -68,6 +70,7 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
         phoneNumber: String?,
         deviceToken: String?
     ) async throws -> LoginResponseDTO {
+        logDeviceTokenIncluded(endpoint: "/v1/users/join", label: "join", deviceToken: deviceToken)
         let body = RequestBody.json(
             try NetworkCoding.makeJSONEncoder().encode(
                 EmailSignUpRequestDTO(
@@ -226,17 +229,11 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
             guard let oauthToken = credential.accessToken, !oauthToken.isEmpty else {
                 throw NetworkError.invalidRequest
             }
-            guard let deviceToken = deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !deviceToken.isEmpty else {
-                Logger.shared.warning(
-                    "[Auth] kakao deviceToken missing endpoint=/v1/users/login/kakao oauthTokenSummary=\(SensitiveLogRedactor.summary(for: oauthToken))"
-                )
-                throw NetworkError.invalidRequest
-            }
+            let normalizedDeviceToken = deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
             return try encoder.encode(
                 KakaoLoginRequestDTO(
                     oauthToken: oauthToken,
-                    deviceToken: deviceToken
+                    deviceToken: normalizedDeviceToken
                 )
             )
         case .apple:
@@ -246,9 +243,27 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
             return try encoder.encode(
                 AppleLoginRequestDTO(
                     idToken: idToken,
-                    deviceToken: deviceToken
+                    deviceToken: deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 )
             )
         }
+    }
+
+    private func logDeviceTokenIncluded(endpoint: String, label: String, deviceToken: String?) {
+#if DEBUG
+        let includesDeviceToken = deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        switch label {
+        case "join":
+            Logger(category: "PushToken").debug("[PushToken] join body includesDeviceToken=\(includesDeviceToken)")
+        default:
+            Logger(category: "PushToken").debug("[PushToken] login body includesDeviceToken=\(includesDeviceToken)")
+        }
+#endif
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

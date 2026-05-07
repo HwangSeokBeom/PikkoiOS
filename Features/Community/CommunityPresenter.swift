@@ -21,7 +21,9 @@ final class CommunityPresenter: ObservableObject {
     private var isPaging = false
     private var recentlySubmittedPostID: String?
     private var feedRequestID = 0
+    private var paginationRequestID = 0
     private var updatingLikePostIDs: Set<String> = []
+    private var distanceCache: [CommunityDistanceCacheKey: Double] = [:]
 
     init(
         interactor: CommunityInteracting,
@@ -125,6 +127,7 @@ final class CommunityPresenter: ObservableObject {
 
     private func loadFeed(isRefresh: Bool, reason: String? = nil) async {
         feedRequestID += 1
+        paginationRequestID += 1
         let requestID = feedRequestID
 
         if isRefresh || hasLoaded {
@@ -207,6 +210,9 @@ final class CommunityPresenter: ObservableObject {
 
     private func apply(content: CommunityFeedContent) {
         viewState.featuredBanner = content.featuredBanner
+        if referenceLocation != content.referenceLocation {
+            distanceCache.removeAll()
+        }
         referenceLocation = content.referenceLocation
         viewState.hasReferenceLocation = content.referenceLocation != nil
         allPosts = content.posts
@@ -377,21 +383,50 @@ final class CommunityPresenter: ObservableObject {
             return
         }
 
+        paginationRequestID += 1
+        let pageRequestID = paginationRequestID
+        let feedRequestSnapshot = feedRequestID
+        let distanceSnapshot = viewState.selectedDistance
+        let sortSnapshot = viewState.selectedSort
         isPaging = true
-        defer { isPaging = false }
+        defer {
+            if pageRequestID == paginationRequestID {
+                isPaging = false
+            }
+        }
 
         do {
             let content = try await interactor.loadMorePosts(
-                selectedDistance: viewState.selectedDistance,
-                selectedSort: viewState.selectedSort,
+                selectedDistance: distanceSnapshot,
+                selectedSort: sortSnapshot,
                 nextCursor: nextCursor
             )
+            guard pageRequestID == paginationRequestID,
+                  feedRequestSnapshot == feedRequestID,
+                  distanceSnapshot == viewState.selectedDistance,
+                  sortSnapshot == viewState.selectedSort else {
+                #if DEBUG
+                Logger.shared.debug("[CommunityList] stale page ignored pageRequestID=\(pageRequestID) currentPage=\(paginationRequestID) feed=\(feedRequestSnapshot) currentFeed=\(feedRequestID)")
+                #endif
+                return
+            }
+            if let newReferenceLocation = content.referenceLocation,
+               newReferenceLocation != referenceLocation {
+                distanceCache.removeAll()
+            }
             referenceLocation = content.referenceLocation ?? referenceLocation
             viewState.hasReferenceLocation = referenceLocation != nil
             allPosts.append(contentsOf: content.posts)
             viewState.nextCursor = content.nextCursor
             applyFilters()
         } catch {
+            guard pageRequestID == paginationRequestID,
+                  feedRequestSnapshot == feedRequestID else {
+                #if DEBUG
+                Logger.shared.debug("[CommunityList] stale page failure ignored pageRequestID=\(pageRequestID)")
+                #endif
+                return
+            }
             viewState.errorMessage = transientErrorMessage(from: error)
             if viewState.posts.isEmpty {
                 viewState.emptyState = makeFailureEmptyState(for: error)
@@ -541,14 +576,34 @@ final class CommunityPresenter: ObservableObject {
     }
 
     private func distance(from post: CommunityPostSummary) -> Double? {
-        let distance = distanceCalculator.distanceMeters(
-            from: referenceLocation,
-            toLongitude: post.longitude,
-            latitude: post.latitude
-        )
+        guard let key = CommunityDistanceCacheKey(
+            reference: referenceLocation,
+            postLongitude: post.longitude,
+            postLatitude: post.latitude
+        ) else {
+            return nil
+        }
+
+        let distance: Double
+        let wasCached: Bool
+        if let cachedDistance = distanceCache[key] {
+            distance = cachedDistance
+            wasCached = true
+        } else {
+            guard let calculatedDistance = distanceCalculator.distanceMeters(
+                from: referenceLocation,
+                toLongitude: post.longitude,
+                latitude: post.latitude
+            ) else {
+                return nil
+            }
+            distanceCache[key] = calculatedDistance
+            distance = calculatedDistance
+            wasCached = false
+        }
         #if DEBUG
         Logger.shared.debug(
-            "[CommunityDistance] postID=\(post.id) hasGeo=\(post.longitude != nil && post.latitude != nil) distance=\(distance.map { String(Int($0.rounded())) } ?? "nil")"
+            "[CommunityDistance] postID=\(post.id) hasGeo=true distance=\(String(Int(distance.rounded()))) cached=\(wasCached)"
         )
         #endif
         return distance
@@ -832,5 +887,37 @@ private extension CommunityFeedStatus {
         case .authenticationRequired:
             return "authenticationRequired"
         }
+    }
+}
+
+private struct CommunityDistanceCacheKey: Hashable {
+    let referenceLatitude: Int
+    let referenceLongitude: Int
+    let postLatitude: Int
+    let postLongitude: Int
+
+    init?(
+        reference: CommunityReferenceLocation?,
+        postLongitude: Double?,
+        postLatitude: Double?
+    ) {
+        guard let reference,
+              let postLongitude,
+              let postLatitude,
+              reference.latitude.isFinite,
+              reference.longitude.isFinite,
+              postLatitude.isFinite,
+              postLongitude.isFinite else {
+            return nil
+        }
+
+        self.referenceLatitude = Self.scaled(reference.latitude)
+        self.referenceLongitude = Self.scaled(reference.longitude)
+        self.postLatitude = Self.scaled(postLatitude)
+        self.postLongitude = Self.scaled(postLongitude)
+    }
+
+    private static func scaled(_ value: Double) -> Int {
+        Int((value * 100_000).rounded())
     }
 }

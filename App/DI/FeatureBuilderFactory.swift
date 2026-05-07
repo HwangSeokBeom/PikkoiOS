@@ -208,25 +208,33 @@ struct FeatureBuilderFactory {
         guard appState.sessionStore.isAuthenticated else {
             let tokenLength = appState.sessionStore.deviceToken?.count ?? 0
             Logger(category: "FCM").warning("[FCM] server register deferred reason=unauthenticated tokenLength=\(tokenLength) source=\(source)")
+            Logger(category: "PushToken").debug("[PushToken] sync skipped reason=noUser")
             return
         }
 
         guard let accessToken = appState.sessionStore.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !accessToken.isEmpty,
-              let deviceToken = appState.sessionStore.deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !accessToken.isEmpty else {
+            Logger(category: "PushToken").debug("[PushToken] sync skipped reason=noAccessToken")
+            return
+        }
+
+        guard let deviceToken = appState.sessionStore.deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines),
               !deviceToken.isEmpty else {
+            Logger(category: "PushToken").debug("[PushToken] sync skipped reason=noFCMToken")
             return
         }
 
         let userID = appState.sessionStore.currentUserID ?? "unknown"
         guard !appState.sessionStore.hasSyncedCurrentDeviceToken else {
             Logger(category: "FCM").info("[FCM] server register skipped reason=unchangedAndPreviouslyRegistered userId=\(userID) source=\(source)")
+            Logger(category: "PushToken").debug("[PushToken] sync skipped reason=sameTokenAlreadySynced")
             return
         }
 
         let registrationKey = "\(userID)|\(deviceToken)"
         guard Self.inFlightDeviceTokenRegistrationKeys.insert(registrationKey).inserted else {
             Logger(category: "FCM").debug("[FCM] server register deduped key=userId:\(userID):tokenLength:\(deviceToken.count) source=\(source)")
+            Logger(category: "PushToken").debug("[PushToken] sync skipped reason=sameTokenInFlight")
             return
         }
         defer {
@@ -235,22 +243,51 @@ struct FeatureBuilderFactory {
 
         do {
             Logger(category: "FCM").info("[FCM] server register start source=\(source) userId=\(userID) tokenLength=\(deviceToken.count)")
+            Logger(category: "PushToken").debug("[PushToken] sync request path=/v1/users/deviceToken userIdExists=\(!userID.isEmpty) tokenLength=\(deviceToken.count)")
             try await container.authRepository.updateDeviceToken(deviceToken)
             appState.sessionStore.markCurrentDeviceTokenSynced()
             Logger(category: "FCM").info("[FCM] server register success source=\(source) userId=\(userID) endpoint=/v1/users/deviceToken")
+            Logger(category: "PushToken").debug("[PushToken] sync success userId=\(userID) tokenHash=\(String(deviceToken.hashValue))")
         } catch let error as NetworkError {
             if case .configuration(let configurationError) = error {
                 Logger(category: "FCM").error("[FCM] server register failed source=\(source) userId=\(userID) error=\(configurationError.userMessage)")
             } else {
                 Logger(category: "FCM").error("[FCM] server register failed source=\(source) userId=\(userID) error=\(error.localizedDescription)")
             }
+            Logger(category: "PushToken").error("[PushToken] sync failed status=\(pushTokenStatusDescription(from: error)) message=\(error.localizedDescription) retryable=\(error.isRetryablePushTokenSyncFailure)")
         } catch {
             Logger(category: "FCM").error("[FCM] server register failed source=\(source) userId=\(userID) error=\(error.localizedDescription)")
+            Logger(category: "PushToken").error("[PushToken] sync failed status=none message=\(error.localizedDescription) retryable=true")
+        }
+    }
+
+    private func pushTokenStatusDescription(from error: NetworkError) -> String {
+        switch error {
+        case .invalidRequest:
+            return "400"
+        case .unauthorized, .authenticationFailed:
+            return "401"
+        case .forbidden:
+            return "403"
+        case .accessTokenExpired:
+            return "419"
+        case .refreshTokenExpired:
+            return "418"
+        case .rateLimited:
+            return "429"
+        case .server:
+            return "5xx"
+        case .abnormalRequest, .businessAuthorization, .configuration, .conflict, .decoding, .notFound, .transport:
+            return "unknown"
         }
     }
 
     func routePendingNotificationIfNeeded() {
         container.appNotificationRouter.routePendingIfNeeded()
+    }
+
+    func setNotificationNavigationReady(_ isReady: Bool) {
+        container.appNotificationRouter.setNavigationReady(isReady)
     }
 
     func makeCommunityView() -> CommunityRootView {
@@ -558,5 +595,17 @@ struct FeatureBuilderFactory {
             authorizationPolicy: authorizationPolicy
         )
         return try await container.requestBuilder.build(for: endpoint)
+    }
+}
+
+private extension NetworkError {
+    var isRetryablePushTokenSyncFailure: Bool {
+        switch self {
+        case .transport, .server, .rateLimited, .accessTokenExpired:
+            return true
+        case .invalidRequest, .abnormalRequest, .configuration, .unauthorized, .authenticationFailed,
+             .refreshTokenExpired, .forbidden, .notFound, .conflict, .businessAuthorization, .decoding:
+            return false
+        }
     }
 }

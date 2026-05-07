@@ -19,6 +19,8 @@ final class VideoListPresenter: ObservableObject {
     private var isPaging = false
     private var videos: [Video] = []
     private var updatingVideoLikeIDs = Set<String>()
+    private var reloadGeneration = 0
+    private var pagingGeneration = 0
     private let pageLimit = 20
 
     init(
@@ -73,6 +75,9 @@ final class VideoListPresenter: ObservableObject {
             return
         }
 
+        reloadGeneration += 1
+        pagingGeneration += 1
+        let generation = reloadGeneration
         logger.debug("[VideoList] reload reason=\(reason)")
         if hasLoaded {
             viewState.isRefreshing = true
@@ -83,6 +88,10 @@ final class VideoListPresenter: ObservableObject {
 
         do {
             let page = try await interactor.loadVideos(nextCursor: nil, limit: pageLimit)
+            guard generation == reloadGeneration else {
+                logger.debug("[VideoList] stale reload ignored generation=\(generation) current=\(reloadGeneration)")
+                return
+            }
             videos = sanitizedVideos(page.items)
             viewState.videos = videos.map(makeVideoCardModel)
             viewState.nextCursor = page.nextCursor
@@ -90,12 +99,18 @@ final class VideoListPresenter: ObservableObject {
             hasLoaded = true
             logger.debug("[VideoList] loaded count=\(videos.count) nextCursor=\(page.nextCursor ?? "nil")")
         } catch {
+            guard generation == reloadGeneration else {
+                logger.debug("[VideoList] stale reload failure ignored generation=\(generation) current=\(reloadGeneration)")
+                return
+            }
             applyUnavailableState(message: "영상을 불러오지 못했어요.")
             logger.info("[VideoList] unavailable message=영상을 불러오지 못했어요.")
         }
 
-        viewState.isLoading = false
-        viewState.isRefreshing = false
+        if generation == reloadGeneration {
+            viewState.isLoading = false
+            viewState.isRefreshing = false
+        }
     }
 
     private func loadNextPageIfNeeded(triggeredBy videoID: String) async {
@@ -111,19 +126,34 @@ final class VideoListPresenter: ObservableObject {
         }
 
         isPaging = true
+        pagingGeneration += 1
+        let pageGeneration = pagingGeneration
+        let reloadSnapshot = reloadGeneration
         viewState.isPaging = true
         defer {
-            isPaging = false
-            viewState.isPaging = false
+            if pageGeneration == pagingGeneration {
+                isPaging = false
+                viewState.isPaging = false
+            }
         }
 
         do {
             let page = try await interactor.loadVideos(nextCursor: nextCursor, limit: pageLimit)
+            guard pageGeneration == pagingGeneration,
+                  reloadSnapshot == reloadGeneration else {
+                logger.debug("[VideoList] stale page ignored pageGeneration=\(pageGeneration) currentPage=\(pagingGeneration) reload=\(reloadSnapshot) currentReload=\(reloadGeneration)")
+                return
+            }
             videos = sanitizedVideos(videos + page.items)
             viewState.videos = videos.map(makeVideoCardModel)
             viewState.nextCursor = page.nextCursor
             logger.debug("[VideoList] loaded count=\(videos.count) nextCursor=\(page.nextCursor ?? "nil")")
         } catch {
+            guard pageGeneration == pagingGeneration,
+                  reloadSnapshot == reloadGeneration else {
+                logger.debug("[VideoList] stale page failure ignored pageGeneration=\(pageGeneration) currentPage=\(pagingGeneration)")
+                return
+            }
             viewState.errorMessage = "영상을 불러오지 못했어요."
             logger.info("[VideoList] unavailable message=영상을 불러오지 못했어요.")
         }

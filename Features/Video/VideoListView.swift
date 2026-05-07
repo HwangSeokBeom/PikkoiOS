@@ -8,6 +8,7 @@ struct VideoListView: View {
     @ObservedObject var presenter: VideoListPresenter
     let imageLoader: any AuthorizedImageLoading
     let resetTrigger: Int
+    @State private var visibleVideoID: String?
 
     var body: some View {
         ZStack {
@@ -49,16 +50,18 @@ struct VideoListView: View {
     private var content: some View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: PikkoSpacing.md) {
+                LazyVStack(spacing: 0) {
                     Color.clear
                         .frame(height: 0)
                         .id(ScrollAnchor.top)
                     if let errorMessage = presenter.viewState.errorMessage {
                         ToastView(message: errorMessage, tone: .warning)
+                            .padding(.horizontal, PikkoSpacing.lg)
+                            .padding(.top, PikkoSpacing.md)
                     }
 
                     ForEach(presenter.viewState.videos) { video in
-                        VideoCardView(
+                        ShortsVideoPageView(
                             model: video,
                             imageLoader: imageLoader,
                             onTap: {
@@ -68,6 +71,8 @@ struct VideoListView: View {
                                 Task { await presenter.send(.videoLikeTapped(video.id)) }
                             }
                         )
+                        .containerRelativeFrame(.vertical)
+                        .id(video.id)
                         .onAppear {
                             Task { await presenter.send(.videoAppeared(video.id)) }
                         }
@@ -83,9 +88,13 @@ struct VideoListView: View {
                         .padding(.vertical, PikkoSpacing.md)
                     }
                 }
-                .padding(.horizontal, PikkoSpacing.lg)
-                .padding(.top, PikkoSpacing.md)
-                .padding(.bottom, RootTabBarMetrics.scrollContentBottomInset)
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $visibleVideoID)
+            .onChange(of: visibleVideoID) { _, videoID in
+                guard let videoID else { return }
+                Task { await presenter.send(.videoAppeared(videoID)) }
             }
             .onChange(of: resetTrigger) { _, _ in
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -94,5 +103,123 @@ struct VideoListView: View {
                 Task { await presenter.send(.refreshRequested) }
             }
         }
+    }
+}
+
+private struct ShortsVideoPageView: View {
+    let model: VideoCardModel
+    let imageLoader: any AuthorizedImageLoading
+    let onTap: () -> Void
+    let onLikeTap: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black
+                .ignoresSafeArea()
+
+            AuthorizedAsyncImage(
+                path: model.thumbnailURL,
+                loader: imageLoader,
+                contentMode: .fill,
+                cornerRadius: 0,
+                showsProgress: true
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .overlay {
+                LinearGradient(
+                    colors: [
+                        .black.opacity(0.1),
+                        .black.opacity(0.24),
+                        .black.opacity(0.78)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+
+            Button(action: onTap) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 68, height: 68)
+                    .background(.black.opacity(0.45))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("영상 재생")
+
+            VStack {
+                Spacer()
+                HStack(alignment: .bottom, spacing: PikkoSpacing.md) {
+                    VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+                        Text(model.title)
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+
+                        if !model.description.isEmpty {
+                            Text(model.description)
+                                .font(PikkoTypography.body)
+                                .foregroundStyle(.white.opacity(0.86))
+                                .lineLimit(3)
+                        }
+
+                        HStack(spacing: PikkoSpacing.xs) {
+                            metaPill(systemImage: "clock.fill", text: model.durationText)
+                            metaPill(systemImage: "eye.fill", text: model.viewCountText)
+                            if !model.createdAtText.isEmpty {
+                                metaPill(systemImage: "calendar", text: model.createdAtText)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(spacing: PikkoSpacing.md) {
+                        actionButton(
+                            systemImage: model.isLiked ? "heart.fill" : "heart",
+                            title: model.likeCountText,
+                            isActive: model.isLiked,
+                            action: onLikeTap
+                        )
+                        .disabled(model.isLikeUpdating)
+
+                        actionButton(systemImage: "text.bubble.fill", title: "댓글", isActive: false, action: onTap)
+                        actionButton(systemImage: "square.and.arrow.up", title: "공유", isActive: false, action: {})
+                    }
+                }
+                .padding(.horizontal, PikkoSpacing.lg)
+                .padding(.bottom, RootTabBarMetrics.scrollContentBottomInset + PikkoSpacing.xl)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+    }
+
+    private func actionButton(systemImage: String, title: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 22, weight: .semibold))
+                    .frame(width: 46, height: 46)
+                    .background(.black.opacity(0.32))
+                    .clipShape(Circle())
+                Text(title)
+                    .font(PikkoTypography.micro)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(isActive ? PikkoColor.primary : .white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func metaPill(systemImage: String, text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+            Text(text)
+                .font(PikkoTypography.captionStrong)
+        }
+        .foregroundStyle(.white.opacity(0.84))
     }
 }

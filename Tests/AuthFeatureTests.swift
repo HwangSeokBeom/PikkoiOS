@@ -471,7 +471,8 @@ final class ProfileFeatureTests: XCTestCase {
         let presenter = ProfilePresenter(
             interactor: SpyProfileInteractor(),
             router: ProfileRouter(),
-            sessionStore: sessionStore
+            sessionStore: sessionStore,
+            imageLoader: PreviewAuthorizedImageLoader()
         )
 
         await presenter.send(.onAppear)
@@ -505,12 +506,17 @@ final class ProfileFeatureTests: XCTestCase {
                 uploadedImagePath: "https://example.com/profile/uploaded.jpg"
             ),
             router: ProfileRouter(),
-            sessionStore: sessionStore
+            sessionStore: sessionStore,
+            imageLoader: PreviewAuthorizedImageLoader()
         )
 
         await presenter.send(.onAppear)
         await presenter.send(.editProfileTapped)
-        await presenter.send(.profileImageDataSelected(Data([0x01, 0x02]), fileName: "profile.jpg"))
+        let imageData = UIGraphicsImageRenderer(size: CGSize(width: 10, height: 10)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 10, height: 10))
+        }.jpegData(compressionQuality: 0.9)!
+        await presenter.send(.profileImageDataSelected(imageData, fileName: "profile.jpg"))
 
         XCTAssertEqual(
             presenter.viewState.editorProfileImagePath,

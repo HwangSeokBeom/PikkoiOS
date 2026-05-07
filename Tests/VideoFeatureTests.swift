@@ -135,6 +135,67 @@ final class VideoFeatureTests: XCTestCase {
         XCTAssertEqual(response.subtitles.first?.isDefault, true)
     }
 
+    func testStreamUrlResponseDecodesOptionalSubtitleContractFields() throws {
+        let response = try NetworkCoding.makeJSONDecoder().decode(
+            StreamUrlResponseDTO.self,
+            from: """
+            {
+              "video_id": "video-1",
+              "stream_url": "/videos/stream/video-name/master.m3u8?token=abc",
+              "subtitles": [
+                {
+                  "language_code": "en",
+                  "display_name": "English",
+                  "isDefault": true,
+                  "format": "vtt",
+                  "url": "https://example.com/en.vtt?token=subtitle-token"
+                }
+              ]
+            }
+            """.data(using: .utf8)!
+        )
+
+        XCTAssertEqual(response.subtitles.first?.language, "en")
+        XCTAssertEqual(response.subtitles.first?.name, "English")
+        XCTAssertEqual(response.subtitles.first?.format, "vtt")
+        XCTAssertEqual(response.subtitles.first?.urlPath, "https://example.com/en.vtt?token=subtitle-token")
+    }
+
+    func testVideoSubtitleParserMatchesWebVTTCues() throws {
+        let cues = VideoSubtitleParser.parse(
+            """
+            WEBVTT
+
+            00:00:01.000 --> 00:00:02.500
+            첫 번째 자막
+
+            00:00:03.000 --> 00:00:04.000
+            두 번째
+            자막
+            """,
+            format: .webVTT
+        )
+
+        XCTAssertEqual(cues.count, 2)
+        XCTAssertEqual(cues[0], VideoSubtitleCue(start: 1, end: 2.5, text: "첫 번째 자막"))
+        XCTAssertEqual(cues[1], VideoSubtitleCue(start: 3, end: 4, text: "두 번째\n자막"))
+    }
+
+    func testVideoSubtitleParserMatchesSRTCues() throws {
+        let cues = VideoSubtitleParser.parse(
+            """
+            1
+            00:00:01,000 --> 00:00:02,000
+            안녕하세요
+            """,
+            format: .srt
+        )
+
+        XCTAssertEqual(cues, [
+            VideoSubtitleCue(start: 1, end: 2, text: "안녕하세요")
+        ])
+    }
+
     func testVideoLikeRequestEncodesLikeStatusKey() throws {
         let data = try NetworkCoding.makeJSONEncoder().encode(VideoLikeRequestDTO(likeStatus: true))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Bool])

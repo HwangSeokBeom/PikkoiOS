@@ -382,12 +382,52 @@ struct VideoSubtitleDTO: Decodable, Sendable {
     let name: String
     let isDefault: Bool
     let urlPath: String
+    let format: String?
 
     private enum CodingKeys: String, CodingKey {
+        case id
         case language
+        case languageCode = "language_code"
+        case languageCodeCamel = "languageCode"
         case name
+        case displayName = "display_name"
+        case displayNameCamel = "displayName"
         case isDefault = "is_default"
+        case isDefaultCamel = "isDefault"
         case urlPath = "url"
+        case format
+    }
+
+    init(
+        language: String,
+        name: String,
+        isDefault: Bool,
+        urlPath: String,
+        format: String? = nil
+    ) {
+        self.language = language
+        self.name = name
+        self.isDefault = isDefault
+        self.urlPath = urlPath
+        self.format = format
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let language = try container.decodeIfPresent(String.self, forKey: .language)
+            ?? container.decodeIfPresent(String.self, forKey: .languageCode)
+            ?? container.decodeIfPresent(String.self, forKey: .languageCodeCamel)
+            ?? ""
+        self.language = language
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+            ?? container.decodeIfPresent(String.self, forKey: .displayName)
+            ?? container.decodeIfPresent(String.self, forKey: .displayNameCamel)
+            ?? language
+        self.isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault)
+            ?? container.decodeIfPresent(Bool.self, forKey: .isDefaultCamel)
+            ?? false
+        self.urlPath = try container.decodeIfPresent(String.self, forKey: .urlPath) ?? ""
+        self.format = try container.decodeIfPresent(String.self, forKey: .format)
     }
 }
 

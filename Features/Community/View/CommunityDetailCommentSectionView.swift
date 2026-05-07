@@ -100,6 +100,16 @@ struct CommunityDetailCommentSectionView: View {
                             Text(comment.timeText)
                                 .font(PikkoTypography.caption)
                                 .foregroundStyle(PikkoColor.secondaryText)
+
+                            if comment.isPending {
+                                Text("전송 중")
+                                    .font(PikkoTypography.micro)
+                                    .foregroundStyle(PikkoColor.secondaryText)
+                            } else if comment.isFailed {
+                                Text("전송 실패")
+                                    .font(PikkoTypography.micro)
+                                    .foregroundStyle(PikkoColor.danger)
+                            }
                         }
 
                         if state.editingCommentID == comment.id {
@@ -138,7 +148,7 @@ struct CommunityDetailCommentSectionView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
-                        if !comment.isHidden && state.editingCommentID != comment.id {
+                        if !comment.isHidden && !comment.isPending && !comment.isFailed && state.editingCommentID != comment.id {
                             HStack(spacing: PikkoSpacing.sm) {
                                 if comment.isMine {
                                     Button("수정") {

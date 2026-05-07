@@ -37,9 +37,13 @@ struct VideoPlayerView: View {
             }
         }
         .overlay {
-            qualityBottomSheet
+            ZStack {
+                qualityBottomSheet
+                subtitleBottomSheet
+            }
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.88), value: viewModel.viewState.isQualityMenuPresented)
+        .animation(.spring(response: 0.32, dampingFraction: 0.88), value: viewModel.viewState.isSubtitleMenuPresented)
         .task {
             await viewModel.loadStreamIfNeeded()
         }
@@ -91,6 +95,7 @@ struct VideoPlayerView: View {
             }
 
             overlayContent
+            captionOverlay
             playbackControlBar
         }
         .aspectRatio(16 / 9, contentMode: .fit)
@@ -180,6 +185,22 @@ struct VideoPlayerView: View {
                             .foregroundStyle(.white.opacity(0.86))
                             .monospacedDigit()
                             .frame(width: 44, alignment: .trailing)
+
+                        Button {
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                                viewModel.openSubtitleMenu()
+                            }
+                        } label: {
+                            Image(systemName: "captions.bubble")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(viewModel.viewState.captionsEnabled ? .white : .white.opacity(0.45))
+                                .frame(width: 34, height: 34)
+                                .background(.white.opacity(0.16))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!viewModel.viewState.hasSubtitleOptions)
+                        .accessibilityLabel(viewModel.viewState.hasSubtitleOptions ? "자막 선택" : "자막 없음")
                     }
                 }
                 .padding(.horizontal, PikkoSpacing.sm)
@@ -199,6 +220,30 @@ struct VideoPlayerView: View {
             }
         case .idle, .loadingStream, .failed, .expiredOrUnavailable:
             EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var captionOverlay: some View {
+        if viewModel.viewState.captionsEnabled,
+           let text = viewModel.viewState.activeCaptionText,
+           !text.isEmpty {
+            VStack {
+                Spacer()
+                Text(text)
+                    .font(PikkoTypography.bodyStrong)
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .padding(.horizontal, PikkoSpacing.md)
+                    .padding(.vertical, PikkoSpacing.xs)
+                    .background(.black.opacity(0.62))
+                    .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                    .padding(.horizontal, PikkoSpacing.lg)
+                    .padding(.bottom, 58)
+                    .accessibilityLabel("자막 \(text)")
+            }
+            .transition(.opacity)
         }
     }
 
@@ -302,11 +347,37 @@ struct VideoPlayerView: View {
                     }
                 }
 
-                if !stream.subtitles.isEmpty {
-                    Text(stream.subtitles.map(\.name).joined(separator: " · "))
+                HStack(spacing: PikkoSpacing.xs) {
+                    Button {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                            viewModel.openSubtitleMenu()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "captions.bubble")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(viewModel.viewState.hasSubtitleOptions ? viewModel.viewState.selectedSubtitleTitle : "자막 없음")
+                                .font(PikkoTypography.captionStrong)
+                        }
+                        .foregroundStyle(viewModel.viewState.hasSubtitleOptions ? PikkoColor.secondaryText : PikkoColor.gray400)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(PikkoColor.surfaceMuted)
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!viewModel.viewState.hasSubtitleOptions)
+
+                    if viewModel.viewState.isSubtitleLoading {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    }
+                }
+
+                if let subtitleError = viewModel.viewState.subtitleErrorMessage {
+                    Text(subtitleError)
                         .font(PikkoTypography.caption)
-                        .foregroundStyle(PikkoColor.secondaryText)
-                        .lineLimit(2)
+                        .foregroundStyle(PikkoColor.warning)
                 }
             }
         }
@@ -415,6 +486,87 @@ struct VideoPlayerView: View {
     }
 
     private func qualitySheetButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: PikkoSpacing.sm) {
+                Text(title)
+                    .font(PikkoTypography.body)
+                    .foregroundStyle(PikkoColor.primaryText)
+
+                Spacer()
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(PikkoColor.accentStrong)
+                }
+            }
+            .frame(minHeight: 48)
+            .padding(.horizontal, PikkoSpacing.lg)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var subtitleBottomSheet: some View {
+        if viewModel.viewState.isSubtitleMenuPresented {
+            ZStack(alignment: .bottom) {
+                Color.black.opacity(0.42)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                            viewModel.dismissSubtitleMenu()
+                        }
+                    }
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("자막")
+                        .font(PikkoTypography.bodyStrong)
+                        .foregroundStyle(PikkoColor.primaryText)
+                        .padding(.horizontal, PikkoSpacing.lg)
+                        .padding(.top, PikkoSpacing.lg)
+                        .padding(.bottom, PikkoSpacing.sm)
+
+                    subtitleSheetButton(
+                        title: "끔",
+                        isSelected: !viewModel.viewState.captionsEnabled
+                    ) {
+                        Task { await viewModel.selectSubtitle(nil) }
+                    }
+
+                    if viewModel.viewState.hasSystemSubtitleTracks {
+                        subtitleSheetButton(
+                            title: "시스템 자막",
+                            isSelected: viewModel.viewState.captionsEnabled
+                                && viewModel.viewState.selectedSubtitleID == nil
+                        ) {
+                            viewModel.selectSystemSubtitles()
+                        }
+                    }
+
+                    if let stream = viewModel.viewState.stream {
+                        ForEach(stream.subtitles) { subtitle in
+                            subtitleSheetButton(
+                                title: "\(subtitle.name) · \(subtitle.languageCode)",
+                                isSelected: viewModel.viewState.captionsEnabled
+                                    && viewModel.viewState.selectedSubtitleID == subtitle.id
+                            ) {
+                                Task { await viewModel.selectSubtitle(subtitle) }
+                            }
+                        }
+                    }
+                }
+                .safeAreaPadding(.bottom, PikkoSpacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(PikkoColor.background)
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18))
+                .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: -6)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+    }
+
+    private func subtitleSheetButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: PikkoSpacing.sm) {
                 Text(title)

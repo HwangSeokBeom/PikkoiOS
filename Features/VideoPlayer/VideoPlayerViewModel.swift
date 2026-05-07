@@ -28,7 +28,7 @@ final class VideoPlayerViewModel: ObservableObject {
     private var itemStatusObservation: NSKeyValueObservation?
     private var playerStatusObservation: NSKeyValueObservation?
     private var playerTimeControlObservation: NSKeyValueObservation?
-    private var playerTimeObserverToken: Any?
+    private var periodicTimeObserverRegistration: PeriodicTimeObserverRegistration?
     private var pendingSeekTime: CMTime?
     private var pendingResumeAfterReady = false
     private var playbackGeneration = 0
@@ -38,6 +38,9 @@ final class VideoPlayerViewModel: ObservableObject {
     private var currentAttemptAuthMode: HLSAuthMode?
     private var currentAttemptFailureMessage: String?
     private var didRefreshAfterHLSServiceMismatch = false
+    private var subtitleGeneration = 0
+    private var subtitleCues: [VideoSubtitleCue] = []
+    private let subtitlePreferenceStore = VideoSubtitlePreferenceStore()
 
     init(
         video: Video,
@@ -78,6 +81,7 @@ final class VideoPlayerViewModel: ObservableObject {
         itemStatusObservation?.invalidate()
         playerStatusObservation?.invalidate()
         playerTimeControlObservation?.invalidate()
+        periodicTimeObserverRegistration?.invalidate()
     }
 
     func loadStreamIfNeeded() async {
@@ -114,6 +118,7 @@ final class VideoPlayerViewModel: ObservableObject {
 
     func tearDown() {
         cancelPendingPlayback(reason: "viewDisappear")
+        cancelSubtitleLoading(reason: "viewDisappear")
         removeCurrentItemObserver()
         player?.pause()
         player?.replaceCurrentItem(with: nil)
@@ -124,6 +129,7 @@ final class VideoPlayerViewModel: ObservableObject {
         removePeriodicTimeObserver()
         viewState.currentTime = 0
         viewState.duration = nil
+        viewState.activeCaptionText = nil
     }
 
     func openQualityMenu() {
@@ -246,6 +252,53 @@ final class VideoPlayerViewModel: ObservableObject {
         viewState.toastMessage = nil
     }
 
+    func openSubtitleMenu() {
+        guard viewState.hasSubtitleOptions else { return }
+        viewState.isSubtitleMenuPresented = true
+    }
+
+    func dismissSubtitleMenu() {
+        viewState.isSubtitleMenuPresented = false
+    }
+
+    func setCaptionsEnabled(_ isEnabled: Bool) async {
+        viewState.captionsEnabled = isEnabled
+        viewState.activeCaptionText = nil
+        subtitlePreferenceStore.saveEnabled(isEnabled)
+        if isEnabled {
+            await loadSelectedSubtitleIfNeeded(reason: "captionsEnabled")
+            if let item = player?.currentItem {
+                configureSystemSubtitleIfNeeded(for: item)
+            }
+        } else {
+            cancelSubtitleLoading(reason: "captionsDisabled")
+            deselectSystemSubtitlesIfNeeded()
+        }
+    }
+
+    func selectSubtitle(_ subtitle: VideoSubtitle?) async {
+        viewState.selectedSubtitleID = subtitle?.id
+        viewState.captionsEnabled = subtitle != nil
+        viewState.isSubtitleMenuPresented = false
+        viewState.activeCaptionText = nil
+        subtitlePreferenceStore.saveEnabled(subtitle != nil)
+        subtitlePreferenceStore.saveSubtitleID(subtitle?.id)
+        await loadSelectedSubtitleIfNeeded(reason: "subtitleSelected")
+    }
+
+    func selectSystemSubtitles() {
+        viewState.selectedSubtitleID = nil
+        viewState.captionsEnabled = true
+        viewState.isSubtitleMenuPresented = false
+        viewState.activeCaptionText = nil
+        subtitlePreferenceStore.saveEnabled(true)
+        subtitlePreferenceStore.saveSubtitleID(nil)
+        cancelSubtitleLoading(reason: "systemSubtitleSelected")
+        if let item = player?.currentItem {
+            configureSystemSubtitleIfNeeded(for: item)
+        }
+    }
+
     func logNavigationRender() {
         logger.debug("[VideoNavigation] render customBackButton=true systemBackButtonHidden=true")
     }
@@ -305,6 +358,10 @@ final class VideoPlayerViewModel: ObservableObject {
             let stream = try await fetchStreamUseCase.execute(videoId: videoID)
             streamIssuedAt = Date()
             viewState.stream = stream
+            configureSubtitleSelection(for: stream)
+            Task { [weak self] in
+                await self?.loadSelectedSubtitleIfNeeded(reason: "streamLoaded")
+            }
             attemptedFallbackQualities.removeAll()
             didRefreshAfterHLSServiceMismatch = false
 
@@ -603,6 +660,10 @@ final class VideoPlayerViewModel: ObservableObject {
             let stream = try await fetchStreamUseCase.execute(videoId: videoID)
             streamIssuedAt = Date()
             viewState.stream = stream
+            configureSubtitleSelection(for: stream)
+            Task { [weak self] in
+                await self?.loadSelectedSubtitleIfNeeded(reason: "streamRefreshed")
+            }
             logStreamResponseDiagnostics(requestedVideoID: videoID, stream: stream)
 
             let correctedQuality = correctedUserSelectedQuality(in: stream)
@@ -932,6 +993,7 @@ final class VideoPlayerViewModel: ObservableObject {
                     self.viewState.effectivePlaybackQuality = quality
                     self.viewState.detailReason = nil
                     self.updatePlaybackTiming(from: observedItem)
+                    self.configureSystemSubtitleIfNeeded(for: observedItem)
                     self.logAccessLog(for: observedItem)
                     let seekTime = self.pendingSeekTime
                     let shouldResume = self.pendingResumeAfterReady
@@ -1118,7 +1180,7 @@ final class VideoPlayerViewModel: ObservableObject {
     private func installPeriodicTimeObserverIfNeeded(for player: AVPlayer) {
         removePeriodicTimeObserver()
         let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
-        playerTimeObserverToken = player.addPeriodicTimeObserver(
+        let token = player.addPeriodicTimeObserver(
             forInterval: interval,
             queue: .main
         ) { [weak self, weak player] time in
@@ -1126,14 +1188,15 @@ final class VideoPlayerViewModel: ObservableObject {
                 guard let self else { return }
                 self.viewState.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
                 self.updatePlaybackTiming(from: player?.currentItem)
+                self.updateActiveCaption(at: self.viewState.currentTime)
             }
         }
+        periodicTimeObserverRegistration = PeriodicTimeObserverRegistration(player: player, token: token)
     }
 
     private func removePeriodicTimeObserver() {
-        guard let playerTimeObserverToken else { return }
-        player?.removeTimeObserver(playerTimeObserverToken)
-        self.playerTimeObserverToken = nil
+        periodicTimeObserverRegistration?.invalidate()
+        periodicTimeObserverRegistration = nil
     }
 
     private func updatePlaybackTiming(from item: AVPlayerItem?) {
@@ -1144,6 +1207,257 @@ final class VideoPlayerViewModel: ObservableObject {
 
         let durationSeconds = item.duration.seconds
         viewState.duration = durationSeconds.isFinite && durationSeconds > 0 ? durationSeconds : nil
+    }
+
+    private func configureSubtitleSelection(for stream: VideoStream) {
+        viewState.captionsEnabled = subtitlePreferenceStore.isEnabled
+        if let savedSubtitleID = subtitlePreferenceStore.subtitleID,
+           stream.subtitles.contains(where: { $0.id == savedSubtitleID }) {
+            viewState.selectedSubtitleID = savedSubtitleID
+        } else {
+            viewState.selectedSubtitleID = stream.subtitles.first(where: \.isDefault)?.id ?? stream.subtitles.first?.id
+        }
+        viewState.subtitleErrorMessage = nil
+        viewState.activeCaptionText = nil
+        subtitleCues = []
+    }
+
+    private func loadSelectedSubtitleIfNeeded(reason: String) async {
+        subtitleGeneration += 1
+        let generation = subtitleGeneration
+        guard viewState.captionsEnabled,
+              let stream = viewState.stream,
+              let selectedSubtitleID = viewState.selectedSubtitleID,
+              let subtitle = stream.subtitles.first(where: { $0.id == selectedSubtitleID }) else {
+            subtitleCues = []
+            viewState.activeCaptionText = nil
+            viewState.isSubtitleLoading = false
+            return
+        }
+
+        guard subtitle.format == .webVTT || subtitle.format == .srt else {
+            viewState.subtitleErrorMessage = "지원하지 않는 자막 형식입니다."
+            viewState.isSubtitleLoading = false
+            subtitleCues = []
+            return
+        }
+
+        viewState.isSubtitleLoading = true
+        viewState.subtitleErrorMessage = nil
+        let startedAt = Date()
+        do {
+            let headers = (try? await makeProtectedResourceHeaders()) ?? [:]
+            let cues = try await VideoSubtitleLoader.load(subtitle: subtitle, headers: headers)
+            guard generation == subtitleGeneration else {
+                logger.debug("[VideoSubtitle] stale load ignored generation=\(generation) current=\(subtitleGeneration)")
+                return
+            }
+            subtitleCues = cues
+            viewState.isSubtitleLoading = false
+            updateActiveCaption(at: viewState.currentTime)
+            logger.debug("[VideoSubtitle] loaded language=\(subtitle.languageCode) format=\(subtitle.format.rawValue) cueCount=\(cues.count) elapsedMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) reason=\(reason)")
+        } catch {
+            guard generation == subtitleGeneration else { return }
+            subtitleCues = []
+            viewState.isSubtitleLoading = false
+            viewState.activeCaptionText = nil
+            viewState.subtitleErrorMessage = "자막을 불러오지 못했습니다."
+            logger.debug("[VideoSubtitle] load failed language=\(subtitle.languageCode) reason=\(error.localizedDescription)")
+        }
+    }
+
+    private func cancelSubtitleLoading(reason: String) {
+        subtitleGeneration += 1
+        subtitleCues = []
+        viewState.isSubtitleLoading = false
+        viewState.activeCaptionText = nil
+        logger.debug("[VideoSubtitle] cancelled reason=\(reason) generation=\(subtitleGeneration)")
+    }
+
+    private func updateActiveCaption(at time: Double) {
+        guard viewState.captionsEnabled,
+              !subtitleCues.isEmpty else {
+            viewState.activeCaptionText = nil
+            return
+        }
+
+        let text = subtitleCues.first { cue in
+            time >= cue.start && time <= cue.end
+        }?.text
+        if viewState.activeCaptionText != text {
+            viewState.activeCaptionText = text
+        }
+    }
+
+    private func configureSystemSubtitleIfNeeded(for item: AVPlayerItem) {
+        guard let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible) else {
+            viewState.hasSystemSubtitleTracks = false
+            return
+        }
+
+        viewState.hasSystemSubtitleTracks = !group.options.isEmpty
+        guard viewState.captionsEnabled else {
+            item.select(nil, in: group)
+            return
+        }
+
+        if viewState.stream?.subtitles.isEmpty == false {
+            item.select(nil, in: group)
+            return
+        }
+
+        let option = group.defaultOption ?? group.options.first
+        item.select(option, in: group)
+    }
+
+    private func deselectSystemSubtitlesIfNeeded() {
+        guard let item = player?.currentItem,
+              let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible) else {
+            return
+        }
+        item.select(nil, in: group)
+    }
+}
+
+private final class PeriodicTimeObserverRegistration: @unchecked Sendable {
+    private weak var player: AVPlayer?
+    private let token: Any
+
+    init(player: AVPlayer, token: Any) {
+        self.player = player
+        self.token = token
+    }
+
+    func invalidate() {
+        player?.removeTimeObserver(token)
+    }
+}
+
+struct VideoSubtitleCue: Equatable, Sendable {
+    let start: Double
+    let end: Double
+    let text: String
+}
+
+enum VideoSubtitleParser {
+    static func parse(_ rawText: String, format: VideoSubtitleFormat) -> [VideoSubtitleCue] {
+        switch format {
+        case .webVTT:
+            return parseBlocks(rawText, timestampSeparator: " --> ")
+        case .srt:
+            return parseBlocks(rawText, timestampSeparator: " --> ")
+        case .unknown:
+            return []
+        }
+    }
+
+    private static func parseBlocks(_ rawText: String, timestampSeparator: String) -> [VideoSubtitleCue] {
+        rawText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n\n")
+            .compactMap { parseBlock($0, timestampSeparator: timestampSeparator) }
+            .filter { $0.end > $0.start && !$0.text.isEmpty }
+            .sorted { $0.start < $1.start }
+    }
+
+    private static func parseBlock(_ block: String, timestampSeparator: String) -> VideoSubtitleCue? {
+        let lines = block
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("NOTE") && !$0.hasPrefix("WEBVTT") }
+
+        guard let timestampLineIndex = lines.firstIndex(where: { $0.contains(timestampSeparator) }) else {
+            return nil
+        }
+
+        let timestampLine = lines[timestampLineIndex]
+        let parts = timestampLine.components(separatedBy: timestampSeparator)
+        guard parts.count >= 2,
+              let start = parseTimestamp(parts[0]),
+              let end = parseTimestamp(parts[1].components(separatedBy: " ").first ?? parts[1]) else {
+            return nil
+        }
+
+        let text = lines
+            .dropFirst(timestampLineIndex + 1)
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return VideoSubtitleCue(start: start, end: end, text: text)
+    }
+
+    private static func parseTimestamp(_ rawValue: String) -> Double? {
+        let normalized = rawValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        let parts = normalized.split(separator: ":").map(String.init)
+        guard parts.count == 2 || parts.count == 3 else { return nil }
+
+        let secondsPart = parts.last ?? ""
+        let secondComponents = secondsPart.split(separator: ".", omittingEmptySubsequences: false)
+        guard let wholeSeconds = Double(secondComponents.first.map(String.init) ?? "") else {
+            return nil
+        }
+        let fractional = secondComponents.count > 1
+            ? Double("0.\(secondComponents[1])") ?? 0
+            : 0
+        let minutes = Double(parts[parts.count - 2]) ?? 0
+        let hours = parts.count == 3 ? Double(parts[0]) ?? 0 : 0
+        return hours * 3600 + minutes * 60 + wholeSeconds + fractional
+    }
+}
+
+private enum VideoSubtitleLoader {
+    static func load(subtitle: VideoSubtitle, headers: [String: String]) async throws -> [VideoSubtitleCue] {
+        var request = URLRequest(url: subtitle.url)
+        for (field, value) in headers where !value.isEmpty {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200...299).contains(httpResponse.statusCode) {
+            throw URLError(.badServerResponse)
+        }
+        return await Task.detached(priority: .utility) {
+            let text = String(decoding: data, as: UTF8.self)
+            return VideoSubtitleParser.parse(text, format: subtitle.format)
+        }.value
+    }
+}
+
+private struct VideoSubtitlePreferenceStore {
+    private enum Key {
+        static let enabled = "video.subtitle.enabled"
+        static let subtitleID = "video.subtitle.selectedID"
+    }
+
+    private let userDefaults: UserDefaults
+
+    init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+    }
+
+    var isEnabled: Bool {
+        if userDefaults.object(forKey: Key.enabled) == nil {
+            return true
+        }
+        return userDefaults.bool(forKey: Key.enabled)
+    }
+
+    var subtitleID: String? {
+        userDefaults.string(forKey: Key.subtitleID)
+    }
+
+    func saveEnabled(_ isEnabled: Bool) {
+        userDefaults.set(isEnabled, forKey: Key.enabled)
+    }
+
+    func saveSubtitleID(_ subtitleID: String?) {
+        if let subtitleID {
+            userDefaults.set(subtitleID, forKey: Key.subtitleID)
+        } else {
+            userDefaults.removeObject(forKey: Key.subtitleID)
+        }
     }
 }
 

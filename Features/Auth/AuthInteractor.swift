@@ -87,29 +87,10 @@ struct AuthInteractor: AuthInteracting {
         storedDeviceToken: String?,
         oauthToken: String?
     ) throws -> String? {
-        guard provider == .kakao else {
-            return storedDeviceToken
-        }
-
-        if let trimmed = storedDeviceToken?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !trimmed.isEmpty {
-            return trimmed
-        }
-
-#if DEBUG
-        if appConfiguration.environment != .production {
-            let fallback = "debug-ios-simulator-device-token"
-            Logger.shared.warning(
-                "[Auth] deviceToken missing; using debug fallback for kakao login. environment=\(appConfiguration.environment.rawValue) simulator=\(DeviceTokenResolutionContext.isSimulator) oauthTokenSummary=\(SensitiveLogRedactor.summary(for: oauthToken)) deviceTokenSummary=\(SensitiveLogRedactor.summary(for: fallback))"
-            )
-            return fallback
-        }
-#endif
-
-        Logger.shared.warning(
-            "[Auth] deviceToken missing for kakao login. environment=\(appConfiguration.environment.rawValue) simulator=\(DeviceTokenResolutionContext.isSimulator) oauthTokenSummary=\(SensitiveLogRedactor.summary(for: oauthToken))"
-        )
-        throw AuthDeviceTokenMissingError()
+        _ = provider
+        _ = oauthToken
+        let token = storedDeviceToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return token?.isEmpty == false ? token : nil
     }
 
     func signIn(email: String, password: String, deviceToken: String?) async throws -> UserSession {

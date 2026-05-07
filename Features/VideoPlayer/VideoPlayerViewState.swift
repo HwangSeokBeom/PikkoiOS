@@ -22,6 +22,13 @@ struct VideoPlayerViewState: Equatable {
     var toastMessage: String?
     var currentTime: Double = 0
     var duration: Double?
+    var captionsEnabled = true
+    var selectedSubtitleID: String?
+    var isSubtitleMenuPresented = false
+    var isSubtitleLoading = false
+    var subtitleErrorMessage: String?
+    var activeCaptionText: String?
+    var hasSystemSubtitleTracks = false
 
     var qualityTitle: String {
         if userSelectedQuality == "auto" {
@@ -39,5 +46,18 @@ struct VideoPlayerViewState: Equatable {
             return 0
         }
         return min(max(currentTime / duration, 0), 1)
+    }
+
+    var selectedSubtitleTitle: String {
+        guard captionsEnabled else { return "끔" }
+        guard let selectedSubtitleID,
+              let subtitle = stream?.subtitles.first(where: { $0.id == selectedSubtitleID }) else {
+            return hasSystemSubtitleTracks ? "시스템" : "자막"
+        }
+        return subtitle.name
+    }
+
+    var hasSubtitleOptions: Bool {
+        stream?.subtitles.isEmpty == false || hasSystemSubtitleTracks
     }
 }

@@ -82,7 +82,8 @@ struct VideoMapper: Sendable {
                     language: $0.language,
                     name: $0.name,
                     isDefault: $0.isDefault,
-                    url: try resolveURL($0.urlPath)
+                    url: try resolveURL($0.urlPath),
+                    format: VideoSubtitleFormat(rawValue: $0.format)
                 )
             }
         )

@@ -442,17 +442,26 @@ private struct ProfileEditorView: View {
     }
 
     private func handleImageSelection(item: PhotosPickerItem) async {
+#if DEBUG
+        var originalBytes = 0
+#endif
         guard let rawData = try? await item.loadTransferable(type: Data.self),
-              let image = UIImage(data: rawData),
-              let jpegData = image.jpegData(compressionQuality: 0.88),
-              !jpegData.isEmpty else {
+              UIImage(data: rawData) != nil,
+              !rawData.isEmpty else {
+#if DEBUG
+            Logger(category: "ProfileImage").warning("[ProfileImage] failed stage=picker status=none message=imageDataUnavailable")
+#endif
             return
         }
+#if DEBUG
+        originalBytes = rawData.count
+        Logger(category: "ProfileImage").debug("[ProfileImage] picker selected hasImage=true originalBytes=\(originalBytes)")
+#endif
 
         await presenter.send(
             .profileImageDataSelected(
-                jpegData,
-                fileName: "profile-\(Int(Date().timeIntervalSince1970)).jpg"
+                rawData,
+                fileName: item.supportedContentTypes.first?.preferredFilenameExtension.map { "profile-\(Int(Date().timeIntervalSince1970)).\($0)" } ?? "profile-\(Int(Date().timeIntervalSince1970)).jpg"
             )
         )
     }

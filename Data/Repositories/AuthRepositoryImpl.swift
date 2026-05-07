@@ -118,12 +118,12 @@ struct AuthRepositoryImpl: AuthRepository {
             mimeType: mimeType
         )
 
-        guard let resolvedPath = resolveProfileImagePath(response.profileImage),
-              !resolvedPath.isEmpty else {
+        guard let profileImage = response.profileImage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !profileImage.isEmpty else {
             throw NetworkError.decoding
         }
 
-        return resolvedPath
+        return profileImage
     }
 
     func updateDeviceToken(_ deviceToken: String) async throws {
