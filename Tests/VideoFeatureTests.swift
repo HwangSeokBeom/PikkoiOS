@@ -615,8 +615,16 @@ final class VideoListPresenterTests: XCTestCase {
 
         XCTAssertGreaterThanOrEqual(compact.horizontalInset, 16)
         XCTAssertGreaterThanOrEqual(large.horizontalInset, 16)
-        XCTAssertLessThanOrEqual(compact.bottomInset, RootTabBarMetrics.maximumBottomInset)
-        XCTAssertLessThanOrEqual(large.bottomInset, RootTabBarMetrics.maximumBottomInset)
+        XCTAssertEqual(compact.bottomOffset, 0)
+        XCTAssertEqual(large.bottomOffset, 0)
+        XCTAssertEqual(compact.outerBottomPadding, 0)
+        XCTAssertEqual(large.outerBottomPadding, 0)
+        XCTAssertEqual(compact.safeAreaInsetSpacing, 0)
+        XCTAssertEqual(large.safeAreaInsetSpacing, 0)
+        XCTAssertEqual(compact.tabBarHeight, RootTabBarMetrics.contentHeight)
+        XCTAssertEqual(large.tabBarHeight, RootTabBarMetrics.contentHeight)
+        XCTAssertEqual(compact.contentBottomInset, RootTabBarMetrics.scrollContentBottomInset)
+        XCTAssertEqual(large.contentBottomInset, RootTabBarMetrics.scrollContentBottomInset)
         XCTAssertFalse(compact.isClipped)
         XCTAssertFalse(large.isClipped)
     }

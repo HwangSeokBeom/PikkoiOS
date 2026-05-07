@@ -68,6 +68,7 @@ struct RootTabView: View {
                     )
                 }
                 .frame(height: RootTabBarMetrics.maximumTotalHeight)
+                .zIndex(RootTabBarMetrics.zIndex)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }

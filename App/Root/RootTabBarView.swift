@@ -1,28 +1,35 @@
 import SwiftUI
 
 enum RootTabBarMetrics {
-    static let contentHeight: CGFloat = 66
-    static let minimumContentGap: CGFloat = 14
-    static let maximumBottomInset: CGFloat = 12
-    static let maximumTotalHeight: CGFloat = contentHeight + maximumBottomInset
+    static let contentHeight: CGFloat = 68
+    static let minimumContentGap: CGFloat = 12
+    static let bottomOffset: CGFloat = 0
+    static let safeAreaInsetSpacing: CGFloat = 0
+    static let outerBottomPadding: CGFloat = 0
+    static let maximumTotalHeight: CGFloat = contentHeight
     static let scrollContentBottomInset: CGFloat = contentHeight + minimumContentGap
+    static let zIndex: Double = 100
 }
 
 struct RootTabBarLayoutMetrics: Equatable {
     let screenWidth: CGFloat
     let safeAreaBottom: CGFloat
     let horizontalInset: CGFloat
-    let bottomInset: CGFloat
-    let computedHeight: CGFloat
+    let bottomOffset: CGFloat
+    let safeAreaInsetSpacing: CGFloat
+    let outerBottomPadding: CGFloat
+    let tabBarHeight: CGFloat
+    let innerVerticalPadding: CGFloat
+    let contentBottomInset: CGFloat
     let isClipped: Bool
+    let placement: String
 
     var totalHeight: CGFloat {
-        computedHeight + bottomInset
+        tabBarHeight + outerBottomPadding
     }
 
     static func make(screenWidth: CGFloat, safeAreaBottom: CGFloat) -> RootTabBarLayoutMetrics {
-        let horizontalInset: CGFloat = screenWidth <= 340 ? 16 : 18
-        let bottomInset = min(max(safeAreaBottom * 0.45, 8), RootTabBarMetrics.maximumBottomInset)
+        let horizontalInset: CGFloat = screenWidth <= 340 ? 16 : 20
         let contentWidth = max(screenWidth - horizontalInset * 2, 0)
         let isClipped = contentWidth <= 0 || horizontalInset < 16
 
@@ -30,19 +37,23 @@ struct RootTabBarLayoutMetrics: Equatable {
             screenWidth: screenWidth,
             safeAreaBottom: safeAreaBottom,
             horizontalInset: horizontalInset,
-            bottomInset: bottomInset,
-            computedHeight: RootTabBarMetrics.contentHeight,
-            isClipped: isClipped
+            bottomOffset: RootTabBarMetrics.bottomOffset,
+            safeAreaInsetSpacing: RootTabBarMetrics.safeAreaInsetSpacing,
+            outerBottomPadding: RootTabBarMetrics.outerBottomPadding,
+            tabBarHeight: RootTabBarMetrics.contentHeight,
+            innerVerticalPadding: RootTabBarView.Layout.innerVerticalPadding,
+            contentBottomInset: RootTabBarMetrics.scrollContentBottomInset,
+            isClipped: isClipped,
+            placement: "safeAreaInset"
         )
     }
 }
 
 struct RootTabBarView: View {
-    private enum Layout {
+    enum Layout {
         static let height: CGFloat = RootTabBarMetrics.contentHeight
-        static let itemsTopPadding: CGFloat = 4
-        static let itemsBottomPadding: CGFloat = 3
-        static let itemHeight: CGFloat = 42
+        static let innerVerticalPadding: CGFloat = 8
+        static let itemHeight: CGFloat = 46
         static let iconFrame: CGFloat = 24
     }
 
@@ -57,39 +68,38 @@ struct RootTabBarView: View {
             safeAreaBottom: safeAreaBottom
         )
 
-        VStack(spacing: 0) {
-            ZStack {
-                tabBarShadowBackground
-                    .padding(.horizontal, metrics.horizontalInset)
+        ZStack {
+            tabBarShadowBackground
 
-                tabBarInnerBackground
-                    .padding(.horizontal, metrics.horizontalInset)
+            tabBarInnerBackground
 
-                HStack(spacing: 0) {
-                    item(for: .home)
-                    item(for: .order)
-                    item(for: .video)
-                    item(for: .community)
-                    item(for: .profile)
-                }
-                .padding(.horizontal, metrics.horizontalInset + PikkoSpacing.sm)
-                .padding(.top, Layout.itemsTopPadding)
-                .padding(.bottom, Layout.itemsBottomPadding)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            HStack(spacing: 0) {
+                item(for: .home)
+                item(for: .order)
+                item(for: .video)
+                item(for: .community)
+                item(for: .profile)
             }
-            .frame(height: metrics.computedHeight)
-
-            Spacer(minLength: metrics.bottomInset)
+            .padding(.horizontal, PikkoSpacing.sm)
+            .padding(.vertical, Layout.innerVerticalPadding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
+        .padding(.horizontal, metrics.horizontalInset)
         .frame(height: metrics.totalHeight)
+        .frame(maxWidth: .infinity, alignment: .bottom)
+        .zIndex(RootTabBarMetrics.zIndex)
+        .dynamicTypeSize(.xSmall ... .accessibility1)
         .onAppear {
             logLayout(metrics)
+        }
+        .onChange(of: metrics) { _, newMetrics in
+            logLayout(newMetrics)
         }
     }
 
     private var tabBarShadowBackground: some View {
         RoundedRectangle(cornerRadius: PikkoRadius.sheet, style: .continuous)
-            .fill(Color.clear)
+            .fill(PikkoColor.elevatedSurface.opacity(0.01))
             .pikkoShadow(PikkoShadow.floating)
     }
 
@@ -122,6 +132,8 @@ struct RootTabBarView: View {
                 Text(tab.title)
                     .font(PikkoTypography.micro)
                     .foregroundStyle(isSelected ? PikkoColor.primary : PikkoColor.textTertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             .frame(maxWidth: .infinity)
             .frame(height: Layout.itemHeight)
@@ -131,8 +143,15 @@ struct RootTabBarView: View {
     }
 
     private func logLayout(_ metrics: RootTabBarLayoutMetrics) {
-        Logger(category: "TabBar").debug(
-            "[TabBar] layout screenWidth=\(Int(metrics.screenWidth)) safeAreaBottom=\(Int(metrics.safeAreaBottom)) horizontalInset=\(Int(metrics.horizontalInset)) bottomInset=\(Int(metrics.bottomInset)) computedHeight=\(Int(metrics.computedHeight)) isClipped=\(metrics.isClipped)"
+        let logger = Logger(category: "TabBarLayout")
+        logger.debug(
+            "[TabBarLayout] screenWidth=\(Int(metrics.screenWidth)) safeAreaBottom=\(Int(metrics.safeAreaBottom)) tabBarHeight=\(Int(metrics.tabBarHeight)) horizontalInset=\(Int(metrics.horizontalInset)) bottomOffset=\(Int(metrics.bottomOffset)) safeAreaInsetSpacing=\(Int(metrics.safeAreaInsetSpacing))"
+        )
+        logger.debug(
+            "[TabBarLayout] outerBottomPadding=\(Int(metrics.outerBottomPadding)) innerVerticalPadding=\(Int(metrics.innerVerticalPadding)) contentBottomInset=\(Int(metrics.contentBottomInset)) isClipped=\(metrics.isClipped)"
+        )
+        logger.debug(
+            "[TabBarLayout] placement=\(metrics.placement) edge=bottom spacing=\(Int(metrics.safeAreaInsetSpacing))"
         )
     }
 }
