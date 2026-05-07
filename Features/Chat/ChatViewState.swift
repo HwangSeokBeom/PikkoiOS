@@ -1,5 +1,11 @@
 import Foundation
 
+enum ChatPresentationKind: String {
+    case globalSheet
+    case profileStack
+    case `internal`
+}
+
 enum ChatScreenMode: Equatable {
     case roomList
     case roomDetail

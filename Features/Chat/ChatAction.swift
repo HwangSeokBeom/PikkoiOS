@@ -2,8 +2,8 @@ import CoreGraphics
 import Foundation
 
 enum ChatAction {
-    case onAppear
-    case onDisappear
+    case onAppear(instanceID: String, presentationKind: ChatPresentationKind)
+    case onDisappear(instanceID: String, presentationKind: ChatPresentationKind)
     case refreshRequested
     case primaryButtonTapped
     case roomTapped(String)

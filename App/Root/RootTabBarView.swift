@@ -1,54 +1,110 @@
 import SwiftUI
 
 enum RootTabBarMetrics {
-    static let contentHeight: CGFloat = 60
-    static let minimumContentGap: CGFloat = 22
+    static let contentHeight: CGFloat = 66
+    static let minimumContentGap: CGFloat = 14
+    static let maximumBottomInset: CGFloat = 12
+    static let maximumTotalHeight: CGFloat = contentHeight + maximumBottomInset
     static let scrollContentBottomInset: CGFloat = contentHeight + minimumContentGap
+}
+
+struct RootTabBarLayoutMetrics: Equatable {
+    let screenWidth: CGFloat
+    let safeAreaBottom: CGFloat
+    let horizontalInset: CGFloat
+    let bottomInset: CGFloat
+    let computedHeight: CGFloat
+    let isClipped: Bool
+
+    var totalHeight: CGFloat {
+        computedHeight + bottomInset
+    }
+
+    static func make(screenWidth: CGFloat, safeAreaBottom: CGFloat) -> RootTabBarLayoutMetrics {
+        let horizontalInset: CGFloat = screenWidth <= 340 ? 16 : 18
+        let bottomInset = min(max(safeAreaBottom * 0.45, 8), RootTabBarMetrics.maximumBottomInset)
+        let contentWidth = max(screenWidth - horizontalInset * 2, 0)
+        let isClipped = contentWidth <= 0 || horizontalInset < 16
+
+        return RootTabBarLayoutMetrics(
+            screenWidth: screenWidth,
+            safeAreaBottom: safeAreaBottom,
+            horizontalInset: horizontalInset,
+            bottomInset: bottomInset,
+            computedHeight: RootTabBarMetrics.contentHeight,
+            isClipped: isClipped
+        )
+    }
 }
 
 struct RootTabBarView: View {
     private enum Layout {
         static let height: CGFloat = RootTabBarMetrics.contentHeight
-        static let itemsTopPadding: CGFloat = 5
+        static let itemsTopPadding: CGFloat = 4
         static let itemsBottomPadding: CGFloat = 3
-        static let itemHeight: CGFloat = 44
+        static let itemHeight: CGFloat = 42
         static let iconFrame: CGFloat = 24
     }
 
     let selectedTab: RootTab
+    let screenWidth: CGFloat
+    let safeAreaBottom: CGFloat
     let onSelect: (RootTab) -> Void
 
     var body: some View {
-        ZStack {
-            tabBarBackground
+        let metrics = RootTabBarLayoutMetrics.make(
+            screenWidth: screenWidth,
+            safeAreaBottom: safeAreaBottom
+        )
 
-            HStack(spacing: 0) {
-                item(for: .home)
-                item(for: .order)
-                item(for: .video)
-                item(for: .community)
-                item(for: .profile)
+        VStack(spacing: 0) {
+            ZStack {
+                tabBarShadowBackground
+                    .padding(.horizontal, metrics.horizontalInset)
+
+                tabBarInnerBackground
+                    .padding(.horizontal, metrics.horizontalInset)
+
+                HStack(spacing: 0) {
+                    item(for: .home)
+                    item(for: .order)
+                    item(for: .video)
+                    item(for: .community)
+                    item(for: .profile)
+                }
+                .padding(.horizontal, metrics.horizontalInset + PikkoSpacing.sm)
+                .padding(.top, Layout.itemsTopPadding)
+                .padding(.bottom, Layout.itemsBottomPadding)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
-            .padding(.horizontal, PikkoSpacing.sm)
-            .padding(.top, Layout.itemsTopPadding)
-            .padding(.bottom, Layout.itemsBottomPadding)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(height: metrics.computedHeight)
+
+            Spacer(minLength: metrics.bottomInset)
         }
-        .frame(height: Layout.height)
+        .frame(height: metrics.totalHeight)
+        .onAppear {
+            logLayout(metrics)
+        }
     }
 
-    private var tabBarBackground: some View {
+    private var tabBarShadowBackground: some View {
         RoundedRectangle(cornerRadius: PikkoRadius.sheet, style: .continuous)
-            .fill(PikkoColor.elevatedSurface.opacity(0.9))
-            .background(.ultraThinMaterial)
-            .overlay(alignment: .top) {
+            .fill(Color.clear)
+            .pikkoShadow(PikkoShadow.floating)
+    }
+
+    private var tabBarInnerBackground: some View {
+        RoundedRectangle(cornerRadius: PikkoRadius.sheet, style: .continuous)
+            .fill(PikkoColor.elevatedSurface.opacity(0.92))
+            .background {
+                RoundedRectangle(cornerRadius: PikkoRadius.sheet, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            }
+            .overlay {
                 RoundedRectangle(cornerRadius: PikkoRadius.sheet, style: .continuous)
                     .stroke(PikkoColor.divider.opacity(0.55), lineWidth: 1)
             }
-            .padding(.horizontal, PikkoSpacing.lg)
-            .padding(.bottom, PikkoSpacing.xs)
-            .pikkoShadow(PikkoShadow.floating)
-            .ignoresSafeArea(edges: .bottom)
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.sheet, style: .continuous))
     }
 
     private func item(for tab: RootTab) -> some View {
@@ -72,5 +128,11 @@ struct RootTabBarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func logLayout(_ metrics: RootTabBarLayoutMetrics) {
+        Logger(category: "TabBar").debug(
+            "[TabBar] layout screenWidth=\(Int(metrics.screenWidth)) safeAreaBottom=\(Int(metrics.safeAreaBottom)) horizontalInset=\(Int(metrics.horizontalInset)) bottomInset=\(Int(metrics.bottomInset)) computedHeight=\(Int(metrics.computedHeight)) isClipped=\(metrics.isClipped)"
+        )
     }
 }

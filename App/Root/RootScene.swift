@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RootScene: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var appState: AppState
     @ObservedObject private var sessionStore: SessionStore
 
@@ -37,7 +38,20 @@ struct RootScene: View {
             }
         }
         .task {
+            Logger(category: "AppLifecycle").debug("[AppLifecycle] scene willConnect")
             await bootstrapper.bootstrapIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                Logger(category: "AppLifecycle").debug("[AppLifecycle] sceneDidBecomeActive")
+            case .inactive:
+                Logger(category: "AppLifecycle").debug("[AppLifecycle] sceneDidBecomeInactive")
+            case .background:
+                Logger(category: "AppLifecycle").debug("[AppLifecycle] sceneDidEnterBackground")
+            @unknown default:
+                Logger(category: "AppLifecycle").debug("[AppLifecycle] scenePhaseUnknown")
+            }
         }
         .task(id: sessionStore.deviceTokenSyncStateID) {
             guard sessionStore.isAuthenticated else { return }

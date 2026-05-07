@@ -317,7 +317,10 @@ enum ChatTarget: Equatable, Sendable {
     case room(
         roomID: String,
         title: String,
-        target: ChatTargetSummary?
+        target: ChatTargetSummary?,
+        source: ChatRoomEntryPoint,
+        storeID: String?,
+        opponentID: String?
     )
 
     var preferredTitle: String {
@@ -326,7 +329,7 @@ enum ChatTarget: Equatable, Sendable {
             return storeName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "문의하기"
         case .user(_, let nickname, _):
             return nickname
-        case .room(_, let title, _):
+        case .room(_, let title, _, _, _, _):
             return title
         }
     }
@@ -337,6 +340,11 @@ enum ChatRoomEntryPoint: Equatable, Sendable {
     case storeScopedChatList
     case chatList
     case userProfile
+    case remoteFCM
+    case localNotification
+    case deepLink
+    case orderDetail
+    case unknown
 }
 
 struct ChatRoomContext: Equatable, Sendable {
@@ -1390,6 +1398,7 @@ protocol ChatInteracting {
     var target: ChatTarget? { get }
 
     func loadInitialRoomList() async throws -> [ChatRoom]
+    func loadRoom(roomID: String) async throws -> ChatRoom?
     func loadLocalConversationSummaries() async throws -> [ChatLocalConversationSummary]
     func createOrFetchStoreChatRoom() async throws -> ChatRoom
     func createOrFetchUserChatRoom() async throws -> ChatRoom
@@ -1468,6 +1477,23 @@ struct ChatInteractor: ChatInteracting {
                 }
             }
             return roomsWithLocalLastMessage
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw map(error)
+        }
+    }
+
+    func loadRoom(roomID: String) async throws -> ChatRoom? {
+        guard sessionStore.isAuthenticated else {
+            throw ChatFeatureError.authenticationRequired
+        }
+
+        let normalizedRoomID = roomID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedRoomID.isEmpty else { return nil }
+
+        do {
+            return try await chatRepository.fetchChatRooms().first { $0.id == normalizedRoomID }
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -1884,7 +1910,7 @@ struct ChatInteractor: ChatInteracting {
                 ?? storeContextCache.context(for: room.id)
         case .storeScopedChatList:
             cachedContext = storeContextCache.context(for: room.id)
-        case .chatList, .userProfile:
+        case .chatList, .userProfile, .remoteFCM, .localNotification, .deepLink, .orderDetail, .unknown:
             cachedContext = nil
         }
         let serverStoreID = room.storeID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty

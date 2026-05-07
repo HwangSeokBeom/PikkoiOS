@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 struct VideoListView: View {
@@ -7,7 +8,12 @@ struct VideoListView: View {
 
     @ObservedObject var presenter: VideoListPresenter
     let imageLoader: any AuthorizedImageLoading
+    let fetchStreamUseCase: FetchVideoStreamUseCase
+    let setLikeUseCase: SetVideoLikeUseCase
+    let appConfiguration: AppConfiguration
+    let tokenStore: any TokenStore
     let resetTrigger: Int
+    @Environment(\.scenePhase) private var scenePhase
     @State private var visibleVideoID: String?
 
     var body: some View {
@@ -42,6 +48,12 @@ struct VideoListView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
+        .onDisappear {
+            Task { await presenter.send(.viewDisappeared) }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            Task { await presenter.send(.scenePhaseChanged(isActive: phase == .active)) }
+        }
         .refreshable {
             await presenter.send(.refreshRequested)
         }
@@ -64,8 +76,17 @@ struct VideoListView: View {
                         ShortsVideoPageView(
                             model: video,
                             imageLoader: imageLoader,
+                            fetchStreamUseCase: fetchStreamUseCase,
+                            setLikeUseCase: setLikeUseCase,
+                            appConfiguration: appConfiguration,
+                            tokenStore: tokenStore,
+                            isActive: presenter.viewState.activeShortsVideoID == video.id,
+                            isPlaying: presenter.viewState.activeShortsVideoID == video.id && presenter.viewState.isShortsPlaying,
                             onTap: {
                                 Task { await presenter.send(.videoTapped(video.id)) }
+                            },
+                            onOriginalTap: {
+                                Task { await presenter.send(.originalVideoTapped(video.id)) }
                             },
                             onLikeTap: {
                                 Task { await presenter.send(.videoLikeTapped(video.id)) }
@@ -94,7 +115,7 @@ struct VideoListView: View {
             .scrollPosition(id: $visibleVideoID)
             .onChange(of: visibleVideoID) { _, videoID in
                 guard let videoID else { return }
-                Task { await presenter.send(.videoAppeared(videoID)) }
+                Task { await presenter.send(.visibleVideoChanged(videoID)) }
             }
             .onChange(of: resetTrigger) { _, _ in
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -109,45 +130,63 @@ struct VideoListView: View {
 private struct ShortsVideoPageView: View {
     let model: VideoCardModel
     let imageLoader: any AuthorizedImageLoading
+    let fetchStreamUseCase: FetchVideoStreamUseCase
+    let setLikeUseCase: SetVideoLikeUseCase
+    let appConfiguration: AppConfiguration
+    let tokenStore: any TokenStore
+    let isActive: Bool
+    let isPlaying: Bool
     let onTap: () -> Void
+    let onOriginalTap: () -> Void
     let onLikeTap: () -> Void
+
+    @StateObject private var viewModel: VideoPlayerViewModel
+    @State private var areControlsExpanded = false
+    @State private var scrubberProgress: Double = 0
+    @State private var isScrubbing = false
+    @State private var controlsFadeTask: Task<Void, Never>?
+
+    init(
+        model: VideoCardModel,
+        imageLoader: any AuthorizedImageLoading,
+        fetchStreamUseCase: FetchVideoStreamUseCase,
+        setLikeUseCase: SetVideoLikeUseCase,
+        appConfiguration: AppConfiguration,
+        tokenStore: any TokenStore,
+        isActive: Bool,
+        isPlaying: Bool,
+        onTap: @escaping () -> Void,
+        onOriginalTap: @escaping () -> Void,
+        onLikeTap: @escaping () -> Void
+    ) {
+        self.model = model
+        self.imageLoader = imageLoader
+        self.fetchStreamUseCase = fetchStreamUseCase
+        self.setLikeUseCase = setLikeUseCase
+        self.appConfiguration = appConfiguration
+        self.tokenStore = tokenStore
+        self.isActive = isActive
+        self.isPlaying = isPlaying
+        self.onTap = onTap
+        self.onOriginalTap = onOriginalTap
+        self.onLikeTap = onLikeTap
+        _viewModel = StateObject(
+            wrappedValue: VideoPlayerViewModel(
+                video: model.video,
+                fetchStreamUseCase: fetchStreamUseCase,
+                setLikeUseCase: setLikeUseCase,
+                appConfiguration: appConfiguration,
+                tokenStore: tokenStore
+            )
+        )
+    }
 
     var body: some View {
         ZStack {
             Color.black
                 .ignoresSafeArea()
 
-            AuthorizedAsyncImage(
-                path: model.thumbnailURL,
-                loader: imageLoader,
-                contentMode: .fill,
-                cornerRadius: 0,
-                showsProgress: true
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            .overlay {
-                LinearGradient(
-                    colors: [
-                        .black.opacity(0.1),
-                        .black.opacity(0.24),
-                        .black.opacity(0.78)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-
-            Button(action: onTap) {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 30, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 68, height: 68)
-                    .background(.black.opacity(0.45))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("영상 재생")
+            mediaSurface
 
             VStack {
                 Spacer()
@@ -184,16 +223,193 @@ private struct ShortsVideoPageView: View {
                         )
                         .disabled(model.isLikeUpdating)
 
-                        actionButton(systemImage: "text.bubble.fill", title: "댓글", isActive: false, action: onTap)
+                        actionButton(systemImage: "arrow.up.left.and.arrow.down.right", title: "원본", isActive: false, action: onOriginalTap)
+                        actionButton(systemImage: "text.bubble.fill", title: "댓글", isActive: false, action: {})
                         actionButton(systemImage: "square.and.arrow.up", title: "공유", isActive: false, action: {})
                     }
                 }
                 .padding(.horizontal, PikkoSpacing.lg)
-                .padding(.bottom, RootTabBarMetrics.scrollContentBottomInset + PikkoSpacing.xl)
+                .padding(.bottom, RootTabBarMetrics.scrollContentBottomInset + PikkoSpacing.section)
             }
+
+            shortsControls
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
+        .onTapGesture {
+            showControlsTemporarily()
+            onTap()
+        }
+        .task(id: isActive) {
+            if isActive {
+                await viewModel.loadStreamIfNeeded()
+                if isPlaying {
+                    viewModel.play()
+                } else {
+                    viewModel.pause()
+                }
+            } else {
+                viewModel.pause()
+            }
+        }
+        .onChange(of: isPlaying) { _, shouldPlay in
+            guard isActive else {
+                viewModel.pause()
+                return
+            }
+            if shouldPlay {
+                viewModel.play()
+            } else {
+                viewModel.pause()
+            }
+        }
+        .onDisappear {
+            viewModel.pause()
+            controlsFadeTask?.cancel()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+            guard notification.object as? AVPlayerItem === viewModel.player?.currentItem else { return }
+            if isPlaying {
+                viewModel.replay()
+            } else {
+                viewModel.seek(toProgress: 0)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var mediaSurface: some View {
+        if let player = viewModel.player {
+            VideoPlayerLayerView(player: player, videoGravity: .resizeAspectFill)
+                .ignoresSafeArea()
+        } else {
+            AuthorizedAsyncImage(
+                path: model.thumbnailURL,
+                loader: imageLoader,
+                contentMode: .fill,
+                cornerRadius: 0,
+                showsProgress: true
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+        }
+
+        LinearGradient(
+            colors: [
+                .black.opacity(0.1),
+                .black.opacity(0.24),
+                .black.opacity(0.78)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+
+        switch viewModel.viewState.playbackState {
+        case .loadingStream:
+            ProgressView()
+                .tint(.white)
+                .scaleEffect(0.9)
+        case .ready, .paused:
+            Image(systemName: "play.fill")
+                .font(.system(size: 30, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 68, height: 68)
+                .background(.black.opacity(0.45))
+                .clipShape(Circle())
+        case .failed, .expiredOrUnavailable:
+            VStack(spacing: PikkoSpacing.xs) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                Text("재생할 수 없어요")
+                    .font(PikkoTypography.captionStrong)
+            }
+            .foregroundStyle(.white)
+            .padding(PikkoSpacing.md)
+            .background(.black.opacity(0.46))
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+        case .idle, .playing:
+            EmptyView()
+        }
+    }
+
+    private var shortsControls: some View {
+        VStack {
+            Spacer()
+
+            VStack(spacing: areControlsExpanded ? PikkoSpacing.xs : 3) {
+                if areControlsExpanded || isScrubbing {
+                    HStack(spacing: PikkoSpacing.sm) {
+                        controlButton(systemImage: isPlaying ? "pause.fill" : "play.fill") {
+                            onTap()
+                            showControlsTemporarily()
+                        }
+                        controlButton(systemImage: "gobackward.10") {
+                            viewModel.seek(by: -10)
+                            showControlsTemporarily()
+                        }
+
+                        Text(VideoDurationFormatter.string(from: currentControlTime))
+                            .font(PikkoTypography.micro)
+                            .foregroundStyle(.white.opacity(0.88))
+                            .monospacedDigit()
+                            .frame(width: 42, alignment: .leading)
+
+                        Spacer(minLength: PikkoSpacing.xs)
+
+                        Text(durationText)
+                            .font(PikkoTypography.micro)
+                            .foregroundStyle(.white.opacity(0.88))
+                            .monospacedDigit()
+                            .frame(width: 42, alignment: .trailing)
+
+                        controlButton(systemImage: "goforward.10") {
+                            viewModel.seek(by: 10)
+                            showControlsTemporarily()
+                        }
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { isScrubbing ? scrubberProgress : viewModel.viewState.playbackProgress },
+                        set: { progress in
+                            if !isScrubbing {
+                                isScrubbing = true
+                                viewModel.beginScrubbing()
+                            }
+                            scrubberProgress = progress
+                            viewModel.updateScrubbing(progress: progress)
+                            areControlsExpanded = true
+                        }
+                    ),
+                    in: 0...1,
+                    onEditingChanged: { editing in
+                        if editing {
+                            isScrubbing = true
+                            scrubberProgress = viewModel.viewState.playbackProgress
+                            viewModel.beginScrubbing()
+                            areControlsExpanded = true
+                        } else {
+                            viewModel.endScrubbing(progress: scrubberProgress)
+                            isScrubbing = false
+                            scheduleControlsFade()
+                        }
+                    }
+                )
+                .tint(PikkoColor.accent)
+                .disabled(viewModel.viewState.duration == nil)
+                .scaleEffect(x: 1, y: areControlsExpanded || isScrubbing ? 1 : 0.46, anchor: .center)
+                .opacity(viewModel.viewState.duration == nil ? 0.45 : 1)
+            }
+            .padding(.horizontal, PikkoSpacing.lg)
+            .padding(.vertical, areControlsExpanded || isScrubbing ? PikkoSpacing.sm : PikkoSpacing.xs)
+            .background(.black.opacity(areControlsExpanded || isScrubbing ? 0.34 : 0.08))
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.medium, style: .continuous))
+            .padding(.horizontal, PikkoSpacing.lg)
+            .padding(.bottom, RootTabBarMetrics.scrollContentBottomInset + PikkoSpacing.sm)
+        }
+        .animation(.easeInOut(duration: 0.18), value: areControlsExpanded)
+        .animation(.easeInOut(duration: 0.18), value: isScrubbing)
     }
 
     private func actionButton(systemImage: String, title: String, isActive: Bool, action: @escaping () -> Void) -> some View {
@@ -211,6 +427,51 @@ private struct ShortsVideoPageView: View {
             .foregroundStyle(isActive ? PikkoColor.primary : .white)
         }
         .buttonStyle(.plain)
+    }
+
+    private func controlButton(systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(.white.opacity(0.16))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var currentControlTime: Double {
+        if isScrubbing,
+           let duration = viewModel.viewState.duration,
+           duration.isFinite,
+           duration > 0 {
+            return duration * scrubberProgress
+        }
+        return viewModel.viewState.currentTime
+    }
+
+    private var durationText: String {
+        guard let duration = viewModel.viewState.duration else { return "--:--" }
+        return VideoDurationFormatter.string(from: duration)
+    }
+
+    private func showControlsTemporarily() {
+        areControlsExpanded = true
+        scheduleControlsFade()
+    }
+
+    private func scheduleControlsFade() {
+        controlsFadeTask?.cancel()
+        controlsFadeTask = Task {
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                if !isScrubbing {
+                    areControlsExpanded = false
+                }
+            }
+        }
     }
 
     private func metaPill(systemImage: String, text: String) -> some View {

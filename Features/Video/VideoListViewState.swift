@@ -2,6 +2,7 @@ import Foundation
 
 struct VideoCardModel: Identifiable, Equatable {
     let id: String
+    let video: Video
     let title: String
     let description: String
     let thumbnailURL: String?
@@ -21,6 +22,8 @@ struct VideoListViewState: Equatable {
     var isRefreshing = false
     var isPaging = false
     var errorMessage: String?
+    var activeShortsVideoID: String?
+    var isShortsPlaying = false
 
     var showsEmptyState: Bool {
         !isLoading && errorMessage == nil && videos.isEmpty

@@ -60,6 +60,8 @@ struct FeatureBuilderFactory {
             videoRepository: container.videoRepository,
             sessionStore: appState.sessionStore,
             imageLoader: container.authorizedImageLoader,
+            appConfiguration: container.appConfiguration,
+            tokenStore: container.tokenStore,
             makeVideoPlayerView: { video, onVideoUpdated in
                 AnyView(makeVideoPlayerView(video: video, onVideoUpdated: onVideoUpdated))
             }
@@ -411,7 +413,10 @@ struct FeatureBuilderFactory {
         )
     }
 
-    func makeChatView(target: ChatTarget? = nil) -> ChatRootView {
+    func makeChatView(
+        target: ChatTarget? = nil,
+        presentationKind: ChatPresentationKind = .internal
+    ) -> ChatRootView {
         ChatBuilder(
             target: target,
             chatRepository: container.chatRepository,
@@ -427,7 +432,8 @@ struct FeatureBuilderFactory {
             sessionStore: appState.sessionStore,
             notificationService: container.appNotificationService,
             activeChatRoomTracker: container.activeChatRoomTracker,
-            imageLoader: container.authorizedImageLoader
+            imageLoader: container.authorizedImageLoader,
+            presentationKind: presentationKind
         ).build()
     }
 

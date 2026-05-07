@@ -5,17 +5,23 @@ struct VideoListBuilder {
     private let videoRepository: VideoRepository
     private let sessionStore: SessionStore
     private let imageLoader: any AuthorizedImageLoading
+    private let appConfiguration: AppConfiguration
+    private let tokenStore: any TokenStore
     private let makeVideoPlayerView: (Video, @escaping (Video) -> Void) -> AnyView
 
     init(
         videoRepository: VideoRepository,
         sessionStore: SessionStore,
         imageLoader: any AuthorizedImageLoading,
+        appConfiguration: AppConfiguration,
+        tokenStore: any TokenStore,
         makeVideoPlayerView: @escaping (Video, @escaping (Video) -> Void) -> AnyView
     ) {
         self.videoRepository = videoRepository
         self.sessionStore = sessionStore
         self.imageLoader = imageLoader
+        self.appConfiguration = appConfiguration
+        self.tokenStore = tokenStore
         self.makeVideoPlayerView = makeVideoPlayerView
     }
 
@@ -34,6 +40,10 @@ struct VideoListBuilder {
             presenter: presenter,
             router: router,
             imageLoader: imageLoader,
+            fetchStreamUseCase: FetchVideoStreamUseCase(repository: videoRepository),
+            setLikeUseCase: SetVideoLikeUseCase(repository: videoRepository),
+            appConfiguration: appConfiguration,
+            tokenStore: tokenStore,
             makeVideoPlayerView: makeVideoPlayerView,
             resetTrigger: resetTrigger
         )

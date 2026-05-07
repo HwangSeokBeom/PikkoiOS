@@ -549,7 +549,7 @@ final class VideoListPresenterTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.videos[0].likeCountText, "2")
     }
 
-    func testVideoTapRoutesToPlayer() async {
+    func testShortsTapDoesNotRouteToOriginalPlayer() async {
         let router = SpyVideoListRouter()
         let presenter = VideoListPresenter(
             interactor: StubVideoListInteractor(pages: [CursorPage(items: [makeVideo()], nextCursor: nil)]),
@@ -559,7 +559,24 @@ final class VideoListPresenterTests: XCTestCase {
         await presenter.send(.onAppear)
         await presenter.send(.videoTapped("video-1"))
 
+        XCTAssertNil(router.routedVideo)
+        XCTAssertEqual(presenter.viewState.activeShortsVideoID, "video-1")
+        XCTAssertTrue(presenter.viewState.isShortsPlaying)
+    }
+
+    func testOriginalButtonRoutesToOriginalPlayer() async {
+        let router = SpyVideoListRouter()
+        let presenter = VideoListPresenter(
+            interactor: StubVideoListInteractor(pages: [CursorPage(items: [makeVideo()], nextCursor: nil)]),
+            router: router
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.originalVideoTapped("video-1"))
+
         XCTAssertEqual(router.routedVideo?.videoId, "video-1")
+        XCTAssertNil(presenter.viewState.activeShortsVideoID)
+        XCTAssertFalse(presenter.viewState.isShortsPlaying)
     }
 
     func testVideoTapWithEmptyIDDoesNotRouteToPlayer() async {
@@ -574,6 +591,34 @@ final class VideoListPresenterTests: XCTestCase {
 
         XCTAssertNil(router.routedVideo)
         XCTAssertTrue(presenter.viewState.videos.isEmpty)
+    }
+
+    func testSameVideoShortsAndOriginalAreNotActiveTogether() async {
+        let router = SpyVideoListRouter()
+        let presenter = VideoListPresenter(
+            interactor: StubVideoListInteractor(pages: [CursorPage(items: [makeVideo()], nextCursor: nil)]),
+            router: router
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.videoTapped("video-1"))
+        await presenter.send(.originalVideoTapped("video-1"))
+
+        XCTAssertEqual(router.routedVideo?.videoId, "video-1")
+        XCTAssertNil(presenter.viewState.activeShortsVideoID)
+        XCTAssertFalse(presenter.viewState.isShortsPlaying)
+    }
+
+    func testTabBarLayoutMetricGuaranteesHorizontalInset() {
+        let compact = RootTabBarLayoutMetrics.make(screenWidth: 320, safeAreaBottom: 34)
+        let large = RootTabBarLayoutMetrics.make(screenWidth: 430, safeAreaBottom: 34)
+
+        XCTAssertGreaterThanOrEqual(compact.horizontalInset, 16)
+        XCTAssertGreaterThanOrEqual(large.horizontalInset, 16)
+        XCTAssertLessThanOrEqual(compact.bottomInset, RootTabBarMetrics.maximumBottomInset)
+        XCTAssertLessThanOrEqual(large.bottomInset, RootTabBarMetrics.maximumBottomInset)
+        XCTAssertFalse(compact.isClipped)
+        XCTAssertFalse(large.isClipped)
     }
 }
 
@@ -701,7 +746,7 @@ private final class StubVideoListInteractor: VideoListInteracting {
 private final class SpyVideoListRouter: VideoListRouting {
     private(set) var routedVideo: Video?
 
-    func routeToVideoPlayer(video: Video) {
+    func routeToOriginalVideo(video: Video) {
         routedVideo = video
     }
 

@@ -7,7 +7,9 @@ final class AppState: ObservableObject {
     @Published var pendingDeepLink: URL?
     @Published var pendingHighlightedOrderID: String?
     @Published var pendingNotificationRoute: AppNotificationRoute?
+    @Published var pendingNotificationRouteSource: NotificationRouteSource?
     @Published var activeNotificationRoute: AppNotificationRoute?
+    @Published var activeNotificationRouteSource: NotificationRouteSource?
     @Published var globalToast: GlobalToast?
 
     let sessionStore: SessionStore

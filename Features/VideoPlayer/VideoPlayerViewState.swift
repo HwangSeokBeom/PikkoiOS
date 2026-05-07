@@ -22,6 +22,7 @@ struct VideoPlayerViewState: Equatable {
     var toastMessage: String?
     var currentTime: Double = 0
     var duration: Double?
+    var isScrubbing = false
     var captionsEnabled = true
     var selectedSubtitleID: String?
     var isSubtitleMenuPresented = false

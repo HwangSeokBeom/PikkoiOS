@@ -11,6 +11,7 @@ struct ChatBuilder {
     private let notificationService: AppNotificationService
     private let activeChatRoomTracker: ActiveChatRoomTracking
     private let imageLoader: any AuthorizedImageLoading
+    private let presentationKind: ChatPresentationKind
 
     init(
         target: ChatTarget? = nil,
@@ -21,7 +22,8 @@ struct ChatBuilder {
         sessionStore: SessionStore,
         notificationService: AppNotificationService = NoopAppNotificationService(),
         activeChatRoomTracker: ActiveChatRoomTracking = ActiveChatRoomTracker(),
-        imageLoader: any AuthorizedImageLoading
+        imageLoader: any AuthorizedImageLoading,
+        presentationKind: ChatPresentationKind = .internal
     ) {
         self.target = target
         self.chatRepository = chatRepository
@@ -32,6 +34,7 @@ struct ChatBuilder {
         self.notificationService = notificationService
         self.activeChatRoomTracker = activeChatRoomTracker
         self.imageLoader = imageLoader
+        self.presentationKind = presentationKind
     }
 
     func build() -> ChatRootView {
@@ -50,7 +53,7 @@ struct ChatBuilder {
             notificationService: notificationService,
             activeChatRoomTracker: activeChatRoomTracker
         )
-        return ChatRootView(presenter: presenter, imageLoader: imageLoader)
+        return ChatRootView(presenter: presenter, imageLoader: imageLoader, presentationKind: presentationKind)
     }
 }
 

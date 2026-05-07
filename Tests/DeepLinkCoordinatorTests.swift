@@ -145,6 +145,89 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         XCTAssertNil(appState.pendingNotificationRoute)
     }
 
+    func testSameRoomChatRoutePublishesOnlyOnePendingPresentation() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let router = makeRouter(attachedTo: appState)
+        router.setNavigationReady(true)
+        let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
+        let duplicateRoute = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: "store-1", title: "Updated")
+
+        router.handleNotificationTap(route: route, messageId: "message-1", source: .remoteFCM)
+        router.handleNotificationTap(route: duplicateRoute, messageId: "message-2", source: .remoteFCM)
+
+        XCTAssertEqual(appState.pendingNotificationRoute, route)
+    }
+
+    func testDisplayedSameRoomPushSkipsPresentation() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let router = makeRouter(attachedTo: appState)
+        router.setNavigationReady(true)
+        let route = AppNotificationRoute.chatRoom(roomId: "room-A", storeId: nil, title: nil)
+        appState.activeNotificationRoute = route
+
+        router.handleNotificationTap(
+            route: .chatRoom(roomId: "room-A", storeId: "store-A", title: "Updated"),
+            messageId: "message-1",
+            source: .remoteFCM
+        )
+
+        XCTAssertNil(appState.pendingNotificationRoute)
+    }
+
+    func testDifferentRoomPushIsAllowedForRootReplacement() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let router = makeRouter(attachedTo: appState)
+        router.setNavigationReady(true)
+        let currentRoute = AppNotificationRoute.chatRoom(roomId: "room-A", storeId: nil, title: nil)
+        let incomingRoute = AppNotificationRoute.chatRoom(roomId: "room-B", storeId: nil, title: nil)
+        appState.activeNotificationRoute = currentRoute
+
+        router.handleNotificationTap(route: incomingRoute, messageId: "message-1", source: .remoteFCM)
+
+        XCTAssertEqual(appState.pendingNotificationRoute, incomingRoute)
+    }
+
+    func testPendingChatRouteConsumesOnlyOnceAcrossReadinessEvents() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let store = PendingNotificationRouteStore()
+        let router = AppNotificationRouter(pendingRouteStore: store)
+        router.attach(appState: appState)
+        let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
+        store.store(
+            route: route,
+            messageId: "message-1",
+            source: .remoteFCM,
+            dedupeKey: "navigate:remoteFCM:message-1:chat:room-1"
+        )
+
+        router.setNavigationReady(true)
+        XCTAssertEqual(appState.pendingNotificationRoute, route)
+
+        appState.pendingNotificationRoute = nil
+        store.store(
+            route: route,
+            messageId: "message-1",
+            source: .remoteFCM,
+            dedupeKey: "navigate:remoteFCM:message-1:chat:room-1"
+        )
+        router.routePendingIfNeeded()
+
+        XCTAssertNil(store.pendingRoute)
+        XCTAssertNil(appState.pendingNotificationRoute)
+    }
+
+    func testChatHydrationDoesNotCreateSecondNavigationPublish() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let router = makeRouter(attachedTo: appState)
+        router.setNavigationReady(true)
+        router.setChatRouteHydrator(ChangingChatRouteHydrator())
+        let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
+
+        router.handleNotificationTap(route: route, messageId: "message-1", source: .remoteFCM)
+
+        XCTAssertEqual(appState.pendingNotificationRoute, route)
+    }
+
     private func makeRouter(attachedTo appState: AppState) -> AppNotificationRouter {
         let router = AppNotificationRouter(pendingRouteStore: PendingNotificationRouteStore())
         router.attach(appState: appState)
@@ -185,4 +268,10 @@ private actor StubDeepLinkTokenStore: TokenStore {
     func loadTokens() async throws -> StoredTokens? { nil }
     func saveTokens(_ tokens: StoredTokens) async throws {}
     func clearTokens() async throws {}
+}
+
+private struct ChangingChatRouteHydrator: ChatRouteHydrating {
+    func hydrate(route: AppNotificationRoute, source: NotificationRouteSource) async -> ChatRouteHydrationResult {
+        .success(.chatRoom(roomId: "room-1", storeId: "store-1", title: "Hydrated"))
+    }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import UserNotifications
 
 enum PushNotificationLifecycle: String, Sendable {
@@ -135,9 +136,28 @@ final class DefaultAppNotificationService: AppNotificationService {
         Logger(category: "RemotePush").debug("[RemotePush] received payload keys=\(payload.rawPayload.keys.sorted().joined(separator: ",")) messageId=\(payload.messageID) type=\(payload.type ?? "unknown") source=\(payload.source ?? "unknown")")
         let normalizedMessageId = event.messageId ?? payload.messageID.nilIfUnknown
         let routeForNavigation: AppNotificationRoute
+        let appStateLogValue = UIApplication.shared.applicationState.notificationLogValue
+
+        switch event.lifecycle {
+        case .willPresent:
+            Logger(category: "PushLifecycle").debug("[PushLifecycle] willPresent messageId=\(normalizedMessageId ?? "unknown") action=saveAndPresentBanner")
+            Logger(category: "PushLifecycle").debug("[PushLifecycle] navigationSkipped reason=willPresentDoesNotNavigate messageId=\(normalizedMessageId ?? "unknown")")
+        case .didReceive:
+            Logger(category: "PushLifecycle").debug("[PushLifecycle] didReceive messageId=\(normalizedMessageId ?? "unknown") appState=\(appStateLogValue) action=navigate")
+        case .launchOptions:
+            Logger(category: "PushLifecycle").debug("[PushLifecycle] coldStart messageId=\(normalizedMessageId ?? "unknown") action=storePending")
+        case .didReceiveRemoteNotification:
+            break
+        }
 
         if let notification = makeNotification(from: payload, parsedRoute: event.parsedRoute) {
-            saveIfNeeded(notification, source: event.source.rawValue, messageId: normalizedMessageId)
+            if event.lifecycle == .willPresent,
+               notification.type == .chatMessage,
+               notification.metadata.roomId == activeChatRoomTracker.activeRoomId {
+                Logger(category: "Notification").debug("[Notification] skipped id=\(notification.id) type=\(notification.type.rawValue) reason=activeChatRoom source=\(event.source.rawValue)")
+            } else {
+                saveIfNeeded(notification, source: event.source.rawValue, messageId: normalizedMessageId)
+            }
             if event.isTap {
                 markAsReadIfNeeded(id: notification.id, messageId: normalizedMessageId)
                 diagnosticsStore.recordRemoteTapRoute(notification.route.debugDescription, pendingRoute: nil)
@@ -204,8 +224,14 @@ final class DefaultAppNotificationService: AppNotificationService {
         if payload.isChatMessage,
            let roomId = payload.string(for: RemoteNotificationPayload.chatRoomKeys),
            activeChatRoomTracker.activeRoomId == roomId {
-            Logger(category: "NotificationPresentation").debug("[NotificationPresentation] foreground banner suppressed source=remoteFCM reason=activeChatRoom roomId=\(roomId)")
+            Logger(category: "NotificationPresentation").debug("[NotificationPresentation] willPresent messageId=\(payload.messageID) roomId=\(roomId) currentRoomId=\(activeChatRoomTracker.activeRoomId ?? "-") decision=suppress reason=alreadyInSameChat")
+            Logger(category: "NotificationPresentation").debug("[NotificationPresentation] suppressed reason=alreadyInSameChat roomId=\(roomId)")
             return true
+        }
+
+        if payload.isChatMessage,
+           let roomId = payload.string(for: RemoteNotificationPayload.chatRoomKeys) {
+            Logger(category: "NotificationPresentation").debug("[NotificationPresentation] willPresent messageId=\(payload.messageID) roomId=\(roomId) currentRoomId=\(activeChatRoomTracker.activeRoomId ?? "-") decision=banner reason=differentOrNoActiveChat")
         }
 
         if payload.isCommunityEvent,
@@ -504,6 +530,21 @@ final class DefaultAppNotificationService: AppNotificationService {
 
     nonisolated static func timeBucket(date: Date = Date(), interval: TimeInterval = 60) -> String {
         String(Int(date.timeIntervalSince1970 / interval))
+    }
+}
+
+private extension UIApplication.State {
+    var notificationLogValue: String {
+        switch self {
+        case .active:
+            return "foreground"
+        case .background:
+            return "background"
+        case .inactive:
+            return "inactive"
+        @unknown default:
+            return "unknown"
+        }
     }
 }
 

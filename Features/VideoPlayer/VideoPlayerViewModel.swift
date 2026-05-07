@@ -307,6 +307,60 @@ final class VideoPlayerViewModel: ObservableObject {
         logger.debug("[VideoNavigation] back tapped source=customButton")
     }
 
+    func togglePlayback() {
+        switch viewState.playbackState {
+        case .playing:
+            pause()
+        case .ready, .paused:
+            play()
+        default:
+            break
+        }
+    }
+
+    func beginScrubbing() {
+        guard viewState.duration != nil else { return }
+        viewState.isScrubbing = true
+        logger.debug("[ShortsPlayer] seek started videoId=\(viewState.video.videoId)")
+    }
+
+    func updateScrubbing(progress: Double) {
+        guard let duration = viewState.duration,
+              duration.isFinite,
+              duration > 0 else {
+            return
+        }
+
+        let clampedProgress = min(max(progress, 0), 1)
+        viewState.currentTime = duration * clampedProgress
+        logger.debug("[ShortsPlayer] seek changed videoId=\(viewState.video.videoId) progress=\(String(format: "%.3f", clampedProgress))")
+    }
+
+    func endScrubbing(progress: Double) {
+        viewState.isScrubbing = false
+        logger.debug("[ShortsPlayer] seek ended videoId=\(viewState.video.videoId) progress=\(String(format: "%.3f", min(max(progress, 0), 1)))")
+        seek(toProgress: progress)
+    }
+
+    func seek(by seconds: Double) {
+        guard let duration = viewState.duration,
+              duration.isFinite,
+              duration > 0 else {
+            return
+        }
+
+        let targetSeconds = min(max(viewState.currentTime + seconds, 0), duration)
+        logger.debug("[ShortsPlayer] seek changed videoId=\(viewState.video.videoId) delta=\(Int(seconds)) target=\(Int(targetSeconds))")
+        seek(toSeconds: targetSeconds)
+    }
+
+    func replay() {
+        logger.debug("[ShortsPlayer] ended policy=replay videoId=\(viewState.video.videoId)")
+        seek(toSeconds: 0)
+        player?.play()
+        setPlaybackState(.playing)
+    }
+
     func seek(toProgress progress: Double) {
         guard let duration = viewState.duration,
               duration.isFinite,
@@ -315,9 +369,12 @@ final class VideoPlayerViewModel: ObservableObject {
         }
 
         let clampedProgress = min(max(progress, 0), 1)
-        let seconds = duration * clampedProgress
+        seek(toSeconds: duration * clampedProgress)
+    }
+
+    private func seek(toSeconds seconds: Double) {
         let targetTime = CMTime(seconds: seconds, preferredTimescale: 600)
-        viewState.currentTime = seconds
+        viewState.currentTime = max(0, seconds)
         player?.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
@@ -356,6 +413,10 @@ final class VideoPlayerViewModel: ObservableObject {
             }
 
             let stream = try await fetchStreamUseCase.execute(videoId: videoID)
+            guard !Task.isCancelled else {
+                logger.debug("[VideoPlayer] stream cancelled videoId=\(videoID) reason=taskCancelled")
+                return
+            }
             streamIssuedAt = Date()
             viewState.stream = stream
             configureSubtitleSelection(for: stream)
@@ -1186,7 +1247,9 @@ final class VideoPlayerViewModel: ObservableObject {
         ) { [weak self, weak player] time in
             Task { @MainActor in
                 guard let self else { return }
-                self.viewState.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
+                if !self.viewState.isScrubbing {
+                    self.viewState.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
+                }
                 self.updatePlaybackTiming(from: player?.currentItem)
                 self.updateActiveCaption(at: self.viewState.currentTime)
             }

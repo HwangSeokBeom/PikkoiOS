@@ -27,13 +27,16 @@ struct ChatRootView: View {
     @State private var chatViewInstanceID = UUID().uuidString
     @State private var isRoomDetailVisible = false
     @State private var measuredComposerHeight = Layout.estimatedComposerHeight
+    private let presentationKind: ChatPresentationKind
 
     init(
         presenter: ChatPresenter,
-        imageLoader: any AuthorizedImageLoading
+        imageLoader: any AuthorizedImageLoading,
+        presentationKind: ChatPresentationKind = .internal
     ) {
         _presenter = StateObject(wrappedValue: presenter)
         self.imageLoader = imageLoader
+        self.presentationKind = presentationKind
     }
 
     var body: some View {
@@ -64,10 +67,10 @@ struct ChatRootView: View {
             }
         }
         .task {
-            await presenter.send(.onAppear)
+            await presenter.send(.onAppear(instanceID: chatViewInstanceID, presentationKind: presentationKind))
         }
         .onDisappear {
-            Task { await presenter.send(.onDisappear) }
+            Task { await presenter.send(.onDisappear(instanceID: chatViewInstanceID, presentationKind: presentationKind)) }
         }
         .fileImporter(
             isPresented: $isFileImporterPresented,
@@ -302,7 +305,9 @@ struct ChatRootView: View {
         let isUploadingFiles = presenter.viewState.isUploadingFiles
         let resolvedContainerWidth = max(containerWidth, 0)
         let roomIdExists = presenter.viewState.selectedRoomID != nil
-        Logger.shared.debug("[ChatComposer] render visible=true roomIdExists=\(roomIdExists) inputEnabled=\(presenter.viewState.canSend) reason=roomDetail")
+        let inputEnabled = roomIdExists && !presenter.viewState.isSending && !isUploadingFiles
+        Logger.shared.debug("[ChatComposer] render visible=true roomIdExists=\(roomIdExists) inputEnabled=\(inputEnabled) reason=roomDetail")
+        Logger.shared.debug("[ChatComposer] inputEnabled=\(inputEnabled) reason=\(roomIdExists ? "ready" : "missingRoomId")")
         return VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
             if !presenter.viewState.attachedFilePaths.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {

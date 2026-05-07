@@ -616,18 +616,21 @@ struct VideoPlayerView: View {
     }
 }
 
-private struct VideoPlayerLayerView: UIViewRepresentable {
+struct VideoPlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
 
-    func makeUIView(context: Context) -> PlayerContainerView {
+    func makeUIView(context: Context) -> UIView {
         let view = PlayerContainerView()
         view.playerLayer.player = player
-        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.videoGravity = videoGravity
         return view
     }
 
-    func updateUIView(_ uiView: PlayerContainerView, context: Context) {
+    func updateUIView(_ uiView: UIView, context: Context) {
+        guard let uiView = uiView as? PlayerContainerView else { return }
         uiView.playerLayer.player = player
+        uiView.playerLayer.videoGravity = videoGravity
     }
 }
 

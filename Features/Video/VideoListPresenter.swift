@@ -46,7 +46,28 @@ final class VideoListPresenter: ObservableObject {
             await reload(reason: "retry")
         case .videoAppeared(let videoID):
             await loadNextPageIfNeeded(triggeredBy: videoID)
+        case .visibleVideoChanged(let videoID):
+            let previousActiveVideoID = viewState.activeShortsVideoID
+            let nextState = ShortsPlayerStateReducer.visibleItemChanged(
+                currentVideoID: viewState.activeShortsVideoID,
+                isPlaying: viewState.isShortsPlaying,
+                visibleVideoID: videoID
+            )
+            viewState.activeShortsVideoID = nextState.activeVideoID
+            viewState.isShortsPlaying = nextState.isPlaying
+            if previousActiveVideoID != nextState.activeVideoID {
+                logger.debug("[ShortsPlayer] activeVideoId changed from=\(previousActiveVideoID ?? "nil") to=\(nextState.activeVideoID ?? "nil")")
+            }
         case .videoTapped(let videoID):
+            let nextState = ShortsPlayerStateReducer.togglePlayback(
+                currentVideoID: viewState.activeShortsVideoID,
+                isPlaying: viewState.isShortsPlaying,
+                tappedVideoID: videoID
+            )
+            viewState.activeShortsVideoID = nextState.activeVideoID
+            viewState.isShortsPlaying = nextState.isPlaying
+            logger.debug("[ShortsVideo] tap action=togglePlayPause videoId=\(videoID) activeVideoId=\(nextState.activeVideoID ?? "nil") isPlaying=\(nextState.isPlaying)")
+        case .originalVideoTapped(let videoID):
             let normalizedVideoID = videoID.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !normalizedVideoID.isEmpty else {
                 logger.warning("[VideoList] blocked selection because videoId is empty title=unknown")
@@ -60,12 +81,25 @@ final class VideoListPresenter: ObservableObject {
                 return
             }
 
-            logger.debug("[VideoList] select videoId=\(video.videoId) title=\(video.title)")
-            router.routeToVideoPlayer(video: video)
+            let nextState = ShortsPlayerStateReducer.pauseForOriginal()
+            viewState.activeShortsVideoID = nextState.activeVideoID
+            viewState.isShortsPlaying = nextState.isPlaying
+            logger.debug("[ShortsVideo] OriginalVideo button action=openOriginal videoId=\(video.videoId)")
+            router.routeToOriginalVideo(video: video)
         case .videoLikeTapped(let videoID):
             await toggleVideoLike(for: videoID)
         case .videoUpdated(let updatedVideo):
             applyUpdatedVideo(updatedVideo)
+        case .viewDisappeared:
+            viewState.isShortsPlaying = false
+            logger.debug("[ShortsPlayer] activeVideoId changed from=\(viewState.activeShortsVideoID ?? "nil") to=\(viewState.activeShortsVideoID ?? "nil") reason=viewDisappear paused=true")
+        case .scenePhaseChanged(let isActive):
+            if isActive {
+                logger.debug("[ShortsPlayer] scenePhase=active resumeCandidate=\(viewState.activeShortsVideoID ?? "nil")")
+            } else {
+                viewState.isShortsPlaying = false
+                logger.debug("[ShortsPlayer] scenePhase=background paused=true activeVideoId=\(viewState.activeShortsVideoID ?? "nil")")
+            }
         }
     }
 
@@ -94,6 +128,12 @@ final class VideoListPresenter: ObservableObject {
             }
             videos = sanitizedVideos(page.items)
             viewState.videos = videos.map(makeVideoCardModel)
+            if let activeVideoID = viewState.activeShortsVideoID,
+               !videos.contains(where: { $0.videoId == activeVideoID }) {
+                logger.debug("[ShortsPlayer] activeVideoId changed from=\(activeVideoID) to=nil reason=reload")
+                viewState.activeShortsVideoID = nil
+                viewState.isShortsPlaying = false
+            }
             viewState.nextCursor = page.nextCursor
             viewState.errorMessage = nil
             hasLoaded = true
@@ -218,6 +258,7 @@ final class VideoListPresenter: ObservableObject {
     private func makeVideoCardModel(_ video: Video) -> VideoCardModel {
         VideoCardModel(
             id: video.videoId.trimmingCharacters(in: .whitespacesAndNewlines),
+            video: video,
             title: video.title,
             description: video.description,
             thumbnailURL: video.thumbnailURL,
@@ -303,5 +344,50 @@ final class VideoListPresenter: ObservableObject {
         }
 
         return error.localizedDescription
+    }
+}
+
+enum ShortsPlayerStateReducer {
+    struct State: Equatable {
+        let activeVideoID: String?
+        let isPlaying: Bool
+    }
+
+    static func togglePlayback(
+        currentVideoID: String?,
+        isPlaying: Bool,
+        tappedVideoID: String
+    ) -> State {
+        let normalizedVideoID = tappedVideoID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedVideoID.isEmpty else {
+            return State(activeVideoID: currentVideoID, isPlaying: isPlaying)
+        }
+
+        if currentVideoID == normalizedVideoID {
+            return State(activeVideoID: normalizedVideoID, isPlaying: !isPlaying)
+        }
+
+        return State(activeVideoID: normalizedVideoID, isPlaying: true)
+    }
+
+    static func visibleItemChanged(
+        currentVideoID: String?,
+        isPlaying: Bool,
+        visibleVideoID: String
+    ) -> State {
+        let normalizedVideoID = visibleVideoID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedVideoID.isEmpty else {
+            return State(activeVideoID: currentVideoID, isPlaying: isPlaying)
+        }
+
+        if currentVideoID == normalizedVideoID {
+            return State(activeVideoID: normalizedVideoID, isPlaying: isPlaying)
+        }
+
+        return State(activeVideoID: normalizedVideoID, isPlaying: true)
+    }
+
+    static func pauseForOriginal() -> State {
+        State(activeVideoID: nil, isPlaying: false)
     }
 }

@@ -42,7 +42,7 @@ struct CartInteractor: CartInteracting {
             return CartViewState(
                 emptyState: CartEmptyState(
                     title: "장바구니가 비어 있어요",
-                    message: "StoreDetail 화면에서 메뉴를 담으면 이곳에서 수량과 합계를 확인할 수 있어요.",
+                    message: "메뉴를 담으면 이곳에서 수량과 합계를 확인할 수 있어요.\n가게 상세 화면에서 마음에 드는 메뉴를 장바구니에 담아보세요.",
                     systemImage: "cart"
                 )
             )

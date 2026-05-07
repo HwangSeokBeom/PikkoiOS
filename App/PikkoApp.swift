@@ -91,6 +91,7 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        Logger(category: "AppLifecycle").debug("[AppLifecycle] didFinishLaunching")
         isFirebaseConfigured = Self.configureFirebaseIfNeeded(shouldLogConfigured: true)
 
         if isFirebaseConfigured {
@@ -106,6 +107,7 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
                     isTap: true
                 )
                 Logger(category: "PushDeepLink").debug("[PushDeepLink] received lifecycle=launchOptions source=remote keys=\(Self.notificationKeySummary(from: remotePayload)) hasAps=\(remotePayload["aps"] != nil)")
+                Logger(category: "PushLifecycle").debug("[PushLifecycle] coldStart messageId=\(event.logMessageId) action=storePending")
                 Task { @MainActor in
                     Self.notificationService?.handlePushNotificationEvent(event)
                 }
@@ -162,8 +164,17 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         Logger(category: "RemotePush").debug("[RemotePush] received foreground=false messageId=\(Self.messageID(from: payload)) type=\(Self.payloadType(from: payload)) source=\(Self.payloadSource(from: payload))")
         Task { @MainActor in
             Self.notificationService?.handlePushNotificationEvent(event)
+            Logger(category: "RemotePush").debug("[RemotePush] fetchCompletionHandler result=newData")
             completionHandler(.newData)
         }
+    }
+
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        Logger(category: "AppLifecycle").debug("[AppLifecycle] applicationDidBecomeActive")
+    }
+
+    func applicationWillEnterForeground(_ application: UIApplication) {
+        Logger(category: "AppLifecycle").debug("[AppLifecycle] applicationWillEnterForeground")
     }
 
     nonisolated func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
@@ -188,6 +199,8 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         let source = Self.notificationSource(for: notification.request.trigger)
         let keys = Self.notificationKeySummary(from: notification.request.content.userInfo)
         Logger(category: "PushDeepLink").debug("[PushDeepLink] received lifecycle=willPresent source=remote keys=\(keys) hasAps=\(notification.request.content.userInfo["aps"] != nil)")
+        Logger(category: "PushLifecycle").debug("[PushLifecycle] willPresent messageId=\(event.logMessageId) action=saveAndPresentBanner")
+        Logger(category: "PushLifecycle").debug("[PushLifecycle] navigationSkipped reason=willPresentDoesNotNavigate messageId=\(event.logMessageId)")
         Logger(category: "NotificationPresentation").debug("[NotificationPresentation] willPresent source=\(source) keys=\(keys)")
         if isRemotePush {
             Logger(category: "RemotePush").debug("[RemotePush] received foreground=true messageId=\(Self.messageID(from: payload)) type=\(Self.payloadType(from: payload)) source=\(Self.payloadSource(from: payload))")
@@ -233,7 +246,11 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         let payload = Self.stringPayload(from: response.notification.request.content.userInfo)
         let isRemotePush = response.notification.request.trigger is UNPushNotificationTrigger
         let source = Self.notificationSource(for: response.notification.request.trigger)
+        let appStateLogValue = await MainActor.run {
+            UIApplication.shared.applicationState.notificationLogValue
+        }
         Logger(category: "PushDeepLink").debug("[PushDeepLink] received lifecycle=didReceive source=remote keys=\(Self.notificationKeySummary(from: response.notification.request.content.userInfo)) hasAps=\(response.notification.request.content.userInfo["aps"] != nil)")
+        Logger(category: "NotificationResponse").debug("[NotificationResponse] didReceive entry thread=async appState=\(appStateLogValue)")
         if isRemotePush {
             let event = PushNotificationEventFactory.makeEvent(
                 rawPayload: payload,
@@ -242,6 +259,7 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
                 source: .remoteFCM,
                 isTap: true
             )
+            Logger(category: "PushLifecycle").debug("[PushLifecycle] didReceive messageId=\(event.logMessageId) appState=\(appStateLogValue) action=navigate")
             Logger(category: "NotificationResponse").debug("[NotificationResponse] didReceive source=remoteFCM actionIdentifier=\(response.actionIdentifier) messageId=\(event.logMessageId) type=\(Self.payloadType(from: payload))")
             await MainActor.run {
                 Self.notificationService?.handlePushNotificationEvent(event)
@@ -466,5 +484,20 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
             bundleID: bundleID,
             googleAppID: maskedGoogleAppID
         )
+    }
+}
+
+private extension UIApplication.State {
+    var notificationLogValue: String {
+        switch self {
+        case .active:
+            return "foreground"
+        case .background:
+            return "background"
+        case .inactive:
+            return "inactive"
+        @unknown default:
+            return "unknown"
+        }
     }
 }

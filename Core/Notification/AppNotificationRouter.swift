@@ -80,6 +80,8 @@ final class AppNotificationRouter: AppNotificationRouting {
     private weak var appState: AppState?
     private let pendingRouteStore: PendingNotificationRouteStore
     private var navigationReady = false
+    private var isConsumingPendingRoute = false
+    private var consumedPendingKeys: Set<String> = []
     private let dedupeStore: PushNotificationDedupeStore
     private var chatRouteHydrator: (any ChatRouteHydrating)?
 
@@ -102,6 +104,7 @@ final class AppNotificationRouter: AppNotificationRouting {
 
     func setNavigationReady(_ isReady: Bool) {
         navigationReady = isReady
+        logReadiness(targetTabReady: isReady)
         routePendingIfNeeded()
     }
 
@@ -133,7 +136,7 @@ final class AppNotificationRouter: AppNotificationRouting {
         }
 
         guard appState.launchPhase == .ready else {
-            storePending(route: route, messageId: messageId, source: source, dedupeKey: key, reason: "authNotReady")
+            storePending(route: route, messageId: messageId, source: source, dedupeKey: key, reason: "appLaunching")
             return
         }
 
@@ -147,20 +150,17 @@ final class AppNotificationRouter: AppNotificationRouting {
             return
         }
 
-        guard appState.activeNotificationRoute != route,
-              appState.pendingNotificationRoute != route else {
+        guard !isAlreadyActiveOrPending(route: route, appState: appState) else {
             Logger(category: "DeepLink").debug("[DeepLink] skipped reason=alreadyAtDestination route=\(route.debugDescription)")
             Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate skipped reason=alreadyAtDestination routeKey=\(route.routeKey)")
+            if case .chatRoom(let roomId, _, _) = route {
+                Logger(category: "ChatNavigation").debug("[ChatNavigation] requested roomId=\(roomId) source=\(source.rawValue) currentRoomId=\(roomId) stackContains=true")
+                Logger(category: "ChatNavigation").debug("[ChatNavigation] skip reason=alreadyDisplayingSameRoom roomId=\(roomId)")
+            }
             return
         }
 
-        if case .chatRoom = route, chatRouteHydrator != nil {
-            Task { [weak self] in
-                await self?.hydrateAndPublish(route: route, source: source)
-            }
-        } else {
-            publish(route)
-        }
+        publish(route, source: source)
     }
 
     private func hydrateAndPublish(route: AppNotificationRoute, source: NotificationRouteSource) async {
@@ -181,10 +181,10 @@ final class AppNotificationRouter: AppNotificationRouting {
             hydratedRoute = route
         }
 
-        publish(hydratedRoute)
+        publish(hydratedRoute, source: source)
     }
 
-    private func publish(_ route: AppNotificationRoute) {
+    private func publish(_ route: AppNotificationRoute, source: NotificationRouteSource) {
         guard let appState else { return }
         pendingRouteStore.clear()
         Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate start route=\(route.logRouteName)")
@@ -193,22 +193,41 @@ final class AppNotificationRouter: AppNotificationRouting {
             Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate fallback destination=notificationCenter reason=noCustomData")
         }
         appState.pendingNotificationRoute = route
+        appState.pendingNotificationRouteSource = source
     }
 
     func routePendingIfNeeded() {
+        logReadiness(targetTabReady: navigationReady)
         Logger(category: "PushDeepLink").debug("[PushDeepLink] readiness changed authReady=\(isAuthReady) navigationReady=\(navigationReady) pendingExists=\(pendingRouteStore.pendingRoute != nil)")
-        guard let route = pendingRouteStore.pendingRoute,
-              let appState,
-              appState.launchPhase == .ready,
-              appState.sessionStore.isAuthenticated,
-              navigationReady else {
+        guard !isConsumingPendingRoute else {
+            Logger(category: "PendingPushRoute").debug("[PendingPushRoute] consumeCheck ready=false reason=alreadyProcessing")
             return
         }
+        guard let route = pendingRouteStore.pendingRoute else { return }
+        let retainedReason = pendingRetainedReason()
+        Logger(category: "PendingPushRoute").debug("[PendingPushRoute] consumeCheck ready=\(retainedReason == nil) reason=\(retainedReason ?? "ready")")
+        guard retainedReason == nil else {
+            Logger(category: "PendingPushRoute").debug("[PendingPushRoute] retained reason=\(retainedReason ?? "unknown")")
+            return
+        }
+        guard appState != nil else { return }
+        isConsumingPendingRoute = true
+        defer { isConsumingPendingRoute = false }
         let messageId = pendingRouteStore.pendingMessageId
         let source = pendingRouteStore.pendingSource ?? .remoteFCM
+        let pendingKey = pendingRouteStore.pendingDedupeKey ?? dedupeKey(route: route, messageId: messageId, source: source)
+        guard !consumedPendingKeys.contains(pendingKey) else {
+            pendingRouteStore.clear()
+            Logger(category: "PendingPushRoute").debug("[PendingPushRoute] consume pendingKey=\(pendingKey) consumedOnce=false cleared=true reason=alreadyConsumed")
+            return
+        }
+        consumedPendingKeys.insert(pendingKey)
         pendingRouteStore.clear()
         Logger(category: "DeepLink").info("[DeepLink] resumeAfterAuth route=\(route.debugDescription)")
         Logger(category: "PushDeepLink").debug("[PushDeepLink] pending consumed route=\(route.logRouteName) \(route.logIdentifier)")
+        Logger(category: "PendingPushRoute").debug("[PendingPushRoute] consumed messageId=\(messageId ?? "unknown") route=\(route.logRouteName) \(route.logIdentifier)")
+        Logger(category: "PendingPushRoute").debug("[PendingPushRoute] consume pendingKey=\(pendingKey) consumedOnce=true cleared=true")
+        Logger(category: "PushLifecycle").debug("[PushLifecycle] pendingConsumed target=\(route.logRouteName) \(route.logIdentifier)")
         handleRoute(route: route, messageId: messageId, source: source, skipsDedupe: true)
     }
 
@@ -235,6 +254,25 @@ final class AppNotificationRouter: AppNotificationRouting {
         pendingRouteStore.store(route: route, messageId: messageId, source: source, dedupeKey: dedupeKey)
         Logger(category: "DeepLink").warning("[DeepLink] navigate deferred reason=\(reason) route=\(route.logRouteName) \(route.logIdentifier)")
         Logger(category: "PushDeepLink").debug("[PushDeepLink] pending stored reason=\(reason) route=\(route.logRouteName) \(route.logIdentifier)")
+        Logger(category: "PushLifecycle").debug("[PushLifecycle] pendingStored reason=\(reason) target=\(route.logRouteName) \(route.logIdentifier)")
+        Logger(category: "PendingPushRoute").debug("[PendingPushRoute] store messageId=\(messageId ?? "unknown") route=\(route.logRouteName) \(route.logIdentifier) reason=\(reason)")
+    }
+
+    private func pendingRetainedReason() -> String? {
+        guard let appState else { return "rootNotReady" }
+        guard appState.launchPhase == .ready else { return "rootNotReady" }
+        guard appState.sessionStore.isAuthenticated else { return "authNotReady" }
+        guard navigationReady else { return "navigationNotReady" }
+        return nil
+    }
+
+    private func logReadiness(targetTabReady: Bool) {
+        let firebaseConfigured = true
+        let authResolved = appState?.launchPhase == .ready
+        let authReady = isAuthReady
+        let rootMounted = navigationReady
+        let tabRootsInitialized = navigationReady
+        Logger(category: "AppReadiness").debug("[AppReadiness] firebaseConfigured=\(firebaseConfigured) authResolved=\(authResolved) authReady=\(authReady) rootMounted=\(rootMounted) tabRootsInitialized=\(tabRootsInitialized) navigationReady=\(navigationReady) targetTabReady=\(targetTabReady)")
     }
 
     private func dedupeKey(route: AppNotificationRoute, messageId: String?, source: NotificationRouteSource) -> String {
@@ -242,6 +280,64 @@ final class AppNotificationRouter: AppNotificationRouting {
             return "navigate:\(source.rawValue):\(messageId):\(route.routeKey)"
         }
         return "navigate:\(source.rawValue):\(route.routeKey)"
+    }
+
+    private func isAlreadyActiveOrPending(route: AppNotificationRoute, appState: AppState) -> Bool {
+        if let roomId = route.chatRoomId {
+            return appState.activeNotificationRoute?.chatRoomId == roomId
+                || appState.pendingNotificationRoute?.chatRoomId == roomId
+        }
+
+        return appState.activeNotificationRoute == route
+            || appState.pendingNotificationRoute == route
+    }
+}
+
+extension AppNotificationRouter {
+    struct ChatPresentationReducer {
+        enum Action: String, Equatable {
+            case present
+            case replace
+            case skip
+            case clearDuplicate
+        }
+
+        struct Decision: Equatable {
+            let action: Action
+            let removedQueuedDuplicateCount: Int
+        }
+
+        static func reduce(
+            incomingRoute: AppNotificationRoute,
+            currentSheetRoute: AppNotificationRoute?,
+            currentPresentedChatRoomId: String?,
+            pendingRoute: AppNotificationRoute?,
+            navigationQueue: [AppNotificationRoute]
+        ) -> Decision {
+            guard let incomingRoomId = incomingRoute.chatRoomId else {
+                return Decision(action: .present, removedQueuedDuplicateCount: 0)
+            }
+
+            let currentRoomId = currentPresentedChatRoomId ?? currentSheetRoute?.chatRoomId
+            let queuedDuplicates = navigationQueue.filter { $0.chatRoomId == incomingRoomId }.count
+            let pendingDuplicate = pendingRoute?.chatRoomId == incomingRoomId
+
+            if currentRoomId == incomingRoomId {
+                return Decision(
+                    action: queuedDuplicates > 0 || pendingDuplicate ? .clearDuplicate : .skip,
+                    removedQueuedDuplicateCount: queuedDuplicates
+                )
+            }
+
+            if currentRoomId != nil {
+                return Decision(action: .replace, removedQueuedDuplicateCount: queuedDuplicates)
+            }
+
+            return Decision(
+                action: queuedDuplicates > 0 || pendingDuplicate ? .clearDuplicate : .present,
+                removedQueuedDuplicateCount: queuedDuplicates
+            )
+        }
     }
 }
 
@@ -282,6 +378,13 @@ private extension AppNotificationRoute {
         case .none:
             return "notice"
         }
+    }
+
+    var chatRoomId: String? {
+        if case .chatRoom(let roomId, _, _) = self {
+            return roomId
+        }
+        return nil
     }
 
     var logIdentifier: String {

@@ -59,7 +59,10 @@ final class ChatPresenter: ObservableObject {
 
     func send(_ action: ChatAction) async {
         switch action {
-        case .onAppear:
+        case .onAppear(let instanceID, let presentationKind):
+            Logger.shared.debug(
+                "[ChatRootView] appear roomId=\(debugRouteRoomID) source=\(debugRouteSource) instanceId=\(instanceID) presentationKind=\(presentationKind.rawValue)"
+            )
             guard !hasLoaded else {
                 await resumeRealtimeIfNeeded()
                 return
@@ -71,8 +74,14 @@ final class ChatPresenter: ObservableObject {
                 await openStoreRoom()
             case .user:
                 await openUserRoom()
-            case .room(let roomID, let title, _):
-                await openExistingRoom(roomID: roomID, title: title)
+            case .room(let roomID, let title, _, let source, let storeID, let opponentID):
+                await openExistingRoom(
+                    roomID: roomID,
+                    title: title,
+                    source: source,
+                    storeID: storeID,
+                    opponentID: opponentID
+                )
             case nil:
                 await loadRooms(isRefresh: false)
             }
@@ -82,7 +91,10 @@ final class ChatPresenter: ObservableObject {
             } else {
                 await loadRooms(isRefresh: true)
             }
-        case .onDisappear:
+        case .onDisappear(let instanceID, let presentationKind):
+            Logger.shared.debug(
+                "[ChatRootView] disappear roomId=\(viewState.selectedRoomID ?? debugRouteRoomID) source=\(debugRouteSource) instanceId=\(instanceID) presentationKind=\(presentationKind.rawValue)"
+            )
             handleDisappear()
         case .primaryButtonTapped:
             if viewState.requiresAuthentication {
@@ -210,29 +222,58 @@ final class ChatPresenter: ObservableObject {
         clearLoading()
     }
 
-    private func openExistingRoom(roomID: String, title: String) async {
+    private func openExistingRoom(
+        roomID: String,
+        title: String,
+        source: ChatRoomEntryPoint,
+        storeID: String?,
+        opponentID: String?
+    ) async {
         if viewState.mode == .roomDetail, viewState.selectedRoomID == roomID {
-            Logger.shared.debug("[ChatNavigation] skipDuplicatePush roomId=\(roomID)")
+            Logger.shared.debug("[ChatNavigation] skip reason=alreadyDisplayingSameRoom roomId=\(roomID)")
             return
         }
-        Logger.shared.debug("[ChatNavigation] push roomId=\(roomID) reason=externalRoomTarget")
+        Logger.shared.debug("[ChatNavigation] stateUpdate roomId=\(roomID) source=\(source.logValue) navigationSideEffect=false")
         let cachedContext = interactor.cachedStoreContext(roomID: roomID)
-        let displayTitle = cachedContext?.storeName.nilIfEmpty
-            ?? title.nilIfEmpty
+        let displayTitle = title.nilIfEmpty
+            ?? cachedContext?.storeName.nilIfEmpty
             ?? "채팅"
         viewState.mode = .roomDetail
         viewState.selectedRoomID = roomID
-        applyContext(ChatRoomContext(
-            entryPoint: .chatList,
-            roomID: roomID,
-            opponentID: cachedContext?.opponentID.nilIfEmpty,
-            storeID: cachedContext?.storeID.nilIfEmpty,
-            storeName: cachedContext?.storeName.nilIfEmpty,
-            displayTitle: displayTitle,
-            canUseStoreScopedTitle: cachedContext?.storeName.nilIfEmpty != nil,
-            hasRoomIDCollision: false,
-            collidingStoreIDs: []
-        ))
+        if let hydratedRoom = try? await interactor.loadRoom(roomID: roomID) {
+            var context = interactor.makeContext(for: hydratedRoom, entryPoint: source)
+            if context.displayTitle == "채팅", displayTitle != "채팅" {
+                context = ChatRoomContext(
+                    entryPoint: context.entryPoint,
+                    roomID: context.roomID,
+                    opponentID: opponentID?.nilIfEmpty ?? context.opponentID,
+                    storeID: storeID?.nilIfEmpty ?? context.storeID,
+                    storeName: context.storeName,
+                    displayTitle: displayTitle,
+                    canUseStoreScopedTitle: context.canUseStoreScopedTitle,
+                    hasRoomIDCollision: context.hasRoomIDCollision,
+                    collidingStoreIDs: context.collidingStoreIDs
+                )
+            }
+            applyContext(context)
+            Logger.shared.debug("[ChatRouteHydration] complete roomId=\(roomID) contextRecovered=true navigationSideEffect=false")
+        } else {
+            if source == .unknown {
+                Logger.shared.warning("[ChatRoute] missingSource fallback=unknown roomId=\(roomID)")
+            }
+            applyContext(ChatRoomContext(
+                entryPoint: source,
+                roomID: roomID,
+                opponentID: opponentID?.nilIfEmpty ?? cachedContext?.opponentID.nilIfEmpty,
+                storeID: storeID?.nilIfEmpty ?? cachedContext?.storeID.nilIfEmpty,
+                storeName: cachedContext?.storeName.nilIfEmpty,
+                displayTitle: displayTitle,
+                canUseStoreScopedTitle: storeID?.nilIfEmpty != nil || cachedContext?.storeName.nilIfEmpty != nil,
+                hasRoomIDCollision: false,
+                collidingStoreIDs: []
+            ))
+            Logger.shared.debug("[ChatRouteHydration] complete roomId=\(roomID) contextRecovered=\(cachedContext != nil || storeID?.nilIfEmpty != nil || opponentID?.nilIfEmpty != nil) navigationSideEffect=false")
+        }
         await loadCachedMessagesAndStartLiveSync(scope: currentScope(roomID: roomID), isRefresh: false)
     }
 
@@ -629,7 +670,10 @@ final class ChatPresenter: ObservableObject {
             "[ChatNavigation] source=\(context.entryPoint.logValue) roomId=\(context.roomID) storeId=\(context.storeID ?? "-") opponentId=\(context.opponentID ?? "-") title=\(context.displayTitle)"
         )
         Logger.shared.debug(
-            "[ChatRoomContext] resolvedTitle=\(context.displayTitle) roomId=\(context.roomID) storeId=\(context.storeID ?? "-") storeName=\(context.storeName ?? "-") opponentId=\(context.opponentID ?? "-") canUseStoreScopedTitle=\(context.canUseStoreScopedTitle)"
+            "[ChatRouteContext] hydrated roomId=\(context.roomID) storeId=\(context.storeID ?? "-") opponentId=\(context.opponentID ?? "-") title=\(context.displayTitle)"
+        )
+        Logger.shared.debug(
+            "[ChatRoomContext] resolvedTitle=\(context.displayTitle) roomId=\(context.roomID) storeId=\(context.storeID ?? "-") storeName=\(context.storeName ?? "-") opponentId=\(context.opponentID ?? "-") metadataLoaded=\(context.storeName != nil || context.opponentID != nil) canUseStoreScopedTitle=\(context.canUseStoreScopedTitle)"
         )
         if context.hasRoomIDCollision {
             Logger.shared.info(
@@ -715,6 +759,26 @@ final class ChatPresenter: ObservableObject {
 
     private func normalizedRouteRoomID(from rowID: String) -> String {
         rowID.hasPrefix("server:") ? String(rowID.dropFirst("server:".count)) : rowID
+    }
+
+    private var debugRouteRoomID: String {
+        if let selectedRoomID = viewState.selectedRoomID {
+            return selectedRoomID
+        }
+        if case .room(let roomID, _, _, _, _, _) = interactor.target {
+            return roomID
+        }
+        return "-"
+    }
+
+    private var debugRouteSource: String {
+        if let currentContext {
+            return currentContext.entryPoint.logValue
+        }
+        if case .room(_, _, _, let source, _, _) = interactor.target {
+            return source.logValue
+        }
+        return interactor.target == nil ? "chatList" : "unknown"
     }
 
     private func deduplicatedRooms(_ rooms: [ChatRoom]) -> [ChatRoom] {
@@ -829,6 +893,16 @@ private extension ChatRoomEntryPoint {
             return "chatList"
         case .userProfile:
             return "profile"
+        case .remoteFCM:
+            return "remoteFCM"
+        case .localNotification:
+            return "localNotification"
+        case .deepLink:
+            return "deepLink"
+        case .orderDetail:
+            return "orderDetail"
+        case .unknown:
+            return "unknown"
         }
     }
 }
