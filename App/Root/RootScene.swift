@@ -39,20 +39,26 @@ struct RootScene: View {
         }
         .task {
             Logger(category: "AppLifecycle").debug("[AppLifecycle] scene willConnect")
+            featureBuilderFactory.setNotificationSceneReady(true)
+            featureBuilderFactory.setNotificationSceneActive(scenePhase == .active)
             featureBuilderFactory.registerOrderBackgroundRefresh()
             await bootstrapper.bootstrapIfNeeded()
+            featureBuilderFactory.routePendingNotificationIfNeeded()
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
                 Logger(category: "AppLifecycle").debug("[AppLifecycle] sceneDidBecomeActive")
+                featureBuilderFactory.setNotificationSceneActive(true)
                 Task {
                     await featureBuilderFactory.refreshOrdersForSystemState(source: .foreground, force: true)
                 }
             case .inactive:
                 Logger(category: "AppLifecycle").debug("[AppLifecycle] sceneDidBecomeInactive")
+                featureBuilderFactory.setNotificationSceneActive(false)
             case .background:
                 Logger(category: "AppLifecycle").debug("[AppLifecycle] sceneDidEnterBackground")
+                featureBuilderFactory.setNotificationSceneActive(false)
                 featureBuilderFactory.scheduleOrderBackgroundRefresh()
             @unknown default:
                 Logger(category: "AppLifecycle").debug("[AppLifecycle] scenePhaseUnknown")

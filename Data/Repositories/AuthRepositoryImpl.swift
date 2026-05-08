@@ -96,13 +96,11 @@ struct AuthRepositoryImpl: AuthRepository {
 
     func updateMyProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> UserProfile {
         let response = try await remoteDataSource.updateMyProfile(
             nick: nick,
-            phoneNumber: phoneNumber,
-            profileImagePath: profileImagePath
+            phoneNumber: phoneNumber
         )
         return mapProfile(response)
     }

@@ -291,6 +291,10 @@ struct FeatureBuilderFactory {
         container.appNotificationRouter.routePendingIfNeeded()
     }
 
+    func markNotificationNavigationCompleted(route: AppNotificationRoute) {
+        container.appNotificationRouter.markNavigationCompleted(route: route)
+    }
+
     func routeDeepLink(_ url: URL) {
         guard url.scheme?.lowercased() == "pikko" else { return }
         let components = url.pathComponents.filter { $0 != "/" }
@@ -303,6 +307,14 @@ struct FeatureBuilderFactory {
 
     func setNotificationNavigationReady(_ isReady: Bool) {
         container.appNotificationRouter.setNavigationReady(isReady)
+    }
+
+    func setNotificationSceneReady(_ isReady: Bool) {
+        container.appNotificationRouter.setSceneReady(isReady)
+    }
+
+    func setNotificationSceneActive(_ isActive: Bool) {
+        container.appNotificationRouter.setSceneActive(isActive)
     }
 
     func registerOrderBackgroundRefresh() {

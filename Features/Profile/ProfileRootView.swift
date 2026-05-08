@@ -65,7 +65,7 @@ struct ProfileRootView: View {
 
                 HStack(alignment: .center, spacing: PikkoSpacing.md) {
                     AuthorizedAsyncImage(
-                        path: presenter.viewState.profileImagePath,
+                        path: presenter.viewState.profileImageDisplayPath,
                         loader: imageLoader,
                         contentMode: .fill,
                         cornerRadius: 32,
@@ -336,19 +336,13 @@ private struct ProfileEditorView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: PikkoSpacing.lg) {
                     VStack(alignment: .center, spacing: PikkoSpacing.md) {
-                        AuthorizedAsyncImage(
-                            path: presenter.viewState.editorProfileImagePath,
-                            loader: imageLoader,
-                            contentMode: .fill,
-                            cornerRadius: 40,
-                            showsProgress: false
-                        )
-                        .frame(width: 96, height: 96)
+                        editorAvatarView
+                            .frame(width: 96, height: 96)
 
                         PhotosPicker(
                             selection: $selectedPhotoItem,
                             matching: .images,
-                            preferredItemEncoding: .automatic
+                            preferredItemEncoding: .current
                         ) {
                             Text("프로필 이미지 변경")
                                 .font(PikkoTypography.captionStrong)
@@ -364,8 +358,13 @@ private struct ProfileEditorView: View {
                         }
                         .disabled(presenter.viewState.isUploadingProfileImage || presenter.viewState.isSavingProfile)
 
-                        if presenter.viewState.isUploadingProfileImage {
+                        switch presenter.viewState.profileImageUpdateState {
+                        case .processingImage:
+                            LoadingView(message: "이미지 처리 중")
+                        case .uploadingImage:
                             LoadingView(message: "프로필 이미지 업로드 중")
+                        case .idle, .picking, .success, .failure:
+                            EmptyView()
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -438,24 +437,47 @@ private struct ProfileEditorView: View {
         .task(id: selectedPhotoItem?.itemIdentifier) {
             guard let selectedPhotoItem else { return }
             await handleImageSelection(item: selectedPhotoItem)
+            self.selectedPhotoItem = nil
+        }
+    }
+
+    @ViewBuilder
+    private var editorAvatarView: some View {
+        if let data = presenter.viewState.editorLocalProfileImageData,
+           let image = UIImage(data: data) {
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
+        } else {
+            AuthorizedAsyncImage(
+                path: presenter.viewState.editorProfileImageDisplayPath,
+                loader: imageLoader,
+                contentMode: .fill,
+                cornerRadius: 40,
+                showsProgress: false
+            )
         }
     }
 
     private func handleImageSelection(item: PhotosPickerItem) async {
+        let itemProviderTypes = item.supportedContentTypes.map(\.identifier).joined(separator: ",")
 #if DEBUG
-        var originalBytes = 0
+        Logger(category: "ProfileImagePicker").debug("[ProfileImagePicker] selected source=photoLibrary itemProviderTypes=\(itemProviderTypes)")
+        Logger(category: "ProfileImage").debug("[ProfileImage] picker selected=true")
 #endif
         guard let rawData = try? await item.loadTransferable(type: Data.self),
-              UIImage(data: rawData) != nil,
               !rawData.isEmpty else {
 #if DEBUG
-            Logger(category: "ProfileImage").warning("[ProfileImage] failed stage=picker status=none message=imageDataUnavailable")
+            Logger(category: "ProfileImagePicker").warning("[ProfileImagePicker] failed status=none reason=imageDataUnavailable")
+            Logger(category: "ProfileImage").warning("[ProfileImage] upload skipped reason=noSelectedImage")
 #endif
+            await presenter.send(.profileImageSelectionFailed("이미지를 불러오지 못했어요. 다른 사진을 선택해 주세요."))
             return
         }
 #if DEBUG
-        originalBytes = rawData.count
-        Logger(category: "ProfileImage").debug("[ProfileImage] picker selected hasImage=true originalBytes=\(originalBytes)")
+        Logger(category: "ProfileImagePicker").debug("[ProfileImagePicker] loaded originalBytes=\(rawData.count)")
+        Logger(category: "ProfileImage").debug("[ProfileImage] loadedData bytes=\(rawData.count)")
 #endif
 
         await presenter.send(

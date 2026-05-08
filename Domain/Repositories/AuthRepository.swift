@@ -15,8 +15,7 @@ protocol AuthRepository: Sendable {
     func fetchMyProfile() async throws -> UserProfile
     func updateMyProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> UserProfile
     func uploadProfileImage(
         data: Data,

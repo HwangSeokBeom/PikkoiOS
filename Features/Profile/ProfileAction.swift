@@ -7,6 +7,7 @@ enum ProfileAction {
     case editorNickChanged(String)
     case editorPhoneNumberChanged(String)
     case profileImageDataSelected(Data, fileName: String)
+    case profileImageSelectionFailed(String)
     case saveProfileTapped
     case likedStoresTapped
     case myPostsTapped

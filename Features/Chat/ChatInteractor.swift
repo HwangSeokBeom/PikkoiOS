@@ -335,7 +335,7 @@ enum ChatTarget: Equatable, Sendable {
     }
 }
 
-enum ChatRoomEntryPoint: Equatable, Sendable {
+enum ChatRoomEntryPoint: Equatable, Hashable, Sendable {
     case storeDetail
     case storeScopedChatList
     case chatList

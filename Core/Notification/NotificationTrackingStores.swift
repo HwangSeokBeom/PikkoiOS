@@ -1,5 +1,28 @@
 import Foundation
 
+enum MainActorStateAssertions {
+    @MainActor
+    static func assertMainActorForUIState(_ context: String) {
+#if DEBUG
+        assert(Thread.isMainThread, "[MainActor] UI state mutation off main thread context=\(context)")
+#endif
+    }
+
+    @MainActor
+    static func assertMainThreadForUIStateMutation(context: String) {
+#if DEBUG
+        assert(Thread.isMainThread, "[UIState] mutation off main thread context=\(context)")
+#endif
+    }
+
+    @MainActor
+    static func assertMainThreadForNavigation(_ context: String) {
+#if DEBUG
+        assert(Thread.isMainThread, "[Navigation] mutation off main thread context=\(context)")
+#endif
+    }
+}
+
 @MainActor
 protocol ActiveChatRoomTracking: AnyObject {
     var activeRoomId: String? { get set }
@@ -33,6 +56,13 @@ final class PendingNotificationRouteStore {
         source: NotificationRouteSource,
         dedupeKey: String
     ) {
+        MainActorStateAssertions.assertMainActorForUIState("PendingNotificationRouteStore.store")
+        Logger(category: "ThreadCheck").debug("[ThreadCheck] component=PendingPushRoute operation=store isMainThread=\(Thread.isMainThread)")
+        guard route != .none else {
+            Logger(category: "PendingPushRoute").warning("[PendingPushRoute] store skipped reason=invalidRoute route=none messageId=\(messageId ?? "unknown")")
+            clear()
+            return
+        }
         pendingRoute = route
         pendingMessageId = messageId
         pendingSource = source
@@ -40,6 +70,8 @@ final class PendingNotificationRouteStore {
     }
 
     func clear() {
+        MainActorStateAssertions.assertMainActorForUIState("PendingNotificationRouteStore.clear")
+        Logger(category: "ThreadCheck").debug("[ThreadCheck] component=PendingPushRoute operation=clear isMainThread=\(Thread.isMainThread)")
         pendingRoute = nil
         pendingMessageId = nil
         pendingSource = nil
@@ -48,6 +80,8 @@ final class PendingNotificationRouteStore {
 }
 
 enum PushNotificationDedupePhase: String {
+    case receive
+    case display
     case save
     case read
     case navigate
@@ -64,23 +98,56 @@ final class PushNotificationDedupeStore {
         self.now = now
     }
 
-    func accept(key: String, phase: PushNotificationDedupePhase) -> Bool {
+    func accept(key: String, source: String? = nil, phase: PushNotificationDedupePhase) -> Bool {
         pruneExpiredKeys()
         let currentDate = now()
         if let acceptedAt = acceptedKeys[key],
            currentDate.timeIntervalSince(acceptedAt) < ttl {
             Logger(category: "PushDedupe").debug("[PushDedupe] duplicate ignored key=\(key) phase=\(phase.rawValue)")
+            Logger(category: "NotificationDedupe").debug("[NotificationDedupe] check key=\(key) source=\(source ?? "unknown") phase=\(phase.rawValue) result=duplicate")
             return false
         }
 
         acceptedKeys[key] = currentDate
         Logger(category: "PushDedupe").debug("[PushDedupe] accepted key=\(key) phase=\(phase.rawValue)")
+        Logger(category: "NotificationDedupe").debug("[NotificationDedupe] check key=\(key) source=\(source ?? "unknown") phase=\(phase.rawValue) result=accepted")
         return true
     }
 
     private func pruneExpiredKeys() {
         let currentDate = now()
         acceptedKeys = acceptedKeys.filter { currentDate.timeIntervalSince($0.value) < ttl }
+    }
+}
+
+@MainActor
+final class VisibleNotificationDedupeStore {
+    private var displayedIdentities: [String: Date] = [:]
+    private let ttl: TimeInterval
+    private let now: () -> Date
+
+    init(ttl: TimeInterval = 120, now: @escaping () -> Date = Date.init) {
+        self.ttl = ttl
+        self.now = now
+    }
+
+    func accept(identity: String, source: String) -> Bool {
+        MainActorStateAssertions.assertMainThreadForUIStateMutation(context: "VisibleNotificationDedupeStore.accept")
+        pruneExpiredIdentities()
+        let currentDate = now()
+        if let displayedAt = displayedIdentities[identity],
+           currentDate.timeIntervalSince(displayedAt) < ttl {
+            Logger(category: "VisibleNotificationDedupe").debug("[VisibleNotificationDedupe] decision=suppressed identity=\(identity) source=\(source) reason=alreadyDisplayed")
+            return false
+        }
+        displayedIdentities[identity] = currentDate
+        Logger(category: "VisibleNotificationDedupe").debug("[VisibleNotificationDedupe] decision=allowed identity=\(identity) source=\(source)")
+        return true
+    }
+
+    private func pruneExpiredIdentities() {
+        let currentDate = now()
+        displayedIdentities = displayedIdentities.filter { currentDate.timeIntervalSince($0.value) < ttl }
     }
 }
 

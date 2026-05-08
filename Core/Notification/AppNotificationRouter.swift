@@ -4,6 +4,17 @@ import Foundation
 protocol AppNotificationRouting: AnyObject {
     func route(to route: AppNotificationRoute)
     func handleNotificationTap(route: AppNotificationRoute, messageId: String?, source: NotificationRouteSource)
+    func markNavigationCompleted(route: AppNotificationRoute)
+}
+
+struct NotificationRouteReadiness: Equatable, Sendable {
+    var appSceneReady = false
+    var appSceneActive = false
+    var rootNavigationReady = false
+    var authResolutionCompleted = false
+    var sessionReady = false
+    var tabRootReady = false
+    var routerReady = false
 }
 
 protocol ChatRouteHydrating: Sendable {
@@ -80,7 +91,7 @@ final class AppNotificationRouter: AppNotificationRouting {
     private weak var appState: AppState?
     private let pendingRouteStore: PendingNotificationRouteStore
     private let activeChatRoomTracker: ActiveChatRoomTracking?
-    private var navigationReady = false
+    private var readiness = NotificationRouteReadiness()
     private var isConsumingPendingRoute = false
     private var consumedPendingKeys: Set<String> = []
     private let dedupeStore: PushNotificationDedupeStore
@@ -98,7 +109,9 @@ final class AppNotificationRouter: AppNotificationRouting {
     }
 
     func attach(appState: AppState) {
+        MainActorStateAssertions.assertMainActorForUIState("AppNotificationRouter.attach")
         self.appState = appState
+        readiness.routerReady = true
     }
 
     func setChatRouteHydrator(_ hydrator: any ChatRouteHydrating) {
@@ -106,8 +119,27 @@ final class AppNotificationRouter: AppNotificationRouting {
     }
 
     func setNavigationReady(_ isReady: Bool) {
-        navigationReady = isReady
+        MainActorStateAssertions.assertMainActorForUIState("AppNotificationRouter.setNavigationReady")
+        readiness.rootNavigationReady = isReady
+        readiness.tabRootReady = isReady
+        refreshStateDerivedReadiness()
         logReadiness(targetTabReady: isReady)
+        routePendingIfNeeded()
+    }
+
+    func setSceneReady(_ isReady: Bool) {
+        MainActorStateAssertions.assertMainActorForUIState("AppNotificationRouter.setSceneReady")
+        readiness.appSceneReady = isReady
+        refreshStateDerivedReadiness()
+        logReadiness(targetTabReady: readiness.tabRootReady)
+        routePendingIfNeeded()
+    }
+
+    func setSceneActive(_ isActive: Bool) {
+        MainActorStateAssertions.assertMainActorForUIState("AppNotificationRouter.setSceneActive")
+        readiness.appSceneActive = isActive
+        refreshStateDerivedReadiness()
+        logReadiness(targetTabReady: readiness.tabRootReady)
         routePendingIfNeeded()
     }
 
@@ -119,17 +151,35 @@ final class AppNotificationRouter: AppNotificationRouting {
         handleRoute(route: route, messageId: messageId, source: source)
     }
 
+    func markNavigationCompleted(route: AppNotificationRoute) {
+        MainActorStateAssertions.assertMainActorForUIState("AppNotificationRouter.markNavigationCompleted")
+        let pendingRoute = pendingRouteStore.pendingRoute
+        let isMatchingChat = route.chatRoomId.map { pendingRoute?.chatRoomId == $0 } ?? false
+        guard pendingRoute == route || isMatchingChat else { return }
+        pendingRouteStore.clear()
+        Logger(category: "PendingPushRoute").debug("[PendingPushRoute] clear route=\(route.logRouteName) \(route.logIdentifier) reason=navigated")
+    }
+
     private func handleRoute(
         route: AppNotificationRoute,
         messageId: String?,
         source: NotificationRouteSource,
         skipsDedupe: Bool = false
     ) {
+        MainActorStateAssertions.assertMainThreadForNavigation("AppNotificationRouter.handleRoute")
+        Logger(category: "ThreadCheck").debug("[ThreadCheck] component=PushDeepLink operation=handle isMainThread=\(Thread.isMainThread)")
+        guard route != .none else {
+            Logger(category: "DeepLink").warning("[DeepLink] navigation skipped reason=invalidRoute route=none source=\(source.rawValue)")
+            Logger(category: "PushDeepLink").warning("[PushDeepLink] navigation skipped reason=invalidRoute messageId=\(messageId ?? "unknown")")
+            return
+        }
         let key = dedupeKey(route: route, messageId: messageId, source: source)
         Logger(category: "DeepLink").debug("[DeepLink] received source=\(source.rawValue) route=\(route.logRouteName) authState=\(authStateLogValue)")
-        Logger(category: "PushDeepLink").debug("[PushDeepLink] handle thread=\(Thread.isMainThread ? "main" : "background") authReady=\(isAuthReady) navigationReady=\(navigationReady) route=\(route.logRouteName) \(route.logIdentifier)")
+        refreshStateDerivedReadiness()
+        Logger(category: "PushDeepLink").debug("[PushDeepLink] handle thread=\(Thread.isMainThread ? "main" : "background") authReady=\(isAuthReady) navigationReady=\(readiness.rootNavigationReady) route=\(route.logRouteName) \(route.logIdentifier)")
+        Logger(category: "PushRouteQueue").debug("[PushRouteQueue] enqueue routeKey=\(route.routeKey) source=\(source.rawValue) pendingCount=\(pendingRouteStore.pendingRoute == nil ? 0 : 1)")
 
-        if !skipsDedupe, !dedupeStore.accept(key: key, phase: .navigate) {
+        if !skipsDedupe, !dedupeStore.accept(key: key, source: source.rawValue, phase: .navigate) {
             return
         }
 
@@ -138,18 +188,8 @@ final class AppNotificationRouter: AppNotificationRouting {
             return
         }
 
-        guard appState.launchPhase == .ready else {
-            storePending(route: route, messageId: messageId, source: source, dedupeKey: key, reason: "appLaunching")
-            return
-        }
-
-        guard appState.sessionStore.isAuthenticated else {
-            storePending(route: route, messageId: messageId, source: source, dedupeKey: key, reason: "authNotReady")
-            return
-        }
-
-        guard navigationReady else {
-            storePending(route: route, messageId: messageId, source: source, dedupeKey: key, reason: "navigationNotReady")
+        if let reason = retainedReason(for: route) {
+            storePending(route: route, messageId: messageId, source: source, dedupeKey: key, reason: reason)
             return
         }
 
@@ -160,6 +200,11 @@ final class AppNotificationRouter: AppNotificationRouting {
         guard !isAlreadyActiveOrPending(route: route, appState: appState) else {
             Logger(category: "DeepLink").debug("[DeepLink] skipped reason=alreadyAtDestination route=\(route.debugDescription)")
             Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate skipped reason=alreadyAtDestination routeKey=\(route.routeKey)")
+            let isMatchingPendingChat = route.chatRoomId.map { pendingRouteStore.pendingRoute?.chatRoomId == $0 } ?? false
+            if pendingRouteStore.pendingRoute == route || isMatchingPendingChat {
+                pendingRouteStore.clear()
+                Logger(category: "PendingPushRoute").debug("[PendingPushRoute] clear route=\(route.logRouteName) reason=alreadyAtDestination messageId=\(messageId ?? "unknown")")
+            }
             if case .chatRoom(let roomId, _, _) = route {
                 Logger(category: "ChatNavigation").debug("[ChatNavigation] requested roomId=\(roomId) source=\(source.rawValue) currentRoomId=\(roomId) stackContains=true")
                 Logger(category: "ChatNavigation").debug("[ChatNavigation] open skipped reason=alreadyTop roomId=\(roomId)")
@@ -181,6 +226,7 @@ final class AppNotificationRouter: AppNotificationRouting {
                     Logger(category: "DeepLink").error("[DeepLink] chat route rejected roomId=\(roomId) reason=\(reason)")
                     Logger(category: "NavigationQueue").error("[NavigationQueue] failed route=chat roomId=\(roomId) reason=\(reason)")
                 }
+                Logger(category: "PushRouteConsume").error("[PushRouteConsume] failed routeKey=\(route.routeKey) error=\(reason)")
                 appState?.globalToast = GlobalToast(message: "채팅방 정보를 불러오지 못했습니다.")
                 return
             }
@@ -192,18 +238,20 @@ final class AppNotificationRouter: AppNotificationRouting {
     }
 
     private func publish(_ route: AppNotificationRoute, source: NotificationRouteSource) {
+        MainActorStateAssertions.assertMainThreadForNavigation("AppNotificationRouter.publish")
         guard let appState else { return }
-        pendingRouteStore.clear()
+        Logger(category: "ThreadCheck").debug("[ThreadCheck] component=NavigationQueue operation=publish isMainThread=\(Thread.isMainThread)")
+        Logger(category: "PushRouteConsume").debug("[PushRouteConsume] routeKey=\(route.routeKey) result=started")
         Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate start route=\(route.logRouteName)")
         Logger(category: "DeepLink").info("[DeepLink] navigate route=\(route.logRouteName) \(route.logIdentifier) thread=main selectedTab=\(appState.selectedTab.rawValue)")
-        if route == .none {
-            Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate fallback destination=notificationCenter reason=noCustomData")
-        }
         appState.pendingNotificationRoute = route
         appState.pendingNotificationRouteSource = source
+        Logger(category: "PushRouteConsume").info("[PushRouteConsume] routeKey=\(route.routeKey) result=completed destination=\(route.logRouteName)")
     }
 
     func routePendingIfNeeded() {
+        MainActorStateAssertions.assertMainThreadForNavigation("AppNotificationRouter.routePendingIfNeeded")
+        refreshStateDerivedReadiness()
         logReadiness(targetTabReady: navigationReady)
         Logger(category: "PushDeepLink").debug("[PushDeepLink] readiness changed authReady=\(isAuthReady) navigationReady=\(navigationReady) pendingExists=\(pendingRouteStore.pendingRoute != nil)")
         guard !isConsumingPendingRoute else {
@@ -211,7 +259,12 @@ final class AppNotificationRouter: AppNotificationRouting {
             return
         }
         guard let route = pendingRouteStore.pendingRoute else { return }
-        let retainedReason = pendingRetainedReason()
+        guard route != .none else {
+            pendingRouteStore.clear()
+            Logger(category: "PendingPushRoute").warning("[PendingPushRoute] consume skipped reason=invalidRoute route=none")
+            return
+        }
+        let retainedReason = pendingRetainedReason(for: route)
         Logger(category: "PendingPushRoute").debug("[PendingPushRoute] consumeCheck ready=\(retainedReason == nil) reason=\(retainedReason ?? "ready")")
         guard retainedReason == nil else {
             Logger(category: "PendingPushRoute").debug("[PendingPushRoute] retained reason=\(retainedReason ?? "unknown")")
@@ -224,16 +277,17 @@ final class AppNotificationRouter: AppNotificationRouting {
         let source = pendingRouteStore.pendingSource ?? .remoteFCM
         let pendingKey = pendingRouteStore.pendingDedupeKey ?? dedupeKey(route: route, messageId: messageId, source: source)
         guard !consumedPendingKeys.contains(pendingKey) else {
-            pendingRouteStore.clear()
-            Logger(category: "PendingPushRoute").debug("[PendingPushRoute] consume pendingKey=\(pendingKey) consumedOnce=false cleared=true reason=alreadyConsumed")
+            Logger(category: "PendingPushRoute").debug("[PendingPushRoute] consume pendingKey=\(pendingKey) consumedOnce=true cleared=false reason=alreadyPublished")
             return
         }
         consumedPendingKeys.insert(pendingKey)
-        pendingRouteStore.clear()
         Logger(category: "DeepLink").info("[DeepLink] resumeAfterAuth route=\(route.debugDescription)")
         Logger(category: "PushDeepLink").debug("[PushDeepLink] pending consumed route=\(route.logRouteName) \(route.logIdentifier)")
+        Logger(category: "PendingPushRoute").debug("[PendingPushRoute] replay route=\(route.logRouteName) sceneActive=true messageId=\(messageId ?? "unknown")")
+        if case .chatRoom(let roomId, _, _) = route {
+            Logger(category: "PendingPushRoute").debug("[PendingPushRoute] replay route=chat roomId=\(roomId) sceneActive=\(readiness.appSceneActive) authReady=\(isAuthReady) navigationReady=\(navigationReady) targetTabReady=\(readiness.tabRootReady)")
+        }
         Logger(category: "PendingPushRoute").debug("[PendingPushRoute] consumed messageId=\(messageId ?? "unknown") route=\(route.logRouteName) \(route.logIdentifier)")
-        Logger(category: "PendingPushRoute").debug("[PendingPushRoute] consume pendingKey=\(pendingKey) consumedOnce=true cleared=true")
         Logger(category: "PushLifecycle").debug("[PushLifecycle] pendingConsumed target=\(route.logRouteName) \(route.logIdentifier)")
         handleRoute(route: route, messageId: messageId, source: source, skipsDedupe: true)
     }
@@ -251,6 +305,10 @@ final class AppNotificationRouter: AppNotificationRouting {
         return appState.launchPhase == .ready && appState.sessionStore.isAuthenticated
     }
 
+    private var navigationReady: Bool {
+        readiness.rootNavigationReady && readiness.tabRootReady
+    }
+
     private func storePending(
         route: AppNotificationRoute,
         messageId: String?,
@@ -258,28 +316,60 @@ final class AppNotificationRouter: AppNotificationRouting {
         dedupeKey: String,
         reason: String
     ) {
+        MainActorStateAssertions.assertMainActorForUIState("AppNotificationRouter.storePending")
+        Logger(category: "ThreadCheck").debug("[ThreadCheck] component=PendingPushRoute operation=store isMainThread=\(Thread.isMainThread)")
+        guard route != .none else {
+            Logger(category: "PendingPushRoute").warning("[PendingPushRoute] store skipped reason=invalidRoute route=none messageId=\(messageId ?? "unknown")")
+            return
+        }
         pendingRouteStore.store(route: route, messageId: messageId, source: source, dedupeKey: dedupeKey)
+        logGate(route: route)
         Logger(category: "DeepLink").warning("[DeepLink] navigate deferred reason=\(reason) route=\(route.logRouteName) \(route.logIdentifier)")
         Logger(category: "PushDeepLink").debug("[PushDeepLink] pending stored reason=\(reason) route=\(route.logRouteName) \(route.logIdentifier)")
         Logger(category: "PushLifecycle").debug("[PushLifecycle] pendingStored reason=\(reason) target=\(route.logRouteName) \(route.logIdentifier)")
-        Logger(category: "PendingPushRoute").debug("[PendingPushRoute] store messageId=\(messageId ?? "unknown") route=\(route.logRouteName) \(route.logIdentifier) reason=\(reason)")
+        if case .chatRoom(let roomId, _, _) = route {
+            Logger(category: "PendingPushRoute").debug("[PendingPushRoute] store route=chat roomId=\(roomId) reason=\(reason)")
+        } else {
+            Logger(category: "PendingPushRoute").debug("[PendingPushRoute] store route=\(route.logRouteName) reason=\(reason) messageId=\(messageId ?? "unknown")")
+        }
+        if reason == "authNotReady" || reason == "sessionNotReady" {
+            Logger(category: "PushRouteGate").warning("[PushRouteGate] route requires auth but session failed, preserving route until login")
+        }
     }
 
-    private func pendingRetainedReason() -> String? {
+    private func pendingRetainedReason(for route: AppNotificationRoute) -> String? {
+        retainedReason(for: route)
+    }
+
+    private func retainedReason(for route: AppNotificationRoute) -> String? {
+        refreshStateDerivedReadiness()
+        logGate(route: route)
         guard let appState else { return "rootNotReady" }
+        guard readiness.routerReady else { return "routerNotReady" }
+        guard readiness.appSceneReady else { return "appSceneNotReady" }
+        guard readiness.appSceneActive else { return "appSceneNotActive" }
         guard appState.launchPhase == .ready else { return "rootNotReady" }
-        guard appState.sessionStore.isAuthenticated else { return "authNotReady" }
-        guard navigationReady else { return "navigationNotReady" }
+        if route.requiresAuthentication {
+            guard appState.sessionStore.isAuthenticated else { return "sessionNotReady" }
+        }
+        guard readiness.rootNavigationReady else { return "navigationNotReady" }
+        guard readiness.tabRootReady else { return "tabRootNotReady" }
         return nil
     }
 
     private func logReadiness(targetTabReady: Bool) {
         let firebaseConfigured = true
-        let authResolved = appState?.launchPhase == .ready
-        let authReady = isAuthReady
-        let rootMounted = navigationReady
-        let tabRootsInitialized = navigationReady
-        Logger(category: "AppReadiness").debug("[AppReadiness] firebaseConfigured=\(firebaseConfigured) authResolved=\(authResolved) authReady=\(authReady) rootMounted=\(rootMounted) tabRootsInitialized=\(tabRootsInitialized) navigationReady=\(navigationReady) targetTabReady=\(targetTabReady)")
+        Logger(category: "AppReadiness").debug("[AppReadiness] firebaseConfigured=\(firebaseConfigured) authResolved=\(readiness.authResolutionCompleted) authReady=\(isAuthReady) rootMounted=\(readiness.rootNavigationReady) tabRootsInitialized=\(readiness.tabRootReady) navigationReady=\(navigationReady) targetTabReady=\(targetTabReady)")
+    }
+
+    private func logGate(route: AppNotificationRoute) {
+        Logger(category: "PushRouteGate").debug("[PushRouteGate] appReady=\(readiness.appSceneReady) sceneActive=\(readiness.appSceneActive) sessionReady=\(readiness.sessionReady) navigationReady=\(navigationReady) authState=\(authStateLogValue)")
+    }
+
+    private func refreshStateDerivedReadiness() {
+        readiness.routerReady = appState != nil
+        readiness.authResolutionCompleted = appState?.launchPhase == .ready
+        readiness.sessionReady = appState?.sessionStore.isAuthenticated == true
     }
 
     private func dedupeKey(route: AppNotificationRoute, messageId: String?, source: NotificationRouteSource) -> String {
@@ -358,10 +448,20 @@ private extension AppNotificationRoute {
             return "orderList"
         case .chatRoom:
             return "chat"
+        case .storeDetail:
+            return "storeDetail"
+        case .videoDetail:
+            return "videoDetail"
+        case .shorts:
+            return "shorts"
         case .communityPost:
             return "communityPost"
         case .communityList:
             return "communityList"
+        case .cart:
+            return "cart"
+        case .profile:
+            return "profile"
         case .paymentReceipt:
             return "paymentReceipt"
         case .none:
@@ -377,22 +477,25 @@ private extension AppNotificationRoute {
             return "orders"
         case .chatRoom(let roomId, _, _):
             return "chat:\(roomId)"
+        case .storeDetail(let storeId):
+            return "store:\(storeId)"
+        case .videoDetail(let videoId):
+            return "video:\(videoId)"
+        case .shorts(let videoId):
+            return "shorts:\(videoId ?? "-")"
         case .communityPost(let postId, let commentId):
             return "post:\(postId):comment:\(commentId ?? "-")"
         case .communityList:
             return "community"
+        case .cart:
+            return "cart"
+        case .profile:
+            return "profile"
         case .paymentReceipt(let orderCode):
             return "payment:\(orderCode)"
         case .none:
             return "notice"
         }
-    }
-
-    var chatRoomId: String? {
-        if case .chatRoom(let roomId, _, _) = self {
-            return roomId
-        }
-        return nil
     }
 
     var logIdentifier: String {
@@ -401,10 +504,25 @@ private extension AppNotificationRoute {
             return "orderCode=\(orderCode)"
         case .chatRoom(let roomId, _, _):
             return "roomId=\(roomId)"
+        case .storeDetail(let storeId):
+            return "storeId=\(storeId)"
+        case .videoDetail(let videoId):
+            return "videoId=\(videoId)"
+        case .shorts(let videoId):
+            return "videoIdExists=\(videoId?.isEmpty == false)"
         case .communityPost(let postId, let commentId):
             return "postId=\(postId) commentIdExists=\(commentId != nil)"
-        case .orderList, .communityList, .none:
+        case .orderList, .communityList, .cart, .profile, .none:
             return ""
+        }
+    }
+
+    var requiresAuthentication: Bool {
+        switch self {
+        case .none:
+            return false
+        case .orderDetail, .orderList, .chatRoom, .storeDetail, .videoDetail, .shorts, .communityPost, .communityList, .cart, .profile, .paymentReceipt:
+            return true
         }
     }
 }

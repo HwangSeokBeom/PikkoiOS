@@ -12,6 +12,7 @@ enum PushNotificationLifecycle: String, Sendable {
 struct PushNotificationEvent: Sendable {
     let rawPayload: [String: String]
     let parsedRoute: AppNotificationRoute?
+    let routeParseResult: NotificationRouteParser.ParseResult
     let messageId: String?
     let actionIdentifier: String?
     let lifecycle: PushNotificationLifecycle
@@ -20,6 +21,27 @@ struct PushNotificationEvent: Sendable {
 
     var logMessageId: String {
         messageId ?? "unknown"
+    }
+
+    init(
+        rawPayload: [String: String],
+        parsedRoute: AppNotificationRoute?,
+        routeParseResult: NotificationRouteParser.ParseResult? = nil,
+        messageId: String?,
+        actionIdentifier: String?,
+        lifecycle: PushNotificationLifecycle,
+        source: NotificationRouteSource,
+        isTap: Bool
+    ) {
+        let parseResult = routeParseResult ?? NotificationRouteParser.parseResult(rawPayload: rawPayload, source: source)
+        self.rawPayload = rawPayload
+        self.routeParseResult = parseResult
+        self.parsedRoute = parsedRoute ?? parseResult.route
+        self.messageId = messageId
+        self.actionIdentifier = actionIdentifier
+        self.lifecycle = lifecycle
+        self.source = source
+        self.isTap = isTap
     }
 }
 
@@ -47,10 +69,11 @@ enum PushNotificationEventFactory {
         source: NotificationRouteSource,
         isTap: Bool
     ) -> PushNotificationEvent {
-        let route = NotificationRouteParser.parse(rawPayload: rawPayload, source: source)?.route
+        let parseResult = NotificationRouteParser.parseResult(rawPayload: rawPayload, source: source)
         return PushNotificationEvent(
             rawPayload: rawPayload,
-            parsedRoute: route,
+            parsedRoute: parseResult.route,
+            routeParseResult: parseResult,
             messageId: NotificationRouteParser.messageID(from: rawPayload),
             actionIdentifier: actionIdentifier,
             lifecycle: lifecycle,
@@ -86,6 +109,18 @@ protocol AppNotificationService: AnyObject {
     func unreadCount() -> Int
 }
 
+struct ChatNotificationIdentity: Equatable, Hashable, Sendable {
+    let rawValue: String
+    let providerMessageId: String?
+    let chatMessageId: String?
+    let roomId: String?
+    let senderId: String?
+    let createdAt: String?
+    let bodyHash: String?
+    let missingFields: [String]
+    let strategy: String
+}
+
 @MainActor
 final class DefaultAppNotificationService: AppNotificationService {
     var unreadCountChanged: ((Int) -> Void)?
@@ -98,6 +133,7 @@ final class DefaultAppNotificationService: AppNotificationService {
     private let activeCommunityPostTracker: ActiveCommunityPostTracking
     private let diagnosticsStore: NotificationDiagnosticsStore
     private let dedupeStore: PushNotificationDedupeStore
+    private let visibleDedupeStore: VisibleNotificationDedupeStore
 
     init(
         repository: AppNotificationRepository,
@@ -105,7 +141,8 @@ final class DefaultAppNotificationService: AppNotificationService {
         activeChatRoomTracker: ActiveChatRoomTracking,
         activeCommunityPostTracker: ActiveCommunityPostTracking,
         diagnosticsStore: NotificationDiagnosticsStore,
-        dedupeStore: PushNotificationDedupeStore = PushNotificationDedupeStore()
+        dedupeStore: PushNotificationDedupeStore = PushNotificationDedupeStore(),
+        visibleDedupeStore: VisibleNotificationDedupeStore = VisibleNotificationDedupeStore()
     ) {
         self.repository = repository
         self.router = router
@@ -113,6 +150,7 @@ final class DefaultAppNotificationService: AppNotificationService {
         self.activeCommunityPostTracker = activeCommunityPostTracker
         self.diagnosticsStore = diagnosticsStore
         self.dedupeStore = dedupeStore
+        self.visibleDedupeStore = visibleDedupeStore
     }
 
     func handleRemoteNotificationPayload(_ userInfo: [AnyHashable: Any]) {
@@ -135,8 +173,14 @@ final class DefaultAppNotificationService: AppNotificationService {
         diagnosticsStore.recordRemotePayload(payload.rawPayload)
         Logger(category: "RemotePush").debug("[RemotePush] received payload keys=\(payload.rawPayload.keys.sorted().joined(separator: ",")) messageId=\(payload.messageID) type=\(payload.type ?? "unknown") source=\(payload.source ?? "unknown")")
         let normalizedMessageId = event.messageId ?? payload.messageID.nilIfUnknown
-        let routeForNavigation: AppNotificationRoute
+        var routeForNavigation: AppNotificationRoute?
         let appStateLogValue = UIApplication.shared.applicationState.notificationLogValue
+        let validParsedRoute = event.routeParseResult.route
+        _ = dedupeStore.accept(
+            key: "receive:\(notificationDedupeKey(rawPayload: rawPayload, route: validParsedRoute, messageId: normalizedMessageId))",
+            source: event.source.rawValue,
+            phase: .receive
+        )
 
         switch event.lifecycle {
         case .willPresent:
@@ -150,20 +194,24 @@ final class DefaultAppNotificationService: AppNotificationService {
             break
         }
 
-        if let notification = makeNotification(from: payload, parsedRoute: event.parsedRoute) {
+        if let notification = makeNotification(from: payload, parsedRoute: validParsedRoute) {
             if event.lifecycle == .willPresent,
                notification.type == .chatMessage,
                notification.metadata.roomId == activeChatRoomTracker.activeRoomId {
                 Logger(category: "Notification").debug("[Notification] skipped id=\(notification.id) type=\(notification.type.rawValue) reason=activeChatRoom source=\(event.source.rawValue)")
             } else {
-                saveIfNeeded(notification, source: event.source.rawValue, messageId: normalizedMessageId)
+                saveIfNeeded(notification, source: event.source.rawValue, messageId: normalizedMessageId, rawPayload: payload.rawPayload)
             }
             if event.isTap {
                 markAsReadIfNeeded(id: notification.id, messageId: normalizedMessageId)
                 diagnosticsStore.recordRemoteTapRoute(notification.route.debugDescription, pendingRoute: nil)
             }
-            routeForNavigation = event.parsedRoute ?? notification.route
-        } else if let parsedRoute = event.parsedRoute, parsedRoute != .none {
+            if let validParsedRoute {
+                routeForNavigation = validParsedRoute
+            } else if notification.route != .none {
+                routeForNavigation = notification.route
+            }
+        } else if let parsedRoute = validParsedRoute, parsedRoute != .none {
             if event.isTap {
                 diagnosticsStore.recordRemoteTapRoute(parsedRoute.debugDescription, pendingRoute: nil)
             }
@@ -173,10 +221,15 @@ final class DefaultAppNotificationService: AppNotificationService {
                 diagnosticsStore.recordRemoteTapRoute(AppNotificationRoute.none.debugDescription, pendingRoute: nil)
             }
             Logger(category: "Push").warning("[Push] missingRoutePayload keys=\(payload.rawPayload.keys.sorted().joined(separator: ","))")
-            routeForNavigation = .none
+            routeForNavigation = nil
         }
 
         guard event.isTap else { return }
+        guard let routeForNavigation else {
+            let reason = event.routeParseResult.reason ?? "invalidRoute"
+            Logger(category: "PushDeepLink").warning("[PushDeepLink] navigation skipped reason=invalidRoute messageId=\(normalizedMessageId ?? "unknown") parseReason=\(reason)")
+            return
+        }
         router.handleNotificationTap(
             route: routeForNavigation,
             messageId: normalizedMessageId,
@@ -207,6 +260,7 @@ final class DefaultAppNotificationService: AppNotificationService {
         handlePushNotificationEvent(PushNotificationEvent(
             rawPayload: rawPayload,
             parsedRoute: parsedRoute,
+            routeParseResult: NotificationRouteParser.parseResult(rawPayload: rawPayload, source: source),
             messageId: messageId?.nilIfUnknown,
             actionIdentifier: nil,
             lifecycle: .didReceive,
@@ -221,16 +275,23 @@ final class DefaultAppNotificationService: AppNotificationService {
 
     func shouldSuppressForegroundBanner(for rawPayload: [String: String]) -> Bool {
         let payload = RemoteNotificationPayload(rawPayload: rawPayload)
-        if payload.isChatMessage,
-           let roomId = payload.string(for: RemoteNotificationPayload.chatRoomKeys),
+        let parsedRoute = NotificationRouteParser.parse(rawPayload: rawPayload, source: .remoteFCM)?.route
+        let identity = notificationDedupeKey(rawPayload: rawPayload, route: parsedRoute, messageId: payload.messageID.nilIfUnknown)
+        let displayAccepted = visibleDedupeStore.accept(identity: identity, source: "remoteFCM")
+        logNotificationIdentity(rawPayload: rawPayload, route: parsedRoute, messageId: payload.messageID.nilIfUnknown, source: "remoteFCM", action: displayAccepted ? "displayAllowed" : "displaySuppressed")
+        guard displayAccepted else {
+            Logger(category: "NotificationPresentation").debug("[NotificationPresentation] foreground banner suppressed source=remoteFCM reason=duplicate identity=\(identity)")
+            return true
+        }
+
+        if let roomId = payload.string(for: RemoteNotificationPayload.chatRoomKeys),
            activeChatRoomTracker.activeRoomId == roomId {
             Logger(category: "NotificationPresentation").debug("[NotificationPresentation] willPresent messageId=\(payload.messageID) roomId=\(roomId) currentRoomId=\(activeChatRoomTracker.activeRoomId ?? "-") decision=suppress reason=alreadyInSameChat")
             Logger(category: "NotificationPresentation").debug("[NotificationPresentation] suppressed reason=alreadyInSameChat roomId=\(roomId)")
             return true
         }
 
-        if payload.isChatMessage,
-           let roomId = payload.string(for: RemoteNotificationPayload.chatRoomKeys) {
+        if let roomId = payload.string(for: RemoteNotificationPayload.chatRoomKeys) {
             Logger(category: "NotificationPresentation").debug("[NotificationPresentation] willPresent messageId=\(payload.messageID) roomId=\(roomId) currentRoomId=\(activeChatRoomTracker.activeRoomId ?? "-") decision=banner reason=differentOrNoActiveChat")
         }
 
@@ -291,7 +352,14 @@ final class DefaultAppNotificationService: AppNotificationService {
         }
 
         let normalizedMessageId = messageId?.trimmed.nilIfEmpty
-        let id = normalizedMessageId ?? Self.stableID(parts: ["chat", normalizedRoomId, senderId?.trimmed ?? "-", preview.trimmed, Self.timeBucket()])
+        let identity = Self.chatNotificationIdentity(
+            rawPayload: nil,
+            route: .chatRoom(roomId: normalizedRoomId, storeId: storeId?.trimmed.nilIfEmpty, title: title?.trimmed.nilIfEmpty),
+            messageId: normalizedMessageId,
+            senderId: senderId,
+            preview: preview
+        )
+        let id = identity.rawValue
         let displayTitle = title?.trimmed.nilIfEmpty ?? "새 채팅 메시지"
         let body = preview.trimmed.nilIfEmpty ?? "\(displayTitle)에서 새 메시지가 도착했어요."
         let notification = AppNotification(
@@ -304,7 +372,13 @@ final class DefaultAppNotificationService: AppNotificationService {
             route: .chatRoom(roomId: normalizedRoomId, storeId: storeId?.trimmed.nilIfEmpty, title: displayTitle),
             metadata: AppNotificationMetadata(roomId: normalizedRoomId, storeId: storeId?.trimmed.nilIfEmpty, messageId: normalizedMessageId, senderId: senderId?.trimmed.nilIfEmpty)
         )
-        return save(notification, source: "appInternalDebug")
+        logNotificationIdentity(identity, source: "socket", action: "socketReceive")
+        Logger(category: "LocalNotification").debug("[LocalNotification] scheduleAttempt type=chat messageId=\(normalizedMessageId ?? "unknown") roomId=\(normalizedRoomId)")
+        let result = saveIfNeeded(notification, source: "socket", messageId: normalizedMessageId, rawPayload: nil)
+        if case .duplicate = result {
+            Logger(category: "LocalNotification").debug("[LocalNotification] scheduleSkipped reason=remotePushAlreadyHandled messageId=\(normalizedMessageId ?? "unknown")")
+        }
+        return result
     }
 
     @discardableResult
@@ -408,19 +482,174 @@ final class DefaultAppNotificationService: AppNotificationService {
     }
 
     @discardableResult
-    private func saveIfNeeded(_ notification: AppNotification, source: String, messageId: String?) -> AppNotificationSaveResult {
-        let key = messageId.map { "notification:\($0)" }
-            ?? "notification:\(notification.id)"
-        guard dedupeStore.accept(key: key, phase: .save) else {
+    private func saveIfNeeded(_ notification: AppNotification, source: String, messageId: String?, rawPayload: [String: String]?) -> AppNotificationSaveResult {
+        let key = "notification:\(notificationDedupeKey(rawPayload: rawPayload, route: notification.route, messageId: messageId ?? notification.metadata.messageId ?? notification.id))"
+        Logger(category: "Notification").debug("[Notification] saveAttempt id=\(notification.id) type=\(notification.type.rawValue) roomId=\(notification.metadata.roomId ?? "-") source=\(source)")
+        logNotificationIdentity(rawPayload: rawPayload, route: notification.route, messageId: messageId ?? notification.metadata.messageId ?? notification.id, source: source, action: "saveAttempt")
+        guard dedupeStore.accept(key: key, source: source, phase: .save) else {
+            Logger(category: "Notification").debug("[Notification] saveSkipped reason=duplicate id=\(notification.id)")
             return .duplicate(id: notification.id)
         }
         return save(notification, source: source)
     }
 
     private func markAsReadIfNeeded(id: String, messageId: String?) {
-        let key = messageId.map { "read:\($0)" } ?? "read:\(id)"
-        guard dedupeStore.accept(key: key, phase: .read) else { return }
+        let key = "read:\(messageId?.trimmed.nilIfEmpty ?? id)"
+        guard dedupeStore.accept(key: key, source: "remoteFCM", phase: .read) else { return }
         markAsRead(id: id)
+    }
+
+    private func notificationDedupeKey(rawPayload: [String: String]?, route: AppNotificationRoute?, messageId: String?) -> String {
+        if let identity = Self.chatNotificationIdentityIfPossible(rawPayload: rawPayload, route: route, messageId: messageId) {
+            return identity.rawValue
+        }
+        let providerMessageId = Self.firstValue(for: ["gcm.message_id", "google.message_id", "google.c.a.c_id"], in: rawPayload)?.trimmed.nilIfEmpty
+        if let notificationId = Self.firstValue(for: ["notification_id", "notificationId", "id"], in: rawPayload)?.trimmed.nilIfEmpty {
+            return "notificationId:\(notificationId)"
+        }
+        if let messageId = messageId?.trimmed.nilIfEmpty, messageId != "unknown" {
+            return "messageId:\(messageId)"
+        }
+        if let providerMessageId {
+            return "providerMessageId:\(providerMessageId)"
+        }
+        return "notificationId:unknown"
+    }
+
+    private func logNotificationIdentity(rawPayload: [String: String]?, route: AppNotificationRoute?, messageId: String?, source: String, action: String) {
+        if let identity = Self.chatNotificationIdentityIfPossible(rawPayload: rawPayload, route: route, messageId: messageId) {
+            logNotificationIdentity(identity, source: source, action: action)
+        }
+    }
+
+    private func logNotificationIdentity(_ identity: ChatNotificationIdentity, source: String, action: String) {
+        Logger(category: "NotificationIdentity").debug(
+            "[NotificationIdentity] stableIdentity=\(identity.rawValue) providerMessageId=\(identity.providerMessageId ?? "nil") chatId=\(identity.chatMessageId ?? "nil") roomId=\(identity.roomId ?? "nil") senderId=\(identity.senderId ?? "nil") createdAt=\(identity.createdAt ?? "nil") bodyHash=\(identity.bodyHash ?? "nil") source=\(source) strategy=\(identity.strategy) missingFields=\(identity.missingFields.joined(separator: ",")) action=\(action)"
+        )
+    }
+
+    nonisolated static func chatNotificationIdentityIfPossible(
+        rawPayload: [String: String]?,
+        route: AppNotificationRoute?,
+        messageId: String?
+    ) -> ChatNotificationIdentity? {
+        guard route?.chatRoomId != nil
+            || firstValue(for: RemoteNotificationPayload.chatRoomKeys, in: rawPayload)?.trimmed.nilIfEmpty != nil
+            || firstValue(for: ["chatId", "chat_id", "messageId", "message_id"], in: rawPayload)?.trimmed.nilIfEmpty != nil
+        else {
+            return nil
+        }
+        return chatNotificationIdentity(rawPayload: rawPayload, route: route, messageId: messageId, senderId: nil, preview: nil)
+    }
+
+    nonisolated static func chatNotificationIdentity(
+        rawPayload: [String: String]?,
+        route: AppNotificationRoute?,
+        messageId: String?,
+        senderId explicitSenderId: String?,
+        preview explicitPreview: String?
+    ) -> ChatNotificationIdentity {
+        let providerMessageId = firstValue(for: ["gcm.message_id", "google.message_id", "google.c.a.c_id"], in: rawPayload)?.trimmed.nilIfEmpty
+        let chatMessageId = firstValue(for: ["chatId", "chat_id", "messageId", "message_id"], in: rawPayload)?.trimmed.nilIfEmpty
+            ?? (rawPayload == nil ? messageId?.trimmed.nilIfEmpty : nil)
+        let roomId = route?.chatRoomId?.trimmed.nilIfEmpty
+            ?? firstValue(for: RemoteNotificationPayload.chatRoomKeys, in: rawPayload)?.trimmed.nilIfEmpty
+        let senderId = explicitSenderId?.trimmed.nilIfEmpty
+            ?? firstValue(for: RemoteNotificationPayload.senderIdKeys, in: rawPayload)?.trimmed.nilIfEmpty
+        let createdAt = firstValue(for: ["createdAt", "created_at", "sentAt", "sent_at", "timestamp"], in: rawPayload)?.trimmed.nilIfEmpty
+        let preview = explicitPreview?.trimmed.nilIfEmpty
+            ?? firstValue(for: RemoteNotificationPayload.previewKeys, in: rawPayload)?.trimmed.nilIfEmpty
+        let bodyHash = preview.map { stableHash(parts: [$0.normalizedNotificationBody]) }
+        let missingFields = [
+            roomId == nil ? "roomId" : nil,
+            senderId == nil ? "senderId" : nil,
+            createdAt == nil ? "createdAt" : nil,
+            preview == nil ? "body" : nil
+        ].compactMap { $0 }
+
+        if let chatMessageId, chatMessageId != "unknown" {
+            return ChatNotificationIdentity(
+                rawValue: "chatMessageId:\(chatMessageId)",
+                providerMessageId: providerMessageId,
+                chatMessageId: chatMessageId,
+                roomId: roomId,
+                senderId: senderId,
+                createdAt: createdAt,
+                bodyHash: bodyHash,
+                missingFields: missingFields,
+                strategy: "chatMessageId"
+            )
+        }
+        if let roomId, let senderId, let createdAt, let bodyHash {
+            return ChatNotificationIdentity(
+                rawValue: "chatFallback:\(roomId):\(senderId):\(createdAt):\(bodyHash)",
+                providerMessageId: providerMessageId,
+                chatMessageId: nil,
+                roomId: roomId,
+                senderId: senderId,
+                createdAt: createdAt,
+                bodyHash: bodyHash,
+                missingFields: missingFields,
+                strategy: "roomSenderCreatedBody"
+            )
+        }
+        if let roomId, let bodyHash {
+            let bucket = roundedCreatedAtWindow(from: createdAt)
+            return ChatNotificationIdentity(
+                rawValue: "chatFallback:\(roomId):body:\(bucket):\(bodyHash)",
+                providerMessageId: providerMessageId,
+                chatMessageId: nil,
+                roomId: roomId,
+                senderId: senderId,
+                createdAt: createdAt,
+                bodyHash: bodyHash,
+                missingFields: missingFields,
+                strategy: "roomBodyWindow"
+            )
+        }
+        if let roomId {
+            let bucket = roundedCreatedAtWindow(from: createdAt)
+            return ChatNotificationIdentity(
+                rawValue: "chatFallback:\(roomId):window:\(bucket)",
+                providerMessageId: providerMessageId,
+                chatMessageId: nil,
+                roomId: roomId,
+                senderId: senderId,
+                createdAt: createdAt,
+                bodyHash: bodyHash,
+                missingFields: missingFields,
+                strategy: "roomWindow"
+            )
+        }
+        return ChatNotificationIdentity(
+            rawValue: "providerMessageId:\(providerMessageId ?? "unknown")",
+            providerMessageId: providerMessageId,
+            chatMessageId: nil,
+            roomId: nil,
+            senderId: senderId,
+            createdAt: createdAt,
+            bodyHash: bodyHash,
+            missingFields: missingFields,
+            strategy: "providerMessageIdLastFallback"
+        )
+    }
+
+    nonisolated private static func roundedCreatedAtWindow(from createdAt: String?) -> String {
+        if let createdAt,
+           let seconds = Double(createdAt) {
+            return String(Int(seconds / 30))
+        }
+        return timeBucket(interval: 30)
+    }
+
+    nonisolated private static func firstValue(for keys: [String], in payload: [String: String]?) -> String? {
+        guard let payload else { return nil }
+        for key in keys {
+            if let value = payload[key], !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return value
+            }
+        }
+        return nil
     }
 
     @discardableResult
@@ -531,6 +760,18 @@ final class DefaultAppNotificationService: AppNotificationService {
     nonisolated static func timeBucket(date: Date = Date(), interval: TimeInterval = 60) -> String {
         String(Int(date.timeIntervalSince1970 / interval))
     }
+
+    nonisolated static func stableHash(parts: [String]) -> String {
+        let text = parts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .joined(separator: "|")
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
 }
 
 private extension UIApplication.State {
@@ -591,7 +832,8 @@ private struct RemoteNotificationPayload {
     static let storeNameKeys = ["store_name", "storeName"]
     static let chatRoomKeys = ["chatRoomId", "chat_room_id", "roomId", "room_id"]
     static let storeIdKeys = ["storeId", "store_id"]
-    static let messageIdKeys = ["gcm.message_id", "google.message_id", "message_id", "messageId", "aps.thread-id", "chatId", "chat_id", "google.c.a.c_id"]
+    static let chatBusinessMessageIdKeys = ["chatId", "chat_id", "messageId", "message_id"]
+    static let messageIdKeys = ["chatId", "chat_id", "messageId", "message_id", "notification_id", "notificationId", "gcm.message_id", "google.message_id", "aps.thread-id", "google.c.a.c_id"]
     static let senderIdKeys = ["senderId", "sender_id"]
     static let postKeys = ["postId", "post_id", "communityPostId", "community_post_id"]
     static let commentKeys = ["commentId", "comment_id", "replyId", "reply_id"]
@@ -676,10 +918,17 @@ private struct RemoteNotificationPayload {
     }
 
     func chatNotification(roomId: String) -> AppNotification {
-        let messageId = string(for: Self.messageIdKeys)
+        let messageId = string(for: Self.chatBusinessMessageIdKeys)
         let storeId = string(for: Self.storeIdKeys)
         let displayTitle = title ?? "새 채팅 메시지"
-        let id = messageId ?? DefaultAppNotificationService.stableID(parts: ["chat", roomId, string(for: Self.senderIdKeys) ?? "-", body ?? "-", DefaultAppNotificationService.timeBucket()])
+        let identity = DefaultAppNotificationService.chatNotificationIdentity(
+            rawPayload: rawPayload,
+            route: .chatRoom(roomId: roomId, storeId: storeId, title: displayTitle),
+            messageId: messageId,
+            senderId: string(for: Self.senderIdKeys),
+            preview: body
+        )
+        let id = identity.rawValue
         return AppNotification(
             id: id,
             type: .chatMessage,
@@ -762,6 +1011,13 @@ private extension String {
 
     var nilIfEmpty: String? {
         isEmpty ? nil : self
+    }
+
+    var normalizedNotificationBody: String {
+        components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .lowercased()
     }
 
     var nilIfUnknown: String? {

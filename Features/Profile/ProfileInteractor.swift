@@ -3,10 +3,10 @@ import Foundation
 @MainActor
 protocol ProfileInteracting {
     func loadInitialState() async -> ProfileViewState
+    func fetchMyProfile() async throws -> UserProfile
     func updateProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> UserProfile
     func uploadProfileImage(data: Data, fileName: String, mimeType: String) async throws -> String
     func logout() async throws
@@ -47,17 +47,19 @@ struct ProfileInteractor: ProfileInteracting {
         }
     }
 
+    func fetchMyProfile() async throws -> UserProfile {
+        try await authRepository.fetchMyProfile()
+    }
+
     func updateProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> UserProfile {
         try validateNick(nick)
 
         return try await authRepository.updateMyProfile(
             nick: nick.trimmingCharacters(in: .whitespacesAndNewlines),
-            phoneNumber: phoneNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-            profileImagePath: profileImagePath
+            phoneNumber: phoneNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         )
     }
 

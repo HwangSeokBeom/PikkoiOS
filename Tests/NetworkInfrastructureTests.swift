@@ -321,6 +321,29 @@ final class NetworkInfrastructureTests: XCTestCase {
         XCTAssertFalse(boundary.isEmpty)
     }
 
+    func testProfileTextUpdateDoesNotSendProfileImageJSONField() async throws {
+        let apiClient = RecordingAPIClient(
+            response: MyInfoResponseDTO(userID: "user-1", email: "user@example.com", nick: "픽코", profileImage: "/data/profiles/current.jpg", phoneNum: "01012345678")
+        )
+        let dataSource = AuthRemoteDataSource(apiClient: apiClient)
+
+        _ = try await dataSource.updateMyProfile(
+            nick: "픽코",
+            phoneNumber: "01012345678"
+        )
+
+        XCTAssertEqual(apiClient.recordedPath, "/v1/users/me/profile")
+        XCTAssertEqual(apiClient.recordedMethod, .put)
+
+        guard case let .json(payload)? = apiClient.recordedBody else {
+            return XCTFail("Expected JSON request body")
+        }
+
+        let payloadString = String(decoding: payload, as: UTF8.self)
+        XCTAssertTrue(payloadString.contains("\"nick\""))
+        XCTAssertFalse(payloadString.contains("profileImage"))
+    }
+
     func testRequestBuilderRejectsRelativeV1BaseURL() async {
         await assertRequestBuilderRejectsInvalidBaseURL(URL(string: "v1")!)
     }

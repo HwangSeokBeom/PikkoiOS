@@ -38,6 +38,18 @@ final class PushRouteParserTests: XCTestCase {
         XCTAssertEqual(result?.route, .chatRoom(roomId: "room-1", storeId: nil, title: nil))
     }
 
+    func testServerRoomIdAliasCreatesChatRoute() {
+        let result = NotificationRouteParser.parse(
+            rawPayload: [
+                "pushType": "chat",
+                "serverRoomId": "room-1"
+            ],
+            source: .remoteFCM
+        )
+
+        XCTAssertEqual(result?.route, .chatRoom(roomId: "room-1", storeId: nil, title: nil))
+    }
+
     func testChatRoomIdPayloadCreatesChatRoute() {
         let result = NotificationRouteParser.parse(
             rawPayload: [
@@ -138,26 +150,26 @@ final class PushRouteParserTests: XCTestCase {
         XCTAssertEqual(result?.route, .orderDetail(orderCode: "order-id-1"))
     }
 
-    func testMissingRequiredKeyFallsBackToNone() {
-        let result = NotificationRouteParser.parse(
+    func testMissingChatRoomIdIsInvalid() {
+        let result = NotificationRouteParser.parseResult(
             rawPayload: ["type": "chat_message"],
             source: .remoteFCM
         )
 
-        XCTAssertEqual(result?.route, AppNotificationRoute.none)
+        XCTAssertEqual(result, .invalid(reason: "missingChatRoomId", rawType: "chat_message", keys: ["type"]))
     }
 
-    func testUnknownTypeFallsBackToNone() {
-        let result = NotificationRouteParser.parse(
+    func testUnknownTypeIsInvalid() {
+        let result = NotificationRouteParser.parseResult(
             rawPayload: ["type": "system"],
             source: .remoteFCM
         )
 
-        XCTAssertEqual(result?.route, AppNotificationRoute.none)
+        XCTAssertEqual(result, .invalid(reason: "unknownRoute", rawType: "system", keys: ["type"]))
     }
 
-    func testTitleBodyOnlyTestPushFallsBackToNone() {
-        let result = NotificationRouteParser.parse(
+    func testTitleBodyOnlyTestPushHasNoRoute() {
+        let result = NotificationRouteParser.parseResult(
             rawPayload: [
                 "title": "테스트",
                 "body": "본문"
@@ -165,11 +177,11 @@ final class PushRouteParserTests: XCTestCase {
             source: .remoteFCM
         )
 
-        XCTAssertEqual(result?.route, AppNotificationRoute.none)
+        XCTAssertEqual(result, .none(reason: "noCustomData", rawType: nil, keys: ["body", "title"]))
     }
 
-    func testApsOnlyPayloadFallsBackToNone() {
-        let result = NotificationRouteParser.parse(
+    func testApsOnlyPayloadHasNoRoute() {
+        let result = NotificationRouteParser.parseResult(
             userInfo: [
                 "aps": [
                     "alert": [
@@ -181,7 +193,7 @@ final class PushRouteParserTests: XCTestCase {
             source: .remoteFCM
         )
 
-        XCTAssertEqual(result?.route, AppNotificationRoute.none)
+        XCTAssertEqual(result, .none(reason: "noCustomData", rawType: nil, keys: ["body", "title"]))
     }
 
     func testDataKeysWinOverNotificationText() {

@@ -63,7 +63,7 @@ struct ImageUploadPreprocessor {
 
     func process(_ input: ImageUploadPreprocessInput) throws -> ImageUploadPreprocessOutput {
         let normalizedMimeType = input.mimeType.lowercased()
-        guard isProcessableImage(mimeType: normalizedMimeType, filename: input.filename) else {
+        guard isProcessableImage(data: input.data, mimeType: normalizedMimeType, filename: input.filename) else {
             throw ImageUploadPreprocessorError.unsupportedType
         }
         guard let originalImage = downsample(data: input.data, maxPixel: maxInitialPixel) ?? UIImage(data: input.data) else {
@@ -72,8 +72,14 @@ struct ImageUploadPreprocessor {
 
         logger.debug("[ImagePreprocess] start purpose=\(input.purpose.rawValue) originalBytes=\(input.data.count) mimeType=\(normalizedMimeType) pixel=\(Int(originalImage.size.width))x\(Int(originalImage.size.height))")
 
-        if input.data.count <= input.targetLimitBytes,
-           normalizedMimeType == "image/png" || normalizedMimeType == "image/jpeg" || normalizedMimeType == "image/jpg" {
+        let sourceType = imageTypeIdentifier(data: input.data)
+        let sourceIsJPEGOrPNG = sourceTypeConforms(sourceType, to: .jpeg) || sourceTypeConforms(sourceType, to: .png)
+        let canKeepOriginal = input.purpose != .profile
+            && input.data.count <= input.targetLimitBytes
+            && sourceIsJPEGOrPNG
+            && ["image/png", "image/jpeg", "image/jpg"].contains(normalizedMimeType)
+
+        if canKeepOriginal {
             return ImageUploadPreprocessOutput(
                 data: input.data,
                 mimeType: normalizedMimeType == "image/jpg" ? "image/jpeg" : normalizedMimeType,
@@ -84,10 +90,14 @@ struct ImageUploadPreprocessor {
         }
 
         let hasAlpha = originalImage.hasAlpha
-        var pixelLimit = max(originalImage.size.width, originalImage.size.height)
+        let preferredMaxPixel = input.purpose == .profile ? min(maxInitialPixel, 1_024) : maxInitialPixel
+        var pixelLimit = min(max(originalImage.size.width, originalImage.size.height), preferredMaxPixel)
         while pixelLimit >= 480 {
             let candidate = resize(originalImage, maxPixel: pixelLimit) ?? originalImage
-            if hasAlpha, let pngData = candidate.pngData(), pngData.count <= input.targetLimitBytes {
+            if input.purpose != .profile,
+               hasAlpha,
+               let pngData = candidate.pngData(),
+               pngData.count <= input.targetLimitBytes {
                 logger.debug("[ImagePreprocess] downsample result bytes=\(pngData.count) pixel=\(Int(candidate.size.width))x\(Int(candidate.size.height)) quality=png")
                 logger.debug("[ImagePreprocess] success purpose=\(input.purpose.rawValue) finalBytes=\(pngData.count) underLimit=true")
                 return ImageUploadPreprocessOutput(
@@ -99,7 +109,7 @@ struct ImageUploadPreprocessor {
                 )
             }
 
-            for quality in [0.88, 0.78, 0.68, 0.58, 0.48, 0.38, 0.28, 0.2] as [CGFloat] {
+            for quality in [0.85, 0.8, 0.75, 0.7, 0.62, 0.54, 0.46, 0.38, 0.3, 0.22] as [CGFloat] {
                 guard let jpegData = candidate.jpegData(compressionQuality: quality) else { continue }
                 logger.debug("[ImagePreprocess] downsample result bytes=\(jpegData.count) pixel=\(Int(candidate.size.width))x\(Int(candidate.size.height)) quality=\(String(format: "%.2f", quality))")
                 if jpegData.count <= input.targetLimitBytes {
@@ -122,7 +132,7 @@ struct ImageUploadPreprocessor {
     }
 
     func processIfImageOrValidate(_ input: ImageUploadPreprocessInput) throws -> ImageUploadPreprocessOutput {
-        if isProcessableImage(mimeType: input.mimeType.lowercased(), filename: input.filename) {
+        if isProcessableImage(data: input.data, mimeType: input.mimeType.lowercased(), filename: input.filename) {
             return try process(input)
         }
         guard input.data.count <= input.targetLimitBytes else {
@@ -133,7 +143,7 @@ struct ImageUploadPreprocessor {
 
     func isProcessableImage(mimeType: String, filename: String) -> Bool {
         let normalized = mimeType.lowercased()
-        if ["image/jpeg", "image/jpg", "image/png"].contains(normalized) {
+        if ["image/jpeg", "image/jpg", "image/png", "image/heic", "image/heif"].contains(normalized) {
             return true
         }
         if normalized == "image/gif" || normalized == "image/webp" {
@@ -142,7 +152,18 @@ struct ImageUploadPreprocessor {
         guard let type = UTType(filenameExtension: (filename as NSString).pathExtension.lowercased()) else {
             return false
         }
-        return type.conforms(to: .jpeg) || type.conforms(to: .png)
+        return type.conforms(to: .jpeg) || type.conforms(to: .png) || type.conforms(to: .heic) || type.conforms(to: .heif)
+    }
+
+    private func isProcessableImage(data: Data, mimeType: String, filename: String) -> Bool {
+        if let typeIdentifier = imageTypeIdentifier(data: data),
+           let type = UTType(typeIdentifier) {
+            if type.conforms(to: .gif) || type.conforms(to: .webP) {
+                return false
+            }
+            return type.conforms(to: .image)
+        }
+        return isProcessableImage(mimeType: mimeType, filename: filename)
     }
 
     private func downsample(data: Data, maxPixel: CGFloat) -> UIImage? {
@@ -178,6 +199,20 @@ struct ImageUploadPreprocessor {
         let baseName = (fileName as NSString).deletingPathExtension
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return "\(baseName.isEmpty ? "upload-\(Int(Date().timeIntervalSince1970))" : baseName).\(newExtension)"
+    }
+
+    private func imageTypeIdentifier(data: Data) -> String? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, options) else { return nil }
+        return CGImageSourceGetType(source) as String?
+    }
+
+    private func sourceTypeConforms(_ typeIdentifier: String?, to type: UTType) -> Bool {
+        guard let typeIdentifier,
+              let sourceType = UTType(typeIdentifier) else {
+            return false
+        }
+        return sourceType.conforms(to: type)
     }
 }
 

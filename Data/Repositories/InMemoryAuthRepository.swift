@@ -67,15 +67,14 @@ struct InMemoryAuthRepository: AuthRepository {
 
     func updateMyProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> UserProfile {
         UserProfile(
             userID: "stub-user",
             email: "stub@example.com",
             nick: nick,
             phoneNumber: phoneNumber,
-            profileImagePath: profileImagePath
+            profileImagePath: nil
         )
     }
 

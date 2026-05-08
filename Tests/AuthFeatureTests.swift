@@ -633,15 +633,14 @@ private actor SpyAuthRepository: AuthRepository {
 
     func updateMyProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> UserProfile {
         UserProfile(
             userID: storedProfile.userID,
             email: storedProfile.email,
             nick: nick,
             phoneNumber: phoneNumber,
-            profileImagePath: profileImagePath
+            profileImagePath: storedProfile.profileImagePath
         )
     }
 
@@ -730,12 +729,10 @@ private actor FailingAuthRepository: AuthRepository {
 
     func updateMyProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> UserProfile {
         _ = nick
         _ = phoneNumber
-        _ = profileImagePath
         throw error
     }
 
@@ -794,17 +791,26 @@ private struct SpyProfileInteractor: ProfileInteracting {
         initialState
     }
 
+    func fetchMyProfile() async throws -> UserProfile {
+        UserProfile(
+            userID: updatedProfile.userID,
+            email: updatedProfile.email,
+            nick: updatedProfile.nick,
+            phoneNumber: updatedProfile.phoneNumber,
+            profileImagePath: uploadedImagePath
+        )
+    }
+
     func updateProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> UserProfile {
         UserProfile(
             userID: updatedProfile.userID,
             email: updatedProfile.email,
             nick: nick,
             phoneNumber: phoneNumber,
-            profileImagePath: profileImagePath
+            profileImagePath: updatedProfile.profileImagePath
         )
     }
 

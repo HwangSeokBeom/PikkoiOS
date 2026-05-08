@@ -258,12 +258,10 @@ private struct StubSessionRestoreAuthRepository: AuthRepository {
 
     func updateMyProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> UserProfile {
         _ = nick
         _ = phoneNumber
-        _ = profileImagePath
         throw NetworkError.invalidRequest
     }
 
@@ -346,12 +344,10 @@ private actor DeviceTokenSpyAuthRepository: AuthRepository {
 
     func updateMyProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> UserProfile {
         _ = nick
         _ = phoneNumber
-        _ = profileImagePath
         throw NetworkError.invalidRequest
     }
 

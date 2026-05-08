@@ -1,6 +1,7 @@
 import Foundation
 
 enum HTTPHeaderField {
+    static let accept = "Accept"
     static let authorization = "Authorization"
     static let contentType = "Content-Type"
     static let range = "Range"

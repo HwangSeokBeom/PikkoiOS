@@ -103,7 +103,13 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
 
     func removeCachedImage(for path: String) async throws {
         let url = try fileURLResolver.resolveURL(from: path)
-        await imageCache.removeValue(for: safeCacheURL(for: url))
+        let cacheURL = safeCacheURL(for: url)
+        await imageCache.removeValue(for: cacheURL)
+        failedURLCache[url] = nil
+        failedURLCache[cacheURL] = nil
+        loggedFailedURLs.remove(url)
+        loggedFailedURLs.remove(cacheURL)
+        loggedFallbackKeys = loggedFallbackKeys.filter { !$0.hasPrefix("\(url.absoluteString)|") && !$0.hasPrefix("\(cacheURL.absoluteString)|") }
     }
 
     private func fetchImageData(from url: URL, didRetryAfterRefresh: Bool) async throws -> Data {

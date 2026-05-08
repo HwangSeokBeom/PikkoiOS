@@ -14,8 +14,7 @@ protocol AuthRemoteDataSourceProtocol: Sendable {
     func fetchMyProfile() async throws -> MyInfoResponseDTO
     func updateMyProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> MyInfoResponseDTO
     func uploadProfileImage(
         data: Data,
@@ -113,22 +112,21 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
             path: "/v1/users/me/profile",
             method: .get,
             timeout: .default,
-            authorizationPolicy: .accessToken
+            authorizationPolicy: .accessToken,
+            cachePolicy: .reloadIgnoringLocalCache
         )
         return try await apiClient.execute(endpoint)
     }
 
     func updateMyProfile(
         nick: String,
-        phoneNumber: String?,
-        profileImagePath: String?
+        phoneNumber: String?
     ) async throws -> MyInfoResponseDTO {
         let body = RequestBody.json(
             try NetworkCoding.makeJSONEncoder().encode(
                 ProfileRequestDTO(
                     nick: nick,
-                    phoneNum: phoneNumber,
-                    profileImage: profileImagePath
+                    phoneNum: phoneNumber
                 )
             )
         )
@@ -147,6 +145,19 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
         fileName: String,
         mimeType: String
     ) async throws -> ProfileImageUploadResponseDTO {
+        guard !data.isEmpty else {
+            throw NetworkError.invalidRequest
+        }
+        let maxProfileImageBytes = 1 * 1024 * 1024
+        guard data.count <= maxProfileImageBytes else {
+            throw NetworkError.invalidRequest
+        }
+        guard ["image/jpeg", "image/png"].contains(mimeType.lowercased()) else {
+            throw NetworkError.invalidRequest
+        }
+        guard ["jpg", "jpeg", "png"].contains((fileName as NSString).pathExtension.lowercased()) else {
+            throw NetworkError.invalidRequest
+        }
         var builder = MultipartFormDataBuilder()
         builder.addFile(
             fieldName: UploadFieldName.profile,
@@ -154,16 +165,17 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
             mimeType: mimeType,
             fileData: data
         )
-        Logger(category: "MultipartUpload").debug("[MultipartUpload] request path=/v1/users/profile/image fieldName=\(UploadFieldName.profile) fileCount=1 totalBytes=\(data.count)")
+        Logger(category: "ProfileImage").debug("[ProfileImage] upload request path=/v1/users/profile/image method=POST contentType=multipart/form-data field=profile fileName=\(fileName) bytes=\(data.count)")
         let endpoint = Endpoint<ProfileImageUploadResponseDTO>(
             path: "/v1/users/profile/image",
             method: .post,
+            headers: [HTTPHeaderField.accept: "application/json"],
             body: builder.build(),
             timeout: .upload,
             authorizationPolicy: .accessToken
         )
         let response = try await apiClient.execute(endpoint)
-        Logger(category: "MultipartUpload").debug("[MultipartUpload] response success path=/v1/users/profile/image")
+        Logger(category: "ProfileImage").debug("[ProfileImage] upload response status=200 profileImageExists=\(response.profileImage?.isEmpty == false) profileImage=\(response.profileImage ?? "nil")")
         return response
     }
 

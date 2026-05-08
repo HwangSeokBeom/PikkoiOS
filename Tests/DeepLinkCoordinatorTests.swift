@@ -19,6 +19,8 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         let store = PendingNotificationRouteStore()
         let router = AppNotificationRouter(pendingRouteStore: store)
         router.attach(appState: appState)
+        router.setSceneReady(true)
+        router.setSceneActive(true)
         router.setNavigationReady(true)
         let route = AppNotificationRoute.communityPost(postId: "post-1", commentId: "comment-1")
 
@@ -33,6 +35,8 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         let store = PendingNotificationRouteStore()
         let router = AppNotificationRouter(pendingRouteStore: store)
         router.attach(appState: appState)
+        router.setSceneReady(true)
+        router.setSceneActive(true)
         router.setNavigationReady(true)
         let route = AppNotificationRoute.orderDetail(orderCode: "order-1")
         router.route(to: route)
@@ -41,8 +45,12 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         appState.sessionStore.apply(session: makeSession())
         router.routePendingIfNeeded()
 
-        XCTAssertNil(store.pendingRoute)
+        XCTAssertEqual(store.pendingRoute, route)
         XCTAssertEqual(appState.pendingNotificationRoute, route)
+
+        router.markNavigationCompleted(route: route)
+
+        XCTAssertNil(store.pendingRoute)
     }
 
     func testUnauthenticatedRouteKeepsPendingForLoginGate() {
@@ -50,6 +58,8 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         let store = PendingNotificationRouteStore()
         let router = AppNotificationRouter(pendingRouteStore: store)
         router.attach(appState: appState)
+        router.setSceneReady(true)
+        router.setSceneActive(true)
         router.setNavigationReady(true)
         let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
 
@@ -68,6 +78,8 @@ final class DeepLinkCoordinatorTests: XCTestCase {
             now: { currentDate }
         )
         router.attach(appState: appState)
+        router.setSceneReady(true)
+        router.setSceneActive(true)
         router.setNavigationReady(true)
         let firstRoute = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
         let secondRoute = AppNotificationRoute.orderDetail(orderCode: "order-1")
@@ -104,14 +116,29 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         XCTAssertEqual(appState.pendingNotificationRoute, route)
     }
 
-    func testUnknownNoticeRouteFallsBackToNotificationCenter() {
+    func testUnknownNoticeRouteDoesNotEnterNavigationPipeline() {
         let appState = makeAppState(authenticated: true, launchPhase: .ready)
         let router = makeRouter(attachedTo: appState)
         router.setNavigationReady(true)
 
         router.route(to: .none)
 
-        XCTAssertEqual(appState.pendingNotificationRoute, AppNotificationRoute.none)
+        XCTAssertNil(appState.pendingNotificationRoute)
+    }
+
+    func testRouteNoneIsNeverStoredAsPendingNavigation() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let store = PendingNotificationRouteStore()
+        let router = AppNotificationRouter(pendingRouteStore: store)
+        router.attach(appState: appState)
+        router.setSceneReady(true)
+        router.setSceneActive(false)
+        router.setNavigationReady(true)
+
+        router.handleNotificationTap(route: .none, messageId: "message-1", source: .remoteFCM)
+
+        XCTAssertNil(store.pendingRoute)
+        XCTAssertNil(appState.pendingNotificationRoute)
     }
 
     func testNavigationNotReadyStoresPendingRouteUntilRootReady() {
@@ -119,6 +146,8 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         let store = PendingNotificationRouteStore()
         let router = AppNotificationRouter(pendingRouteStore: store)
         router.attach(appState: appState)
+        router.setSceneReady(true)
+        router.setSceneActive(true)
         let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
 
         router.handleNotificationTap(route: route, messageId: "message-1", source: .remoteFCM)
@@ -128,8 +157,37 @@ final class DeepLinkCoordinatorTests: XCTestCase {
 
         router.setNavigationReady(true)
 
-        XCTAssertNil(store.pendingRoute)
+        XCTAssertEqual(store.pendingRoute, route)
         XCTAssertEqual(appState.pendingNotificationRoute, route)
+
+        router.markNavigationCompleted(route: route)
+
+        XCTAssertNil(store.pendingRoute)
+    }
+
+    func testInactiveSceneStoresValidPendingRouteAndReplaysAfterActive() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let store = PendingNotificationRouteStore()
+        let router = AppNotificationRouter(pendingRouteStore: store)
+        router.attach(appState: appState)
+        router.setSceneReady(true)
+        router.setSceneActive(false)
+        router.setNavigationReady(true)
+        let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
+
+        router.handleNotificationTap(route: route, messageId: "message-1", source: .remoteFCM)
+
+        XCTAssertEqual(store.pendingRoute, route)
+        XCTAssertNil(appState.pendingNotificationRoute)
+
+        router.setSceneActive(true)
+
+        XCTAssertEqual(store.pendingRoute, route)
+        XCTAssertEqual(appState.pendingNotificationRoute, route)
+
+        router.markNavigationCompleted(route: route)
+
+        XCTAssertNil(store.pendingRoute)
     }
 
     func testSameRemoteMessageTapIsDedupedByMessageIdAndRoute() {
@@ -183,6 +241,8 @@ final class DeepLinkCoordinatorTests: XCTestCase {
             activeChatRoomTracker: tracker
         )
         router.attach(appState: appState)
+        router.setSceneReady(true)
+        router.setSceneActive(true)
         router.setNavigationReady(true)
 
         router.handleNotificationTap(
@@ -212,6 +272,8 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         let store = PendingNotificationRouteStore()
         let router = AppNotificationRouter(pendingRouteStore: store)
         router.attach(appState: appState)
+        router.setSceneReady(true)
+        router.setSceneActive(true)
         let route = AppNotificationRoute.chatRoom(roomId: "room-1", storeId: nil, title: nil)
         store.store(
             route: route,
@@ -222,21 +284,20 @@ final class DeepLinkCoordinatorTests: XCTestCase {
 
         router.setNavigationReady(true)
         XCTAssertEqual(appState.pendingNotificationRoute, route)
+        XCTAssertEqual(store.pendingRoute, route)
 
         appState.pendingNotificationRoute = nil
-        store.store(
-            route: route,
-            messageId: "message-1",
-            source: .remoteFCM,
-            dedupeKey: "navigate:remoteFCM:message-1:chat:room-1"
-        )
         router.routePendingIfNeeded()
 
-        XCTAssertNil(store.pendingRoute)
+        XCTAssertEqual(store.pendingRoute, route)
         XCTAssertNil(appState.pendingNotificationRoute)
+
+        router.markNavigationCompleted(route: route)
+
+        XCTAssertNil(store.pendingRoute)
     }
 
-    func testChatHydrationDoesNotCreateSecondNavigationPublish() {
+    func testChatHydrationDoesNotBlockNavigationShell() {
         let appState = makeAppState(authenticated: true, launchPhase: .ready)
         let router = makeRouter(attachedTo: appState)
         router.setNavigationReady(true)
@@ -248,9 +309,53 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         XCTAssertEqual(appState.pendingNotificationRoute, route)
     }
 
+    func testDuplicateForegroundChatPayloadSuppressesSecondVisibleBanner() {
+        let service = makeNotificationService()
+        let firstPayload = chatPayload(providerMessageId: "provider-1", chatId: "chat-1")
+        let duplicatePayload = chatPayload(providerMessageId: "provider-2", chatId: "chat-1")
+
+        XCTAssertFalse(service.shouldSuppressForegroundBanner(for: firstPayload))
+        XCTAssertTrue(service.shouldSuppressForegroundBanner(for: duplicatePayload))
+    }
+
+    func testRemoteAndSocketChatNotificationShareStableIdentity() {
+        let service = makeNotificationService()
+        let payload = chatPayload(providerMessageId: "provider-1", chatId: "chat-1")
+
+        service.handlePushNotificationEvent(PushNotificationEventFactory.makeEvent(
+            rawPayload: payload,
+            actionIdentifier: nil,
+            lifecycle: .didReceiveRemoteNotification,
+            source: .remoteFCM,
+            isTap: false
+        ))
+        let socketResult = service.handleChatMessageReceived(
+            roomId: "room-1",
+            storeId: nil,
+            title: "채팅",
+            messageId: "chat-1",
+            senderId: "sender-1",
+            preview: "hello"
+        )
+
+        XCTAssertEqual(socketResult, .duplicate(id: "chatMessageId:chat-1"))
+        XCTAssertEqual(service.fetchNotifications().count, 1)
+    }
+
+    func testDifferentProviderIdsWithSameFallbackChatIdentityDisplayOnce() {
+        let service = makeNotificationService()
+        let firstPayload = chatFallbackPayload(providerMessageId: "provider-1")
+        let duplicatePayload = chatFallbackPayload(providerMessageId: "provider-2")
+
+        XCTAssertFalse(service.shouldSuppressForegroundBanner(for: firstPayload))
+        XCTAssertTrue(service.shouldSuppressForegroundBanner(for: duplicatePayload))
+    }
+
     private func makeRouter(attachedTo appState: AppState) -> AppNotificationRouter {
         let router = AppNotificationRouter(pendingRouteStore: PendingNotificationRouteStore())
         router.attach(appState: appState)
+        router.setSceneReady(true)
+        router.setSceneActive(true)
         return router
     }
 
@@ -282,6 +387,41 @@ final class DeepLinkCoordinatorTests: XCTestCase {
             refreshToken: "refresh-token"
         )
     }
+
+    private func makeNotificationService() -> DefaultAppNotificationService {
+        let suiteName = "NotificationIdentityTests.\(UUID().uuidString)"
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        userDefaults.removePersistentDomain(forName: suiteName)
+        return DefaultAppNotificationService(
+            repository: UserDefaultsAppNotificationRepository(store: UserDefaultsStore(userDefaults: userDefaults)),
+            router: StubNotificationRouter(),
+            activeChatRoomTracker: ActiveChatRoomTracker(),
+            activeCommunityPostTracker: ActiveCommunityPostTracker(),
+            diagnosticsStore: NotificationDiagnosticsStore()
+        )
+    }
+
+    private func chatPayload(providerMessageId: String, chatId: String) -> [String: String] {
+        [
+            "type": "chat",
+            "room_id": "room-1",
+            "chatId": chatId,
+            "gcm.message_id": providerMessageId,
+            "senderId": "sender-1",
+            "body": "hello",
+            "createdAt": "2026-05-08T12:00:00Z"
+        ]
+    }
+
+    private func chatFallbackPayload(providerMessageId: String) -> [String: String] {
+        [
+            "room_id": "room-1",
+            "gcm.message_id": providerMessageId,
+            "senderId": "sender-1",
+            "body": "hello",
+            "createdAt": "2026-05-08T12:00:00Z"
+        ]
+    }
 }
 
 private actor StubDeepLinkTokenStore: TokenStore {
@@ -294,4 +434,11 @@ private struct ChangingChatRouteHydrator: ChatRouteHydrating {
     func hydrate(route: AppNotificationRoute, source: NotificationRouteSource) async -> ChatRouteHydrationResult {
         .success(.chatRoom(roomId: "room-1", storeId: "store-1", title: "Hydrated"))
     }
+}
+
+@MainActor
+private final class StubNotificationRouter: AppNotificationRouting {
+    func route(to route: AppNotificationRoute) {}
+    func handleNotificationTap(route: AppNotificationRoute, messageId: String?, source: NotificationRouteSource) {}
+    func markNavigationCompleted(route: AppNotificationRoute) {}
 }

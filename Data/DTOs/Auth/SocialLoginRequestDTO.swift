@@ -62,5 +62,4 @@ struct DeviceTokenRequestDTO: Encodable, Sendable {
 struct ProfileRequestDTO: Encodable, Sendable {
     let nick: String
     let phoneNum: String?
-    let profileImage: String?
 }

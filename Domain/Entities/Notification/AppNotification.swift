@@ -38,8 +38,13 @@ enum AppNotificationRoute: Codable, Equatable, Sendable {
     case orderDetail(orderCode: String)
     case orderList
     case chatRoom(roomId: String, storeId: String?, title: String?)
+    case storeDetail(storeId: String)
+    case videoDetail(videoId: String)
+    case shorts(videoId: String?)
     case communityPost(postId: String, commentId: String?)
     case communityList
+    case cart
+    case profile
     case paymentReceipt(orderCode: String)
     case none
 }
@@ -85,6 +90,13 @@ struct AppNotificationMetadata: Codable, Equatable {
 }
 
 extension AppNotificationRoute {
+    var chatRoomId: String? {
+        if case .chatRoom(let roomId, _, _) = self {
+            return roomId
+        }
+        return nil
+    }
+
     var debugDescription: String {
         switch self {
         case .orderDetail(let orderCode):
@@ -93,10 +105,20 @@ extension AppNotificationRoute {
             return "orderList"
         case .chatRoom(let roomId, let storeId, let title):
             return "chatRoom roomId=\(roomId) storeId=\(storeId ?? "-") titleExists=\(title?.isEmpty == false)"
+        case .storeDetail(let storeId):
+            return "storeDetail storeId=\(storeId)"
+        case .videoDetail(let videoId):
+            return "videoDetail videoId=\(videoId)"
+        case .shorts(let videoId):
+            return "shorts videoIdExists=\(videoId?.isEmpty == false)"
         case .communityPost(let postId, let commentId):
             return "communityPost postId=\(postId) commentId=\(commentId ?? "-")"
         case .communityList:
             return "communityList"
+        case .cart:
+            return "cart"
+        case .profile:
+            return "profile"
         case .paymentReceipt(let orderCode):
             return "paymentReceipt orderCode=\(orderCode)"
         case .none:
