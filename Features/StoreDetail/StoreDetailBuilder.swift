@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 struct StoreDetailBuilder {
     private let storeID: String
+    private let source: String
     private let storeRepository: StoreRepository
     private let reviewRepository: ReviewRepository
     private let orderRepository: OrderRepository
@@ -30,7 +31,40 @@ struct StoreDetailBuilder {
         makeChatView: @escaping (ChatTarget) -> ChatRootView,
         makeReviewComposerView: @escaping (ReviewComposerContext, @escaping (UserStoreReview) -> Void) -> AnyView
     ) {
+        self.init(
+            storeID: storeID,
+            source: "unknown",
+            storeRepository: storeRepository,
+            reviewRepository: reviewRepository,
+            orderRepository: orderRepository,
+            cartStore: cartStore,
+            locationService: locationService,
+            mapLauncher: mapLauncher,
+            imageLoader: imageLoader,
+            makeAuthView: makeAuthView,
+            makeCartView: makeCartView,
+            makeChatView: makeChatView,
+            makeReviewComposerView: makeReviewComposerView
+        )
+    }
+
+    init(
+        storeID: String,
+        source: String = "unknown",
+        storeRepository: StoreRepository,
+        reviewRepository: ReviewRepository,
+        orderRepository: OrderRepository,
+        cartStore: CartStore,
+        locationService: any LocationServiceProtocol,
+        mapLauncher: any MapLauncherProtocol,
+        imageLoader: any AuthorizedImageLoading,
+        makeAuthView: @escaping () -> AnyView,
+        makeCartView: @escaping (String) -> CartRootView,
+        makeChatView: @escaping (ChatTarget) -> ChatRootView,
+        makeReviewComposerView: @escaping (ReviewComposerContext, @escaping (UserStoreReview) -> Void) -> AnyView
+    ) {
         self.storeID = storeID
+        self.source = source
         self.storeRepository = storeRepository
         self.reviewRepository = reviewRepository
         self.orderRepository = orderRepository
@@ -48,6 +82,7 @@ struct StoreDetailBuilder {
         let router = StoreDetailRouter(mapLauncher: mapLauncher)
         let interactor = StoreDetailInteractor(
             storeID: storeID,
+            source: source,
             storeRepository: storeRepository,
             reviewRepository: reviewRepository,
             orderRepository: orderRepository,

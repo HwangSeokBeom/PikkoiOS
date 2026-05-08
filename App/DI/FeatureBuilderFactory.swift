@@ -35,7 +35,7 @@ struct FeatureBuilderFactory {
             sessionStore: appState.sessionStore,
             imageLoader: container.authorizedImageLoader,
             makeStoreDetailView: { storeID in
-                makeStoreDetailView(storeID: storeID)
+                makeStoreDetailView(storeID: storeID, source: "home")
             },
             makeStoreSearchView: { query in
                 AnyView(makeStoreSearchView(query: query))
@@ -69,9 +69,10 @@ struct FeatureBuilderFactory {
         ).build(resetTrigger: resetTrigger, isTabActive: isTabActive)
     }
 
-    func makeStoreDetailView(storeID: String = "mock-store") -> StoreDetailRootView {
+    func makeStoreDetailView(storeID: String = "mock-store", source: String = "unknown") -> StoreDetailRootView {
         StoreDetailBuilder(
             storeID: storeID,
+            source: source,
             storeRepository: container.storeRepository,
             reviewRepository: container.reviewRepository,
             orderRepository: container.orderRepository,
@@ -532,8 +533,8 @@ struct FeatureBuilderFactory {
             mode: mode,
             storeRepository: container.storeRepository,
             imageLoader: container.authorizedImageLoader,
-            makeStoreDetailView: { storeID in
-                AnyView(makeStoreDetailView(storeID: storeID))
+            makeStoreDetailView: { storeID, source in
+                AnyView(makeStoreDetailView(storeID: storeID, source: source))
             }
         ).build()
     }

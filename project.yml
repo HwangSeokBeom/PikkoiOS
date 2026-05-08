@@ -126,6 +126,7 @@ targets:
     sources:
       - path: Extensions/OrderLiveActivityExtension
       - path: Core/LiveActivity/OrderLiveActivityAttributes.swift
+      - path: Core/LiveActivity/OrderLiveActivityDisplayPolicy.swift
       - path: Core/LiveActivity/VideoLiveActivityAttributes.swift
     settings:
       base:

@@ -24,6 +24,7 @@ struct CommunityPostAuthor: Equatable, Sendable {
 
 struct CommunityPostStoreSummary: Equatable, Sendable {
     let id: String
+    var storeId: String { id }
     let category: String?
     let name: String
     let closeTime: String?

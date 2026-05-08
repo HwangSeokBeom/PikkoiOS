@@ -12,6 +12,7 @@ protocol StoreDetailInteracting {
 @MainActor
 struct StoreDetailInteractor: StoreDetailInteracting {
     private let storeID: String
+    private let source: String
     private let storeRepository: StoreRepository
     private let reviewRepository: ReviewRepository
     private let orderRepository: OrderRepository
@@ -24,7 +25,26 @@ struct StoreDetailInteractor: StoreDetailInteracting {
         orderRepository: OrderRepository,
         locationService: any LocationServiceProtocol
     ) {
+        self.init(
+            storeID: storeID,
+            source: "unknown",
+            storeRepository: storeRepository,
+            reviewRepository: reviewRepository,
+            orderRepository: orderRepository,
+            locationService: locationService
+        )
+    }
+
+    init(
+        storeID: String,
+        source: String = "unknown",
+        storeRepository: StoreRepository,
+        reviewRepository: ReviewRepository,
+        orderRepository: OrderRepository,
+        locationService: any LocationServiceProtocol
+    ) {
         self.storeID = storeID
+        self.source = source
         self.storeRepository = storeRepository
         self.reviewRepository = reviewRepository
         self.orderRepository = orderRepository
@@ -32,6 +52,7 @@ struct StoreDetailInteractor: StoreDetailInteracting {
     }
 
     func loadInitialContent() async throws -> StoreDetailContent {
+        Logger(category: "StoreDetail").debug("[StoreDetail] load requested storeId=\(storeID) source=\(source)")
         let detailResult: StoreDetail
         do {
             detailResult = try await storeRepository.fetchStoreDetail(storeID: storeID)

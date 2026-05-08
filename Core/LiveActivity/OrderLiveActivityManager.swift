@@ -36,6 +36,8 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
     static let shared = OrderLiveActivityManager()
 
     private let logger = Logger(category: "OrderLiveActivity")
+    private let uxLogger = Logger(category: "OrderLiveActivityUX")
+    private static let terminalDismissalDelaySeconds: TimeInterval = 8
     private var lastSnapshotByOrderCode: [String: OrderLiveActivitySnapshot] = [:]
     private var didRestore = false
 
@@ -54,16 +56,22 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
             logStartSkipped(reason: "missingOrderCode")
             return
         }
-        guard !snapshot.status.isTerminal else {
-            logger.debug("[OrderLiveActivity] skipped reason=alreadyCompleted orderId=\(snapshot.orderId)")
+        logDisplayPolicy(snapshot: snapshot)
+        guard snapshot.status.isOrderLiveActivityActive else {
+            logger.debug("[OrderLiveActivity] skipped reason=notActiveOrder orderCode=\(snapshot.orderCode) status=\(snapshot.status.apiValue)")
             return
         }
-        guard !hasActiveActivity(orderCode: snapshot.orderCode) else {
-            logStartSkipped(reason: "alreadyExists")
+        guard activity(orderCode: snapshot.orderCode) == nil else {
+            if let activity = activity(orderCode: snapshot.orderCode) {
+                uxLogger.debug("[OrderLiveActivityUX] reuse existing orderCode=\(snapshot.orderCode) activityId=\(activity.id)")
+            }
+            logger.debug("[OrderLiveActivity] start skipped reason=alreadyActive orderCode=\(snapshot.orderCode)")
+            update(order: order)
             return
         }
 
-        logger.debug("[OrderLiveActivity] start requested orderId=\(snapshot.orderId) status=\(snapshot.status.apiValue)")
+        logger.warning("[OrderLiveActivity] blockedNowPlayingUsage reason=orderIsNotMedia")
+        logger.debug("[OrderLiveActivity] start requested orderCode=\(snapshot.orderCode) status=\(snapshot.status.apiValue) progress=\(snapshot.progress)")
         logger.debug("[OrderLiveActivity] deeplink target=orderDetail orderId=\(snapshot.orderId)")
         do {
             let attributes = OrderLiveActivityAttributes(
@@ -83,7 +91,7 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
                 pushType: nil
             )
             lastSnapshotByOrderCode[snapshot.orderCode] = snapshot
-            logger.info("[OrderLiveActivity] started orderId=\(snapshot.orderId) activityId=\(activity.id)")
+            logger.info("[OrderLiveActivity] started orderCode=\(snapshot.orderCode) activityId=\(activity.id)")
         } catch {
             logger.warning("[OrderLiveActivity] start skipped reason=requestFailed orderId=\(snapshot.orderId) message=\(error.localizedDescription)")
         }
@@ -98,21 +106,22 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
             logger.debug("[OrderLiveActivity] update skipped reason=missingOrderCode")
             return
         }
-        if snapshot.status.isTerminal {
+        logDisplayPolicy(snapshot: snapshot)
+        if !snapshot.status.isOrderLiveActivityActive {
             end(order: order, reason: endReason(for: snapshot.status))
             return
         }
         guard hasActiveActivity(orderCode: snapshot.orderCode) else {
-            logger.debug("[OrderLiveActivity] update skipped reason=noActiveActivity orderId=\(snapshot.orderId)")
+            logger.debug("[OrderLiveActivity] update skipped reason=noActiveActivity orderCode=\(snapshot.orderCode)")
             return
         }
         let oldSnapshot = lastSnapshotByOrderCode[snapshot.orderCode]
         guard oldSnapshot != snapshot else {
-            logger.debug("[OrderLiveActivity] update skipped reason=sameState orderId=\(snapshot.orderId)")
+            logger.debug("[OrderLiveActivity] update skipped reason=noStatusChange orderCode=\(snapshot.orderCode) status=\(snapshot.status.apiValue)")
             return
         }
 
-        logger.debug("[OrderLiveActivity] update orderId=\(snapshot.orderId) status=\(snapshot.status.apiValue) progress=\(snapshot.progressStep)/\(snapshot.totalSteps)")
+        logger.debug("[OrderLiveActivity] update requested orderCode=\(snapshot.orderCode) fromStatus=\(oldSnapshot?.status.apiValue ?? "unknown") toStatus=\(snapshot.status.apiValue) progress=\(snapshot.progress)")
         Task { [snapshot] in
             let didUpdate = await Self.updateActivityKit(snapshot: snapshot)
             await MainActor.run {
@@ -123,24 +132,25 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
 
     func sync(orders: [OrderSummary], source: String) {
         guard isSupported else { return }
-        let activeOrders = orders.filter { !$0.status.isTerminal }
-        logger.debug("[OrderLiveActivity] sync activeOrderCount=\(activeOrders.count)")
+        let activeOrders = orders.filter { $0.status.isOrderLiveActivityActive }
+        logger.debug("[OrderLiveActivity] sync requested source=\(source) orderCount=\(orders.count) activeOrderCount=\(activeOrders.count)")
         guard !activeOrders.isEmpty else {
             logger.debug("[OrderLiveActivity] skipped reason=noActiveOrders")
-            for order in orders where order.status.isTerminal {
+            for order in orders where !order.status.isOrderLiveActivityActive {
                 end(order: order, reason: endReason(for: order.status))
             }
             logger.debug("[OrderRefresh] liveActivity sync count=0")
             return
         }
         for order in activeOrders {
+            logger.debug("[OrderLiveActivity] active candidate orderCode=\(order.orderCode) storeName=\(order.storeName) status=\(order.status.apiValue) paidAt=\(order.paidAt?.description ?? "nil")")
             if hasActiveActivity(orderCode: order.orderCode) {
                 update(order: order)
             } else {
                 start(order: order)
             }
         }
-        for order in orders where order.status.isTerminal {
+        for order in orders where !order.status.isOrderLiveActivityActive {
             end(order: order, reason: endReason(for: order.status))
         }
         logger.debug("[OrderRefresh] liveActivity sync count=\(activeOrders.count)")
@@ -152,11 +162,14 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
               hasActiveActivity(orderCode: snapshot.orderCode) else {
             return
         }
-        logger.debug("[OrderLiveActivity] end requested orderId=\(snapshot.orderId) reason=terminalStatus")
+        logger.debug("[OrderLiveActivity] end requested orderCode=\(snapshot.orderCode) reason=\(reason.rawValue)")
+        if reason != .manual {
+            uxLogger.debug("[OrderLiveActivityUX] terminal scheduled orderCode=\(snapshot.orderCode) status=\(snapshot.status.apiValue) delaySeconds=\(Int(Self.terminalDismissalDelaySeconds))")
+        }
         Task { [snapshot, reason] in
             let didEnd = await Self.endActivityKit(snapshot: snapshot, reason: reason)
             await MainActor.run {
-                self.handleEndResult(didEnd, snapshot: snapshot)
+                self.handleEndResult(didEnd, snapshot: snapshot, reason: reason)
             }
         }
     }
@@ -222,24 +235,19 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
 
     private func handleUpdateResult(_ didUpdate: Bool, snapshot: OrderLiveActivitySnapshot) {
         guard didUpdate else {
-            logger.debug("[OrderLiveActivity] update skipped reason=noActiveActivity orderId=\(snapshot.orderId)")
+            logger.debug("[OrderLiveActivity] update skipped reason=noActiveActivity orderCode=\(snapshot.orderCode)")
             return
         }
         lastSnapshotByOrderCode[snapshot.orderCode] = snapshot
-        if snapshot.status == .completed {
-            Task { [snapshot] in
-                let didEnd = await Self.endActivityKit(snapshot: snapshot, reason: .pickedUp)
-                await MainActor.run {
-                    self.handleEndResult(didEnd, snapshot: snapshot)
-                }
-            }
-        }
+        logger.info("[OrderLiveActivity] updated orderCode=\(snapshot.orderCode) status=\(snapshot.status.apiValue)")
     }
 
-    private func handleEndResult(_ didEnd: Bool, snapshot: OrderLiveActivitySnapshot) {
+    private func handleEndResult(_ didEnd: Bool, snapshot: OrderLiveActivitySnapshot, reason: OrderLiveActivityEndReason) {
         guard didEnd else { return }
         lastSnapshotByOrderCode[snapshot.orderCode] = nil
-        logger.info("[OrderLiveActivity] ended orderId=\(snapshot.orderId)")
+        let uxReason = reason == .manual ? reason.rawValue : "terminalState"
+        uxLogger.info("[OrderLiveActivityUX] ended orderCode=\(snapshot.orderCode) status=\(snapshot.status.apiValue) reason=\(uxReason)")
+        logger.info("[OrderLiveActivity] ended orderCode=\(snapshot.orderCode) reason=\(reason.rawValue)")
     }
 
     private func handleEndAllResult(endedOrderCodes: [String]) {
@@ -278,7 +286,7 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
         }
         await activity.end(
             ActivityContent(state: snapshot.activityContentState, staleDate: nil),
-            dismissalPolicy: reason == .manual ? .immediate : .after(Date().addingTimeInterval(60))
+            dismissalPolicy: reason == .manual ? .immediate : .after(Date().addingTimeInterval(Self.terminalDismissalDelaySeconds))
         )
         return true
     }
@@ -297,6 +305,14 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
 
     private func logStartSkipped(reason: String) {
         logger.debug("[OrderLiveActivity] start skipped reason=\(reason)")
+    }
+
+    private func logDisplayPolicy(snapshot: OrderLiveActivitySnapshot) {
+        let display = OrderLiveActivityStatusDisplay.map(status: snapshot.status.apiValue)
+        let title = OrderLiveActivityTextPolicy.displayTitle(snapshot.storeName)
+        let orderCode = OrderLiveActivityTextPolicy.displayOrderCode(snapshot.orderCode, mode: .medium)
+        uxLogger.debug("[OrderLiveActivityUX] mapped status=\(snapshot.status.apiValue) badge=\(display.badge) compact=\(display.compact) progress=\(display.progress) message=\(display.message)")
+        uxLogger.debug("[OrderLiveActivityLayout] textPolicy titleOriginalLength=\(snapshot.storeName.count) titleDisplayLength=\(title.count) orderCodeMode=\(orderCode.mode.rawValue)")
     }
 }
 #else

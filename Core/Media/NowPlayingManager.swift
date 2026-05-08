@@ -17,6 +17,10 @@ final class NowPlayingManager {
     private var artworkCache: [String: UIImage] = [:]
     private var lastPlaybackUpdate: PlaybackUpdate?
 
+    private init() {
+        logger.debug("[NowPlaying] owner=videoOnly orderIntegration=false")
+    }
+
     func configureSessionIfNeeded(player: AVPlayer, videoId: String? = nil, context: VideoPlaybackContext = .detail) {
         self.player = player
         guard !configuredSession else {

@@ -44,6 +44,9 @@ struct StoreCard: View {
         .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
         .pikkoShadow(PikkoShadow.card)
         .contentShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
+        .onTapGesture {
+            onCardTapped?()
+        }
     }
 
     private var imageSection: some View {
@@ -62,10 +65,6 @@ struct StoreCard: View {
             }
             .frame(height: imageHeight)
             .clipped()
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onCardTapped?()
-            }
 
             HStack(alignment: .top) {
                 Button {
@@ -90,6 +89,7 @@ struct StoreCard: View {
                         appearance: .filled,
                         size: .mini
                     )
+                    .allowsHitTesting(false)
                 }
             }
             .padding(overlayPadding)
@@ -130,10 +130,6 @@ struct StoreCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onCardTapped?()
-        }
     }
 
     private func infoPill(systemImage: String, text: String) -> some View {

@@ -14,52 +14,147 @@ struct OrderLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: OrderLiveActivityAttributes.self) { context in
             OrderLiveActivityLockScreenView(context: context)
-                .activityBackgroundTint(Color(.systemBackground))
+                .activityBackgroundTint(Color(.systemBackground).opacity(0.92))
                 .activitySystemActionForegroundColor(.primary)
                 .widgetURL(context.state.deepLinkURL)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Text(context.attributes.storeName)
-                        .font(.caption)
-                        .lineLimit(1)
+                    OrderDynamicIslandExpandedLeadingView(context: context)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(context.state.statusTitle)
-                        .font(.caption.bold())
-                        .lineLimit(1)
+                    OrderDynamicIslandExpandedTrailingView(context: context)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ProgressView(value: Double(context.state.progressStep), total: Double(context.state.totalSteps))
-                            .tint(.green)
-                        Text(context.state.pickupMessage)
-                            .font(.caption2)
-                            .lineLimit(1)
-                    }
+                    OrderDynamicIslandExpandedBottomView(context: context)
                 }
             } compactLeading: {
-                Text("\(context.state.progressStep)/\(context.state.totalSteps)")
-                    .font(.caption2.bold())
+                OrderStatusIcon(status: context.state.status, size: 15)
             } compactTrailing: {
-                Image(systemName: islandIcon(for: context.state.status))
+                let statusDisplay = OrderLiveActivityStatusDisplay.map(status: context.state.status)
+                let _ = OrderLiveActivityDebugLog.layout(
+                    family: "dynamicIslandCompact",
+                    orderCode: context.attributes.orderCode,
+                    status: context.state.status,
+                    title: context.attributes.storeName,
+                    orderCodeDisplay: OrderLiveActivityTextPolicy.displayOrderCode(context.attributes.orderCode, mode: .short),
+                    compactStatus: statusDisplay.compact
+                )
+                Text(statusDisplay.compact)
+                    .font(.caption2.bold())
+                    .foregroundStyle(statusTint(for: context.state.status))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: true, vertical: false)
             } minimal: {
-                Image(systemName: islandIcon(for: context.state.status))
+                OrderStatusIcon(status: context.state.status, size: 14)
             }
             .widgetURL(context.state.deepLinkURL)
         }
     }
+}
 
-    private func islandIcon(for status: String) -> String {
-        switch status {
-        case "READY_FOR_PICKUP":
-            return "bag.fill"
-        case "PICKED_UP":
-            return "checkmark.circle.fill"
-        case "IN_PROGRESS":
-            return "flame.fill"
-        default:
-            return "clock.fill"
+private func orderIslandIcon(for status: String) -> String {
+    switch normalizedOrderStatus(status) {
+    case "READY_FOR_PICKUP":
+        return "bag.fill"
+    case "PICKED_UP":
+        return "checkmark.circle.fill"
+    case "IN_PROGRESS":
+        return "flame.fill"
+    case "APPROVED":
+        return "checkmark.seal.fill"
+    case "CANCELLED", "CANCELED", "REJECTED", "DENIED", "FAILED":
+        return "xmark.circle.fill"
+    default:
+        return "clock.fill"
+    }
+}
+
+private struct OrderDynamicIslandExpandedLeadingView: View {
+    let context: ActivityViewContext<OrderLiveActivityAttributes>
+
+    var body: some View {
+        let statusDisplay = OrderLiveActivityStatusDisplay.map(status: context.state.status)
+        HStack(spacing: 6) {
+            OrderStatusIcon(status: context.state.status, size: 16)
+            Text(statusDisplay.badge)
+                .font(.caption.bold())
+                .foregroundStyle(statusTint(for: context.state.status))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+}
+
+private struct OrderDynamicIslandExpandedTrailingView: View {
+    let context: ActivityViewContext<OrderLiveActivityAttributes>
+
+    var body: some View {
+        let orderCode = OrderLiveActivityTextPolicy.displayOrderCode(context.attributes.orderCode, mode: .short)
+        Text(orderCode.text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .truncationMode(.middle)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+private struct OrderDynamicIslandExpandedBottomView: View {
+    let context: ActivityViewContext<OrderLiveActivityAttributes>
+
+    var body: some View {
+        let statusDisplay = OrderLiveActivityStatusDisplay.map(status: context.state.status)
+        let title = OrderLiveActivityTextPolicy.displayTitle(context.attributes.storeName, maxLength: 22)
+        let orderCode = OrderLiveActivityTextPolicy.displayOrderCode(context.attributes.orderCode, mode: .medium)
+        let _ = OrderLiveActivityDebugLog.layout(
+            family: "dynamicIslandExpanded",
+            orderCode: context.attributes.orderCode,
+            status: context.state.status,
+            title: context.attributes.storeName,
+            orderCodeDisplay: orderCode,
+            compactStatus: statusDisplay.compact
+        )
+
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.88)
+                .truncationMode(.tail)
+                .layoutPriority(1)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Text(statusDisplay.message)
+                        .font(.caption2)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
+                    Spacer(minLength: 4)
+                    Text(context.state.updatedAt, style: .time)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(2)
+                }
+
+                Text(statusDisplay.message)
+                    .font(.caption2)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            OrderProgressBar(
+                progress: statusDisplay.progress,
+                status: context.state.status
+            )
         }
     }
 }
@@ -68,37 +163,198 @@ private struct OrderLiveActivityLockScreenView: View {
     let context: ActivityViewContext<OrderLiveActivityAttributes>
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
+        let statusDisplay = OrderLiveActivityStatusDisplay.map(status: context.state.status)
+        let title = OrderLiveActivityTextPolicy.displayTitle(context.attributes.storeName, maxLength: 22)
+        let orderCode = OrderLiveActivityTextPolicy.displayOrderCode(context.attributes.orderCode, mode: .medium)
+        let _ = OrderLiveActivityDebugLog.layout(
+            family: "lockScreen",
+            orderCode: context.attributes.orderCode,
+            status: context.state.status,
+            title: context.attributes.storeName,
+            orderCodeDisplay: orderCode,
+            compactStatus: statusDisplay.compact
+        )
+
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
+                OrderStatusIcon(status: context.state.status, size: 16)
+                    .frame(width: 34, height: 34)
+                    .background(statusTint(for: context.state.status).opacity(0.14))
+                    .clipShape(Circle())
+
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(context.attributes.storeName)
-                        .font(.headline)
+                    Text(title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text(context.attributes.orderCode)
+                        .minimumScaleFactor(0.88)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
+                    Text(orderCode.text)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.88)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
                 }
-                Spacer()
-                Text(context.state.statusTitle)
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.green)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+
+                OrderStatusBadge(title: statusDisplay.badge, status: context.state.status)
+                    .layoutPriority(2)
             }
 
-            ProgressView(value: Double(context.state.progressStep), total: Double(context.state.totalSteps))
-                .tint(.green)
+            OrderProgressBar(
+                progress: statusDisplay.progress,
+                status: context.state.status
+            )
 
-            HStack {
-                Text(context.state.pickupMessage)
-                    .font(.caption)
-                    .lineLimit(1)
-                Spacer()
-                Text(context.state.updatedAt, style: .time)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Text(statusDisplay.message)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.88)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
+                    Spacer(minLength: 4)
+                    Text(context.state.updatedAt, style: .time)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(2)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(statusDisplay.message)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.88)
+                        .truncationMode(.tail)
+                    Text(context.state.updatedAt, style: .time)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
         }
-        .padding(4)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+}
+
+private struct OrderStatusIcon: View {
+    let status: String
+    let size: CGFloat
+
+    var body: some View {
+        Image(systemName: orderIslandIcon(for: status))
+            .font(.system(size: size, weight: .bold))
+            .foregroundStyle(statusTint(for: status))
+            .accessibilityHidden(true)
+    }
+}
+
+private struct OrderStatusBadge: View {
+    let title: String
+    let status: String
+
+    var body: some View {
+        Text(title)
+            .font(.caption.bold())
+            .foregroundStyle(statusTint(for: status))
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(statusTint(for: status).opacity(0.16))
+            .clipShape(Capsule())
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(2)
+    }
+}
+
+private struct OrderProgressBar: View {
+    let progress: Double
+    let status: String
+
+    var body: some View {
+        let clampedProgress = min(max(progress, 0), 1)
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(progressTrackTint(for: status))
+                if clampedProgress > 0 {
+                    Capsule()
+                        .fill(progressFillTint(for: status))
+                        .frame(width: max(5, proxy.size.width * clampedProgress))
+                }
+            }
+        }
+        .frame(height: 5)
+        .accessibilityLabel("주문 진행률")
+        .accessibilityValue("\(Int(clampedProgress * 100))퍼센트")
+    }
+}
+
+private func statusTint(for status: String) -> Color {
+    switch normalizedOrderStatus(status) {
+    case "READY_FOR_PICKUP":
+        return .orange
+    case "PICKED_UP":
+        return .green
+    case "IN_PROGRESS":
+        return .blue
+    case "APPROVED":
+        return .teal
+    case "CANCELLED", "CANCELED", "REJECTED", "DENIED", "FAILED":
+        return .red
+    case "PENDING_APPROVAL":
+        return .orange
+    default:
+        return .gray
+    }
+}
+
+private func progressTrackTint(for status: String) -> Color {
+    switch normalizedOrderStatus(status) {
+    case "CANCELLED", "CANCELED", "REJECTED", "DENIED", "FAILED":
+        return Color.primary.opacity(0.10)
+    default:
+        return Color.primary.opacity(0.14)
+    }
+}
+
+private func progressFillTint(for status: String) -> Color {
+    switch normalizedOrderStatus(status) {
+    case "CANCELLED", "CANCELED", "REJECTED", "DENIED", "FAILED":
+        return .gray
+    default:
+        return statusTint(for: status)
+    }
+}
+
+private func normalizedOrderStatus(_ status: String) -> String {
+    status.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+}
+
+private enum OrderLiveActivityDebugLog {
+    static func layout(
+        family: String,
+        orderCode: String,
+        status: String,
+        title: String,
+        orderCodeDisplay: OrderLiveActivityOrderCodeDisplay,
+        compactStatus: String
+    ) {
+#if DEBUG
+        print("DEBUG [OrderLiveActivityLayout] render family=\(family) orderCode=\(orderCode) status=\(status) titleLength=\(title.count) orderCodeDisplay=\(orderCodeDisplay.text) compactStatus=\(compactStatus)")
+        print("DEBUG [OrderLiveActivityLayout] textPolicy titleOriginalLength=\(title.count) titleDisplayLength=\(OrderLiveActivityTextPolicy.displayTitle(title, maxLength: 22).count) orderCodeMode=\(orderCodeDisplay.mode.rawValue)")
+#endif
     }
 }
 

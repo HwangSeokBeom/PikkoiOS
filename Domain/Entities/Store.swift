@@ -2,6 +2,7 @@ import Foundation
 
 struct StoreSummary: Equatable, Sendable {
     let id: String
+    var storeId: String { id }
     let category: String?
     let name: String
     let closeTime: String?

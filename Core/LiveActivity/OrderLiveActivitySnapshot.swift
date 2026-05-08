@@ -57,53 +57,35 @@ struct OrderLiveActivitySnapshot: Equatable, Sendable {
         self.storeName = order.storeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Pikko" : order.storeName
         self.createdAt = order.createdAt
         self.estimatedReadyAt = order.pickupTime
+        let statusDisplay = OrderLiveActivityStatusDisplay.map(status: order.status.apiValue)
         self.status = order.status
-        self.progressStep = Self.progressStep(for: order.status)
-        self.totalSteps = 5
+        self.progressStep = Int((statusDisplay.progress * 100).rounded())
+        self.totalSteps = 100
         self.canCancel = order.canCancel
-        self.pickupMessage = Self.pickupMessage(for: order.status, pickupTime: order.pickupTime)
-        self.updatedAt = updatedAt
+        self.pickupMessage = statusDisplay.message
+        self.updatedAt = order.paidAt ?? updatedAt
         self.deepLinkURL = deepLinkURL ?? URL(string: "pikko://orders/\(normalizedOrderCode)")
     }
 
+    var progress: Double {
+        guard totalSteps > 0 else { return 0 }
+        return Double(progressStep) / Double(totalSteps)
+    }
+
     static func progressStep(for status: OrderStatus) -> Int {
-        switch status {
-        case .pending:
-            return 1
-        case .accepted:
-            return 2
-        case .preparing:
-            return 3
-        case .ready:
-            return 4
-        case .completed:
-            return 5
-        case .cancelled, .rejected, .failed, .unknown:
-            return 0
-        }
+        Int((progress(for: status) * 100).rounded())
+    }
+
+    static func progress(for status: OrderStatus) -> Double {
+        OrderLiveActivityStatusDisplay.map(status: status.apiValue).progress
     }
 
     static func pickupMessage(for status: OrderStatus, pickupTime: Date?) -> String {
-        switch status {
-        case .pending:
-            return "매장 승인 대기 중"
-        case .accepted:
-            return "매장이 주문을 확인했어요"
-        case .preparing:
-            return "메뉴를 준비하고 있어요"
-        case .ready:
-            return "매장에서 픽업해 주세요"
-        case .completed:
-            return "픽업이 완료되었어요"
-        case .cancelled:
-            return "주문이 취소되었어요"
-        case .rejected:
-            return "주문이 거절되었어요"
-        case .failed:
-            return "주문 처리에 실패했어요"
-        case .unknown:
-            return pickupTime.map { "픽업 예상 \($0.formatted(date: .omitted, time: .shortened))" } ?? "주문 상태 확인 중"
+        let display = OrderLiveActivityStatusDisplay.map(status: status.apiValue)
+        if case .unknown = status {
+            return pickupTime.map { "픽업 예상 \($0.formatted(date: .omitted, time: .shortened))" } ?? display.message
         }
+        return display.message
     }
 }
 
@@ -112,8 +94,8 @@ extension OrderLiveActivitySnapshot {
     var activityContentState: OrderLiveActivityAttributes.ContentState {
         OrderLiveActivityAttributes.ContentState(
             status: status.apiValue,
-            statusText: status.displayTitle,
-            statusTitle: status.displayTitle,
+            statusText: status.liveActivityTitle,
+            statusTitle: status.liveActivityTitle,
             progressStep: progressStep,
             totalSteps: totalSteps,
             displayMessage: pickupMessage,
@@ -125,3 +107,18 @@ extension OrderLiveActivitySnapshot {
     }
 }
 #endif
+
+extension OrderStatus {
+    var liveActivityTitle: String {
+        OrderLiveActivityStatusDisplay.map(status: apiValue).badge
+    }
+
+    var isOrderLiveActivityActive: Bool {
+        switch self {
+        case .pending, .accepted, .preparing, .ready:
+            return true
+        case .completed, .cancelled, .rejected, .failed, .unknown:
+            return false
+        }
+    }
+}

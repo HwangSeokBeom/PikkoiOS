@@ -506,6 +506,42 @@ enum StoreListMode: Equatable, Sendable {
             return "가게 상세나 홈에서 하트를 눌러 찜 목록을 채울 수 있어요."
         }
     }
+
+    var navigationSource: String {
+        switch self {
+        case .search:
+            return "searchResult"
+        case .liked:
+            return "favorites"
+        }
+    }
+
+    var navigationCategory: String {
+        switch self {
+        case .search:
+            return "SearchStoreNavigation"
+        case .liked:
+            return "FavoriteStoreNavigation"
+        }
+    }
+
+    var cardRenderCategory: String {
+        switch self {
+        case .search:
+            return "SearchStoreCard"
+        case .liked:
+            return "FavoriteStoreCard"
+        }
+    }
+
+    var searchKeywordForLog: String {
+        switch self {
+        case .search(let query):
+            return query
+        case .liked:
+            return "-"
+        }
+    }
 }
 
 enum StoreListAction {
@@ -541,8 +577,16 @@ protocol StoreListRouting: AnyObject {
 @MainActor
 final class StoreListRouter: ObservableObject, StoreListRouting {
     @Published private(set) var pendingRoute: AppRoute?
+    private let source: String
+    private let logger: Logger
+
+    init(source: String) {
+        self.source = source
+        self.logger = Logger(category: source == "searchResult" ? "SearchStoreNavigation" : "FavoriteStoreNavigation")
+    }
 
     func routeToStoreDetail(storeID: String) {
+        logger.debug("[\(source == "searchResult" ? "SearchStoreNavigation" : "FavoriteStoreNavigation")] route append destination=storeDetail storeId=\(storeID)")
         pendingRoute = .storeDetail(storeID: storeID)
     }
 
@@ -676,7 +720,7 @@ extension StoreListFeatureError: LocalizedError {
 final class StoreListPresenter: ObservableObject {
     @Published private(set) var viewState: StoreListViewState
 
-    private let mode: StoreListMode
+    fileprivate let mode: StoreListMode
     private let interactor: StoreListInteracting
     private let router: StoreListRouting
     private let distanceFormatter = DistanceFormatter()
@@ -706,7 +750,7 @@ final class StoreListPresenter: ObservableObject {
         case .retryTapped:
             await loadStores()
         case .storeTapped(let storeID):
-            router.routeToStoreDetail(storeID: storeID)
+            routeToStoreDetail(storeID: storeID)
         case .storeAppeared(let storeID):
             await loadMoreIfNeeded(triggeredBy: storeID)
         case .likeTapped(let storeID):
@@ -810,6 +854,23 @@ final class StoreListPresenter: ObservableObject {
         }
     }
 
+    private func routeToStoreDetail(storeID: String) {
+        let normalizedStoreID = storeID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let storeName = viewState.stores.first(where: { $0.id == storeID })?.title ?? "-"
+        guard !normalizedStoreID.isEmpty else {
+            Logger(category: "StoreNavigation").warning("[StoreNavigation] blocked reason=missingStoreId source=\(mode.navigationSource) name=\(storeName)")
+            return
+        }
+
+        switch mode {
+        case .search:
+            Logger(category: mode.navigationCategory).debug("[SearchStoreNavigation] tap storeId=\(normalizedStoreID) keyword=\(mode.searchKeywordForLog) source=\(mode.navigationSource)")
+        case .liked:
+            Logger(category: mode.navigationCategory).debug("[FavoriteStoreNavigation] tap storeId=\(normalizedStoreID) name=\(storeName) source=\(mode.navigationSource)")
+        }
+        router.routeToStoreDetail(storeID: normalizedStoreID)
+    }
+
     private func applyLikeStatus(_ isLiked: Bool, to storeID: String) {
         viewState.stores = viewState.stores.map { model in
             guard model.id == storeID else { return model }
@@ -849,7 +910,7 @@ final class StoreListPresenter: ObservableObject {
         let tags = Array(normalizedTags(from: store).prefix(2))
 
         return .init(
-            id: store.id,
+            id: store.storeId,
             title: store.name,
             heroImagePath: store.imagePaths.first,
             thumbnailPaths: Array(store.imagePaths.dropFirst().prefix(2)),
@@ -918,6 +979,7 @@ final class StoreListPresenter: ObservableObject {
 struct StoreListView: View {
     @ObservedObject var presenter: StoreListPresenter
     let imageLoader: any AuthorizedImageLoading
+    private let contentBottomInset = RootTabBarMetrics.scrollContentBottomInset
 
     var body: some View {
         Group {
@@ -956,19 +1018,20 @@ struct StoreListView: View {
                         }
 
                         LazyVStack(spacing: PikkoSpacing.md) {
-                            ForEach(presenter.viewState.stores) { store in
+                            ForEach(Array(presenter.viewState.stores.enumerated()), id: \.element.id) { index, store in
                                 StoreCard(
                                     model: store,
                                     loader: imageLoader,
                                     style: .list,
+                                    onCardTapped: {
+                                        Task { await presenter.send(.storeTapped(store.id)) }
+                                    },
                                     onLikeTapped: {
                                         Task { await presenter.send(.likeTapped(store.id)) }
                                     }
                                 )
-                                .onTapGesture {
-                                    Task { await presenter.send(.storeTapped(store.id)) }
-                                }
                                 .onAppear {
+                                    logStoreCardRender(store: store, index: index)
                                     Task { await presenter.send(.storeAppeared(store.id)) }
                                 }
                             }
@@ -980,12 +1043,24 @@ struct StoreListView: View {
                         }
                     }
                     .padding(.horizontal, PikkoSpacing.xl)
-                    .padding(.vertical, PikkoSpacing.lg)
+                    .padding(.top, PikkoSpacing.lg)
+                    .padding(.bottom, PikkoSpacing.lg + contentBottomInset)
                 }
+                .contentMargins(.bottom, contentBottomInset, for: .scrollIndicators)
                 .background(PikkoColor.background.ignoresSafeArea())
             }
         }
         .pikkoScreen(title: presenter.viewState.title)
+    }
+
+    private func logStoreCardRender(store: StoreCard.Model, index: Int) {
+#if DEBUG
+        let isLast = index == presenter.viewState.stores.count - 1
+        let mode = presenter.mode
+        Logger(category: mode.cardRenderCategory).debug(
+            "[\(mode.cardRenderCategory)] render storeId=\(store.id) name=\(store.title) index=\(index) isLast=\(isLast) bottomPadding=\(Int(contentBottomInset))"
+        )
+#endif
     }
 }
 
@@ -2587,7 +2662,8 @@ struct StoreListRootView: View {
     @StateObject private var presenter: StoreListPresenter
     @StateObject private var router: StoreListRouter
     private let imageLoader: any AuthorizedImageLoading
-    private let makeStoreDetailView: (String) -> AnyView
+    private let makeStoreDetailView: (String, String) -> AnyView
+    private let detailSource: String
 
     @State private var presentedStoreID: String?
 
@@ -2595,11 +2671,13 @@ struct StoreListRootView: View {
         presenter: StoreListPresenter,
         router: StoreListRouter,
         imageLoader: any AuthorizedImageLoading,
-        makeStoreDetailView: @escaping (String) -> AnyView
+        detailSource: String,
+        makeStoreDetailView: @escaping (String, String) -> AnyView
     ) {
         _presenter = StateObject(wrappedValue: presenter)
         _router = StateObject(wrappedValue: router)
         self.imageLoader = imageLoader
+        self.detailSource = detailSource
         self.makeStoreDetailView = makeStoreDetailView
     }
 
@@ -2617,7 +2695,7 @@ struct StoreListRootView: View {
         }
         .navigationDestination(isPresented: storeDetailPresentedBinding) {
             if let presentedStoreID {
-                makeStoreDetailView(presentedStoreID)
+                makeStoreDetailView(presentedStoreID, detailSource)
             } else {
                 EmptyView()
             }
@@ -2642,13 +2720,13 @@ struct StoreListBuilder {
     private let mode: StoreListMode
     private let storeRepository: StoreRepository
     private let imageLoader: any AuthorizedImageLoading
-    private let makeStoreDetailView: (String) -> AnyView
+    private let makeStoreDetailView: (String, String) -> AnyView
 
     init(
         mode: StoreListMode,
         storeRepository: StoreRepository,
         imageLoader: any AuthorizedImageLoading,
-        makeStoreDetailView: @escaping (String) -> AnyView
+        makeStoreDetailView: @escaping (String, String) -> AnyView
     ) {
         self.mode = mode
         self.storeRepository = storeRepository
@@ -2657,7 +2735,7 @@ struct StoreListBuilder {
     }
 
     func build() -> StoreListRootView {
-        let router = StoreListRouter()
+        let router = StoreListRouter(source: mode.navigationSource)
         let interactor = StoreListInteractor(
             mode: mode,
             storeRepository: storeRepository
@@ -2671,6 +2749,7 @@ struct StoreListBuilder {
             presenter: presenter,
             router: router,
             imageLoader: imageLoader,
+            detailSource: mode.navigationSource,
             makeStoreDetailView: makeStoreDetailView
         )
     }

@@ -401,7 +401,7 @@ final class HomePresenter: ObservableObject {
         let tags = Array(normalizedTags(from: store).prefix(2))
 
         return .init(
-            id: store.id,
+            id: store.storeId,
             title: store.name,
             heroImagePath: store.imagePaths.first,
             thumbnailPaths: Array(store.imagePaths.dropFirst().prefix(2)),
