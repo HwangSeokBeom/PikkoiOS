@@ -10,9 +10,10 @@ final class ProfileImageUpdateTests: XCTestCase {
 
         let result = try ProfileImagePreprocessor().process(data: data, originalFileName: "avatar.png")
 
-        XCTAssertLessThanOrEqual(result.data.count, ProfileImagePreprocessor.maxBytes)
-        XCTAssertTrue(["image/jpeg", "image/png"].contains(result.mimeType))
-        XCTAssertTrue(["jpg", "jpeg", "png"].contains((result.fileName as NSString).pathExtension))
+        XCTAssertLessThanOrEqual(result.data.count, ProfileImagePreprocessor.targetBytes)
+        XCTAssertEqual(result.mimeType, "image/jpeg")
+        XCTAssertEqual((result.fileName as NSString).pathExtension, "jpg")
+        XCTAssertEqual(result.fileName, "profile.jpg")
     }
 
     func testHeicNamedInputIsNormalizedToJpeg() throws {
@@ -23,7 +24,7 @@ final class ProfileImageUpdateTests: XCTestCase {
 
         XCTAssertEqual(result.mimeType, "image/jpeg")
         XCTAssertEqual((result.fileName as NSString).pathExtension, "jpg")
-        XCTAssertLessThanOrEqual(result.data.count, ProfileImagePreprocessor.maxBytes)
+        XCTAssertLessThanOrEqual(result.data.count, ProfileImagePreprocessor.targetBytes)
     }
 
     func testOversizedImageIsDownsampledBelowLimit() throws {
@@ -32,7 +33,7 @@ final class ProfileImageUpdateTests: XCTestCase {
 
         let result = try ProfileImagePreprocessor().process(data: data, originalFileName: "large.jpg")
 
-        XCTAssertLessThanOrEqual(result.data.count, ProfileImagePreprocessor.maxBytes)
+        XCTAssertLessThanOrEqual(result.data.count, ProfileImagePreprocessor.targetBytes)
         XCTAssertLessThanOrEqual(max(result.pixelSize.width, result.pixelSize.height), 1_024)
     }
 
@@ -56,7 +57,7 @@ final class ProfileImageUpdateTests: XCTestCase {
         }
     }
 
-    func testUploadProfileImageReturnsServerPathWithoutResolvingToAbsoluteURL() async throws {
+    func testUploadProfileImageReturnsAbsoluteResolvedImageURL() async throws {
         let remote = StubProfileAuthRemoteDataSource()
         let repository = AuthRepositoryImpl(
             remoteDataSource: remote,
@@ -71,7 +72,7 @@ final class ProfileImageUpdateTests: XCTestCase {
             mimeType: "image/jpeg"
         )
 
-        XCTAssertEqual(path, "/data/profiles/uploaded.jpg")
+        XCTAssertEqual(path, "https://example.com/data/profiles/uploaded.jpg")
         XCTAssertEqual(remote.uploadedFieldFileName, "profile.jpg")
         XCTAssertEqual(remote.uploadedMimeType, "image/jpeg")
     }

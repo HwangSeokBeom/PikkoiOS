@@ -317,6 +317,7 @@ final class NetworkInfrastructureTests: XCTestCase {
 
         let payloadString = String(decoding: payload, as: UTF8.self)
         XCTAssertTrue(payloadString.contains("name=\"profile\"; filename=\"profile.jpg\""))
+        XCTAssertTrue(payloadString.contains("Content-Type: image/jpeg"))
         XCTAssertFalse(payloadString.contains("name=\"files\""))
         XCTAssertFalse(boundary.isEmpty)
     }

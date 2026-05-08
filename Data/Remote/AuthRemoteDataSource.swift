@@ -165,7 +165,9 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
             mimeType: mimeType,
             fileData: data
         )
-        Logger(category: "ProfileImage").debug("[ProfileImage] upload request path=/v1/users/profile/image method=POST contentType=multipart/form-data field=profile fileName=\(fileName) bytes=\(data.count)")
+#if DEBUG
+        Logger(category: "ProfileImageUpload").debug("[ProfileImageUpload] prepared path=/v1/users/profile/image field=profile filename=\(fileName) mime=\(mimeType) byteSize=\(data.count) underLimit=\(data.count <= maxProfileImageBytes)")
+#endif
         let endpoint = Endpoint<ProfileImageUploadResponseDTO>(
             path: "/v1/users/profile/image",
             method: .post,
@@ -175,7 +177,6 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
             authorizationPolicy: .accessToken
         )
         let response = try await apiClient.execute(endpoint)
-        Logger(category: "ProfileImage").debug("[ProfileImage] upload response status=200 profileImageExists=\(response.profileImage?.isEmpty == false) profileImage=\(response.profileImage ?? "nil")")
         return response
     }
 

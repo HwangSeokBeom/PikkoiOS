@@ -463,7 +463,7 @@ private struct ProfileEditorView: View {
     private func handleImageSelection(item: PhotosPickerItem) async {
         let itemProviderTypes = item.supportedContentTypes.map(\.identifier).joined(separator: ",")
 #if DEBUG
-        Logger(category: "ProfileImagePicker").debug("[ProfileImagePicker] selected source=photoLibrary itemProviderTypes=\(itemProviderTypes)")
+        Logger(category: "ProfileImagePicker").debug("[ProfileImagePicker] selected source=photos itemProviderTypes=\(itemProviderTypes)")
         Logger(category: "ProfileImage").debug("[ProfileImage] picker selected=true")
 #endif
         guard let rawData = try? await item.loadTransferable(type: Data.self),

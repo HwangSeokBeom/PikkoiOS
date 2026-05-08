@@ -11,8 +11,13 @@ struct ProcessedProfileImage: Equatable, Sendable {
     let pixelSize: CGSize
     let originalPixelSize: CGSize
     let sourceFormat: String
+    let originalUTI: String
+    let originalMimeType: String
+    let orientation: String
     let byteSize: Int
     let originalBytes: Int
+    let compressionQuality: CGFloat
+    let didDownsample: Bool
 
     var isUnderLimit: Bool {
         byteSize <= ProfileImagePreprocessor.maxBytes
@@ -27,7 +32,12 @@ struct ProfileImagePreprocessResult: Equatable, Sendable {
     let pixelSize: CGSize
     let originalPixelSize: CGSize
     let sourceFormat: String
+    let originalUTI: String
+    let originalMimeType: String
+    let orientation: String
     let originalBytes: Int
+    let compressionQuality: CGFloat
+    let didDownsample: Bool
 
     var isUnderLimit: Bool {
         data.count <= ProfileImagePreprocessor.maxBytes
@@ -41,7 +51,12 @@ struct ProfileImagePreprocessResult: Equatable, Sendable {
         self.pixelSize = processedImage.pixelSize
         self.originalPixelSize = processedImage.originalPixelSize
         self.sourceFormat = processedImage.sourceFormat
+        self.originalUTI = processedImage.originalUTI
+        self.originalMimeType = processedImage.originalMimeType
+        self.orientation = processedImage.orientation
         self.originalBytes = processedImage.originalBytes
+        self.compressionQuality = processedImage.compressionQuality
+        self.didDownsample = processedImage.didDownsample
     }
 }
 
@@ -62,8 +77,15 @@ extension ProfileImagePreprocessorError: LocalizedError {
 }
 
 struct ProfileImagePreprocessor {
-    static let maxBytes = 1 * 1024 * 1024
+    static let maxBytes: Int = 1 * 1024 * 1024
+    static let targetBytes: Int = 900 * 1024
     private let preprocessor = ImageUploadPreprocessor(maxInitialPixel: 1_024)
+
+    func processForProfileUpload(data: Data, originalFileName: String) async throws -> ProfileImagePreprocessResult {
+        try await Task.detached(priority: .userInitiated) {
+            try process(data: data, originalFileName: originalFileName)
+        }.value
+    }
 
     func process(data: Data, originalFileName: String) throws -> ProfileImagePreprocessResult {
         ProfileImagePreprocessResult(processedImage: try processImage(data: data, originalFileName: originalFileName))
@@ -82,20 +104,24 @@ struct ProfileImagePreprocessor {
                     filename: originalFileName,
                     mimeType: mimeType(from: originalFileName),
                     purpose: .profile,
-                    targetLimitBytes: Self.maxBytes
+                    targetLimitBytes: Self.targetBytes
                 )
             )
-            let fileExtension = (output.filename as NSString).pathExtension.lowercased()
             return ProcessedProfileImage(
                 data: output.data,
-                mimeType: output.mimeType,
-                fileExtension: fileExtension.isEmpty ? "jpg" : fileExtension,
-                filename: output.mimeType == "image/png" ? "profile.png" : "profile.jpg",
+                mimeType: "image/jpeg",
+                fileExtension: "jpg",
+                filename: "profile.jpg",
                 pixelSize: CGSize(width: output.width, height: output.height),
                 originalPixelSize: sourceMetadata.size,
                 sourceFormat: sourceMetadata.format,
+                originalUTI: sourceMetadata.uti,
+                originalMimeType: sourceMetadata.mimeType,
+                orientation: sourceMetadata.orientation,
                 byteSize: output.data.count,
-                originalBytes: data.count
+                originalBytes: data.count,
+                compressionQuality: output.compressionQuality,
+                didDownsample: output.didDownsample
             )
         } catch ImageUploadPreprocessorError.unsupportedType,
                 ImageUploadPreprocessorError.cannotEncode {
@@ -119,22 +145,32 @@ struct ProfileImagePreprocessor {
         }
     }
 
-    private static func sourceMetadata(data: Data, filename: String) -> (size: CGSize, format: String) {
+    private static func sourceMetadata(data: Data, filename: String) -> (size: CGSize, format: String, uti: String, mimeType: String, orientation: String) {
         let fallbackExtension = (filename as NSString).pathExtension.lowercased()
         let fallbackFormat = fallbackExtension.isEmpty ? "unknown" : fallbackExtension
         let options = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
-            return (.zero, fallbackFormat)
+            return (.zero, fallbackFormat, "unknown", "unknown", "unknown")
         }
 
         let typeIdentifier = CGImageSourceGetType(source) as String?
-        let format = typeIdentifier.flatMap { UTType($0)?.preferredFilenameExtension } ?? fallbackFormat
+        let sourceType = typeIdentifier.flatMap { UTType($0) }
+        let format = sourceType?.preferredFilenameExtension ?? fallbackFormat
+        let mimeType = sourceType?.preferredMIMEType ?? "unknown"
+        let uti = typeIdentifier ?? "unknown"
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
-            return (.zero, format)
+            return (.zero, format, uti, mimeType, "unknown")
         }
 
         let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue ?? 0
         let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue ?? 0
-        return (CGSize(width: width, height: height), format)
+        let orientationValue = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue
+        return (
+            CGSize(width: width, height: height),
+            format,
+            uti,
+            mimeType,
+            orientationValue.map(String.init) ?? "unknown"
+        )
     }
 }

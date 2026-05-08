@@ -121,7 +121,7 @@ struct AuthRepositoryImpl: AuthRepository {
             throw NetworkError.decoding
         }
 
-        return profileImage
+        return resolveProfileImagePath(profileImage) ?? profileImage
     }
 
     func updateDeviceToken(_ deviceToken: String) async throws {

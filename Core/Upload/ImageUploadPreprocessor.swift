@@ -32,6 +32,8 @@ struct ImageUploadPreprocessOutput: Equatable, Sendable {
     let filename: String
     let width: Int
     let height: Int
+    let compressionQuality: CGFloat
+    let didDownsample: Bool
 }
 
 enum ImageUploadPreprocessorError: Error, Equatable {
@@ -85,7 +87,9 @@ struct ImageUploadPreprocessor {
                 mimeType: normalizedMimeType == "image/jpg" ? "image/jpeg" : normalizedMimeType,
                 filename: normalizedFilename(input.filename, mimeType: normalizedMimeType),
                 width: Int(originalImage.size.width),
-                height: Int(originalImage.size.height)
+                height: Int(originalImage.size.height),
+                compressionQuality: 1,
+                didDownsample: false
             )
         }
 
@@ -94,6 +98,7 @@ struct ImageUploadPreprocessor {
         var pixelLimit = min(max(originalImage.size.width, originalImage.size.height), preferredMaxPixel)
         while pixelLimit >= 480 {
             let candidate = resize(originalImage, maxPixel: pixelLimit) ?? originalImage
+            let didDownsample = max(candidate.size.width, candidate.size.height) < max(originalImage.size.width, originalImage.size.height)
             if input.purpose != .profile,
                hasAlpha,
                let pngData = candidate.pngData(),
@@ -105,7 +110,9 @@ struct ImageUploadPreprocessor {
                     mimeType: "image/png",
                     filename: replacingExtension(of: input.filename, with: "png"),
                     width: Int(candidate.size.width),
-                    height: Int(candidate.size.height)
+                    height: Int(candidate.size.height),
+                    compressionQuality: 1,
+                    didDownsample: didDownsample
                 )
             }
 
@@ -119,7 +126,9 @@ struct ImageUploadPreprocessor {
                         mimeType: "image/jpeg",
                         filename: replacingExtension(of: input.filename, with: "jpg"),
                         width: Int(candidate.size.width),
-                        height: Int(candidate.size.height)
+                        height: Int(candidate.size.height),
+                        compressionQuality: quality,
+                        didDownsample: didDownsample
                     )
                 }
             }

@@ -78,6 +78,7 @@ final class APIClient: APIClientProtocol {
     ) async throws -> PreparedAPIResponse {
         let request = try await requestBuilder.build(for: endpoint)
         logRequestBodyIfNeeded(endpoint: endpoint, request: request)
+        logProfileImageUploadRequestIfNeeded(endpoint: endpoint, request: request)
         logRequestStartedIfNeeded(endpoint: endpoint)
 
         if let cacheDescriptor = cacheDescriptor(
@@ -157,6 +158,12 @@ final class APIClient: APIClientProtocol {
             let durationMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1_000)
             Logger.shared.debug(
                 "[Network] response path=\(endpoint.path) status=\(httpResponse.statusCode) durationMs=\(durationMs) requestID=\(requestID)"
+            )
+            logProfileImageUploadResponseIfNeeded(
+                endpoint: endpoint,
+                statusCode: httpResponse.statusCode,
+                durationMs: durationMs,
+                data: data
             )
 
             switch httpResponse.statusCode {
@@ -260,6 +267,41 @@ final class APIClient: APIClientProtocol {
 
         Logger.shared.debug(
             "[Auth] kakao login request body endpoint=/v1/users/login/kakao oauthTokenSummary=\(SensitiveLogRedactor.summary(for: oauthToken)) deviceTokenSummary=\(SensitiveLogRedactor.summary(for: deviceToken))"
+        )
+#endif
+    }
+
+    private func logProfileImageUploadRequestIfNeeded<ResponseDTO: Decodable & Sendable>(
+        endpoint: Endpoint<ResponseDTO>,
+        request: URLRequest
+    ) {
+#if DEBUG
+        guard endpoint.path == "/v1/users/profile/image",
+              endpoint.method == .post else {
+            return
+        }
+
+        let diagnostics = multipartFileDiagnostics(from: request)
+        Logger(category: "ProfileImageUpload").debug(
+            "[ProfileImageUpload] request path=/v1/users/profile/image field=\(diagnostics.fieldName) filename=\(diagnostics.fileName) mime=\(diagnostics.mimeType) byteSize=\(diagnostics.byteSize) underLimit=\(diagnostics.byteSize <= 1 * 1024 * 1024) hasAuthorization=\(request.value(forHTTPHeaderField: HTTPHeaderField.authorization)?.isEmpty == false) hasSesacKey=\(request.value(forHTTPHeaderField: HTTPHeaderField.sesacKey)?.isEmpty == false)"
+        )
+#endif
+    }
+
+    private func logProfileImageUploadResponseIfNeeded<ResponseDTO: Decodable & Sendable>(
+        endpoint: Endpoint<ResponseDTO>,
+        statusCode: Int,
+        durationMs: Int,
+        data: Data
+    ) {
+#if DEBUG
+        guard endpoint.path == "/v1/users/profile/image",
+              endpoint.method == .post else {
+            return
+        }
+
+        Logger(category: "ProfileImageUpload").debug(
+            "[ProfileImageUpload] response status=\(statusCode) durationMs=\(durationMs) responseProfileImage=\(profileImagePath(from: data) ?? "nil")"
         )
 #endif
     }
@@ -425,6 +467,58 @@ final class APIClient: APIClientProtocol {
             return []
         }
         return object.keys.sorted()
+    }
+
+    private func multipartFileDiagnostics(from request: URLRequest) -> (fieldName: String, fileName: String, mimeType: String, byteSize: Int) {
+        guard let body = request.httpBody,
+              let contentType = request.value(forHTTPHeaderField: HTTPHeaderField.contentType),
+              let boundary = contentType.components(separatedBy: "boundary=").last,
+              let headerEndRange = body.range(of: Data("\r\n\r\n".utf8)) else {
+            return ("unknown", "unknown", "unknown", request.httpBody?.count ?? 0)
+        }
+
+        let headerData = body[..<headerEndRange.lowerBound]
+        let header = String(decoding: headerData, as: UTF8.self)
+        let contentStart = headerEndRange.upperBound
+        let closingBoundary = Data("\r\n--\(boundary)--".utf8)
+        let fileByteSize: Int
+        if let closingRange = body.range(of: closingBoundary, in: contentStart..<body.endIndex) {
+            fileByteSize = max(0, closingRange.lowerBound - contentStart)
+        } else {
+            fileByteSize = max(0, body.count - contentStart)
+        }
+
+        return (
+            quotedValue(named: "name", in: header) ?? "unknown",
+            quotedValue(named: "filename", in: header) ?? "unknown",
+            headerLineValue(named: "Content-Type", in: header) ?? "unknown",
+            fileByteSize
+        )
+    }
+
+    private func quotedValue(named name: String, in string: String) -> String? {
+        let marker = "\(name)=\""
+        guard let startRange = string.range(of: marker) else { return nil }
+        let valueStart = startRange.upperBound
+        guard let endRange = string[valueStart...].range(of: "\"") else { return nil }
+        return String(string[valueStart..<endRange.lowerBound])
+    }
+
+    private func headerLineValue(named name: String, in string: String) -> String? {
+        string
+            .components(separatedBy: "\r\n")
+            .first { $0.lowercased().hasPrefix("\(name.lowercased()):") }?
+            .split(separator: ":", maxSplits: 1)
+            .last
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    private func profileImagePath(from data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let profileImage = object["profileImage"] as? String else {
+            return nil
+        }
+        return profileImage
     }
 
     private func maskedPaymentValidationBody(from data: Data?) -> String {

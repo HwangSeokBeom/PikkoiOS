@@ -132,13 +132,12 @@ final class ProfilePresenter: ObservableObject {
             let processed: ProfileImagePreprocessResult
             do {
 #if DEBUG
-                Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] originalType=\(fileName) originalBytes=\(data.count)")
+                Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] selectedFilename=\(fileName) originalByteSize=\(data.count)")
 #endif
-                processed = try await Task.detached(priority: .userInitiated) {
-                    try ProfileImagePreprocessor().process(data: data, originalFileName: fileName)
-                }.value
+                processed = try await ProfileImagePreprocessor().processForProfileUpload(data: data, originalFileName: fileName)
 #if DEBUG
-                Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] originalType=\(processed.sourceFormat) originalPixels=\(Int(processed.originalPixelSize.width))x\(Int(processed.originalPixelSize.height)) originalBytes=\(processed.originalBytes) outputType=\(processed.mimeType) outputPixels=\(Int(processed.pixelSize.width))x\(Int(processed.pixelSize.height)) outputBytes=\(processed.data.count)")
+                Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] originalUTI=\(processed.originalUTI) originalMime=\(processed.originalMimeType) originalByteSize=\(processed.originalBytes) originalPixelSize=\(Int(processed.originalPixelSize.width))x\(Int(processed.originalPixelSize.height)) orientation=\(processed.orientation)")
+                Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] outputMime=\(processed.mimeType) outputExtension=\(processed.fileExtension) outputByteSize=\(processed.data.count) outputPixelSize=\(Int(processed.pixelSize.width))x\(Int(processed.pixelSize.height)) compressionQuality=\(String(format: "%.2f", processed.compressionQuality)) downsampled=\(processed.didDownsample)")
 #endif
             } catch {
 #if DEBUG
@@ -167,10 +166,7 @@ final class ProfilePresenter: ObservableObject {
                 fileName: processed.fileName,
                 mimeType: processed.mimeType
             )
-            let confirmedProfile = try? await interactor.fetchMyProfile()
-            let confirmedPath = confirmedProfile?.profileImagePath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-            let oldNormalizedPath = oldProfileImagePath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-            let effectiveUploadedPath = (confirmedPath != nil && confirmedPath != oldNormalizedPath) ? confirmedPath! : uploadedPath
+            let effectiveUploadedPath = uploadedPath
 #if DEBUG
             Logger(category: "ProfileImageUpdate").debug("[ProfileImageUpdate] uploadStatus=200 responseImageURL=\(uploadedPath)")
             Logger(category: "ProfileImageUpload").info("[ProfileImageUpload] success requestID=\(requestID) imageURLChanged=\(effectiveUploadedPath != oldProfileImagePath)")
@@ -179,16 +175,11 @@ final class ProfilePresenter: ObservableObject {
             await invalidateProfileImageCache(oldPath: oldProfileImagePath, newPath: effectiveUploadedPath)
             let oldConfirmedProfileImagePath = viewState.profileImagePath
             sessionStore.updateProfile(
-                nick: confirmedProfile?.nick ?? sessionStore.currentSession?.displayName ?? viewState.displayName,
+                nick: sessionStore.currentSession?.displayName ?? viewState.displayName,
                 profileImagePath: effectiveUploadedPath
             )
             Logger(category: "ProfileState").debug("[ProfileState] imageURLUpdated userId=\(sessionStore.currentUserID ?? "unknown") imageURL=\(effectiveUploadedPath)")
             Logger(category: "ProfileImage").debug("[ProfileImage] currentUser updated oldProfileImageExists=\(oldConfirmedProfileImagePath?.isEmpty == false) newProfileImageExists=\(!effectiveUploadedPath.isEmpty)")
-            if let confirmedProfile {
-                viewState.displayName = confirmedProfile.nick
-                viewState.email = confirmedProfile.email
-                viewState.phoneNumber = confirmedProfile.phoneNumber ?? ""
-            }
             viewState.profileImagePath = effectiveUploadedPath
             viewState.profileImageCacheRevision += 1
             viewState.editorProfileImagePath = effectiveUploadedPath
@@ -197,6 +188,30 @@ final class ProfilePresenter: ObservableObject {
             viewState.profileImageUploadErrorMessage = nil
             viewState.editorInfoMessage = "프로필 이미지를 업로드했어요."
             viewState.profileImageUpdateState = .success
+
+            do {
+                let confirmedProfile = try await interactor.fetchMyProfile()
+                let confirmedPath = confirmedProfile.profileImagePath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                let ignoredAsStale = confirmedPath != nil && confirmedPath != effectiveUploadedPath
+#if DEBUG
+                Logger(category: "ProfileImageRefetch").debug("[ProfileImageRefetch] uncached=true status=success returnedProfileImage=\(confirmedPath ?? "nil") ignoredAsStale=\(ignoredAsStale)")
+#endif
+                viewState.displayName = confirmedProfile.nick
+                viewState.email = confirmedProfile.email
+                viewState.phoneNumber = confirmedProfile.phoneNumber ?? ""
+                sessionStore.updateProfile(
+                    nick: confirmedProfile.nick,
+                    profileImagePath: effectiveUploadedPath
+                )
+                if !ignoredAsStale {
+                    viewState.profileImagePath = effectiveUploadedPath
+                    viewState.editorProfileImagePath = effectiveUploadedPath
+                }
+            } catch {
+#if DEBUG
+                Logger(category: "ProfileImageRefetch").warning("[ProfileImageRefetch] uncached=true status=\(statusCodeDescription(from: error)) returnedProfileImage=nil ignoredAsStale=false")
+#endif
+            }
         } catch {
             let message = resolveProfileImageUploadMessage(from: error)
             viewState.profileImageUploadErrorMessage = message
@@ -283,9 +298,11 @@ final class ProfilePresenter: ObservableObject {
     private func invalidateProfileImageCache(oldPath: String?, newPath: String?) async {
         let paths = [oldPath, newPath].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         Logger(category: "ProfileImageCache").debug("[ProfileImageCache] invalidate oldURL=\(oldPath ?? "nil") newURL=\(newPath ?? "nil")")
+        var cacheInvalidated = false
         for path in Set(paths) {
             do {
                 try await imageLoader.removeCachedImage(for: path)
+                cacheInvalidated = true
 #if DEBUG
                 Logger(category: "ProfileImage").debug("[ProfileImage] cache invalidated oldUrlExists=\(oldPath?.isEmpty == false) newUrlExists=\(newPath?.isEmpty == false)")
 #endif
@@ -295,6 +312,9 @@ final class ProfilePresenter: ObservableObject {
 #endif
             }
         }
+#if DEBUG
+        Logger(category: "ProfileImageUpdate").debug("[ProfileImageUpdate] oldURL=\(oldPath ?? "nil") newURL=\(newPath ?? "nil") cacheInvalidated=\(cacheInvalidated) failedCacheInvalidated=\(cacheInvalidated) optimisticApplied=true")
+#endif
     }
 
     private func routeToMyPosts() {
