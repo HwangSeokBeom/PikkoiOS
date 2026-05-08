@@ -670,6 +670,51 @@ final class VideoListPresenterTests: XCTestCase {
         XCTAssertFalse(presenter.viewState.isShortsPlaying)
     }
 
+    func testScrollSentinelDoesNotBecomeActiveVideoID() async {
+        let presenter = VideoListPresenter(
+            interactor: StubVideoListInteractor(pages: [CursorPage(items: [makeVideo()], nextCursor: nil)]),
+            router: SpyVideoListRouter()
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.visibleVideoChanged("video-scroll-top"))
+
+        XCTAssertEqual(presenter.viewState.activeShortsVideoID, "video-1")
+        XCTAssertTrue(presenter.viewState.isShortsPlaying)
+    }
+
+    func testVisibilityChangesAreIgnoredWhileOpeningOriginal() async {
+        let router = SpyVideoListRouter()
+        let presenter = VideoListPresenter(
+            interactor: StubVideoListInteractor(pages: [CursorPage(items: [makeVideo(), makeVideo(videoId: "video-2")], nextCursor: nil)]),
+            router: router
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.originalVideoTapped("video-1"))
+        await presenter.send(.visibleVideoChanged("video-2"))
+
+        XCTAssertEqual(router.routedVideo?.videoId, "video-1")
+        XCTAssertNil(presenter.viewState.activeShortsVideoID)
+        XCTAssertEqual(presenter.viewState.openingOriginalVideoID, "video-1")
+    }
+
+    func testShortsAspectModeDefaultsToPreserveOriginalRatio() {
+        XCTAssertEqual(ShortsVideoAspectPolicy.defaultVideoGravity, .resizeAspect)
+    }
+
+    func testHorizontalShortsAspectFitFrameIsNotCropped() {
+        let frame = ShortsVideoAspectPolicy.aspectFitFrame(
+            contentSize: CGSize(width: 1920, height: 1080),
+            containerSize: CGSize(width: 390, height: 844)
+        )
+
+        XCTAssertEqual(frame.width, 390, accuracy: 0.001)
+        XCTAssertEqual(frame.height, 219.375, accuracy: 0.001)
+        XCTAssertGreaterThan(frame.minY, 0)
+        XCTAssertLessThan(frame.maxY, 844)
+    }
+
     func testTabBarLayoutMetricGuaranteesHorizontalInset() {
         let compact = RootTabBarLayoutMetrics.make(screenWidth: 320, safeAreaBottom: 34)
         let large = RootTabBarLayoutMetrics.make(screenWidth: 430, safeAreaBottom: 34)
@@ -763,6 +808,31 @@ final class VideoPlayerTests: XCTestCase {
 
         XCTAssertEqual(repository.fetchStreamCallCount, 1)
         XCTAssertEqual(viewModel.viewState.playbackState, .failed("이 영상을 재생할 수 없어요."))
+    }
+
+    func testShortsToDetailTransferKeepsCoordinatorActiveAgainstStaleShortsDeactivate() {
+        VideoPlaybackCoordinator.shared.resetForTesting()
+        let item = AVPlayerItem(url: URL(string: "https://example.com/master.m3u8?token=abc")!)
+        let player = AVPlayer(playerItem: item)
+
+        VideoPlaybackCoordinator.shared.activate(
+            player: player,
+            videoId: "video-1",
+            context: .shorts,
+            item: item,
+            generation: 1,
+            stream: makeStream(),
+            onTick: nil
+        )
+
+        XCTAssertTrue(VideoPlaybackCoordinator.shared.transferToDetail(videoId: "video-1"))
+        VideoPlaybackCoordinator.shared.deactivate(videoId: "video-1", context: .shorts)
+
+        let session = VideoPlaybackCoordinator.shared.currentPlaybackSession(videoId: "video-1", context: .detail)
+        XCTAssertNotNil(session)
+        XCTAssertTrue(session?.player === player)
+        XCTAssertTrue(session?.item === item)
+        VideoPlaybackCoordinator.shared.resetForTesting()
     }
 }
 

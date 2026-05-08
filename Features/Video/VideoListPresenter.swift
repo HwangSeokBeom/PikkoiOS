@@ -61,18 +61,36 @@ final class VideoListPresenter: ObservableObject {
         case .videoAppeared(let videoID):
             await loadNextPageIfNeeded(triggeredBy: videoID)
         case .visibleVideoChanged(let videoID):
+            let target = ShortsVisibleTarget(rawValue: videoID)
+            if viewState.openingOriginalVideoID != nil {
+                logger.debug("[ShortsVisibility] update ignored reason=openOriginalInProgress target=\(target.logValue)")
+                return
+            }
+            guard case .video(let visibleVideoID) = target else {
+                logger.debug("[ShortsVisibility] target=\(target.logValue) ignoredForPlayback=true")
+                logger.debug("[ShortsPlayer] activeVideo unchanged reason=sentinelVisible")
+                return
+            }
+            guard videos.contains(where: { $0.videoId == visibleVideoID }) else {
+                logger.debug("[ShortsPlayer] invalidVideoId ignored value=\(visibleVideoID)")
+                return
+            }
             let previousActiveVideoID = viewState.activeShortsVideoID
             let nextState = ShortsPlayerStateReducer.visibleItemChanged(
                 currentVideoID: viewState.activeShortsVideoID,
                 isPlaying: viewState.isShortsPlaying,
-                visibleVideoID: videoID
+                visibleVideoID: visibleVideoID
             )
             viewState.activeShortsVideoID = nextState.activeVideoID
             viewState.isShortsPlaying = nextState.isPlaying
             if previousActiveVideoID != nextState.activeVideoID {
-                logger.debug("[ShortsPlayer] activeVideoId changed from=\(previousActiveVideoID ?? "nil") to=\(nextState.activeVideoID ?? "nil")")
+                logger.debug("[ShortsPlayer] activeVideo changed from=\(previousActiveVideoID ?? "nil") to=\(nextState.activeVideoID ?? "nil") reason=visibleVideo")
             }
         case .videoTapped(let videoID):
+            guard videos.contains(where: { $0.videoId == videoID }) else {
+                logger.debug("[ShortsPlayer] invalidVideoId ignored value=\(videoID)")
+                return
+            }
             let nextState = ShortsPlayerStateReducer.togglePlayback(
                 currentVideoID: viewState.activeShortsVideoID,
                 isPlaying: viewState.isShortsPlaying,
@@ -102,13 +120,18 @@ final class VideoListPresenter: ObservableObject {
 
             logger.debug("[ShortsOriginal] open requested videoId=\(video.videoId) source=shorts")
             logger.debug("[ShortsOriginal] transition state from=active to=openingOriginal videoId=\(video.videoId)")
-            logger.debug("[ShortsOriginal] player policy=restartInDetail videoId=\(video.videoId)")
-            logger.debug("[VideoPlayback] stop reason=shortsOriginalTransition videoId=\(video.videoId)")
+            logger.debug("[ShortsOriginal] player policy=transferToDetail videoId=\(video.videoId)")
+            logger.debug("[ShortsOriginal] freeze visibility updates videoId=\(video.videoId)")
             viewState.pendingDisappearReason = .openOriginal
             viewState.openingOriginalVideoID = video.videoId
             viewState.activeShortsVideoID = nil
             viewState.isShortsPlaying = false
-            logger.debug("[ShortsOriginal] route append videoId=\(video.videoId) destination=videoDetail")
+            let didTransferPlayer = VideoPlaybackCoordinator.shared.transferToDetail(videoId: video.videoId)
+            if didTransferPlayer {
+                logger.debug("[ShortsOriginal] route append videoId=\(video.videoId) destination=videoDetail afterPlayerTransition=true")
+            } else {
+                logger.debug("[ShortsOriginal] route append videoId=\(video.videoId) destination=videoDetail afterPlayerTransition=false reason=noActivePlaybackSession")
+            }
             router.routeToOriginalVideo(video: video)
         case .originalRouteCleared:
             viewState.openingOriginalVideoID = nil
@@ -463,6 +486,40 @@ final class VideoListPresenter: ObservableObject {
         }
 
         return error.localizedDescription
+    }
+}
+
+enum ShortsVisibleTarget: Equatable {
+    case topSentinel
+    case video(id: String)
+    case bottomSentinel
+    case invalid(String)
+
+    init(rawValue: String) {
+        let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch normalized {
+        case "video-scroll-top":
+            self = .topSentinel
+        case "video-scroll-bottom":
+            self = .bottomSentinel
+        case "":
+            self = .invalid(rawValue)
+        default:
+            self = .video(id: normalized)
+        }
+    }
+
+    var logValue: String {
+        switch self {
+        case .topSentinel:
+            return "topSentinel"
+        case .bottomSentinel:
+            return "bottomSentinel"
+        case .video(let id):
+            return "video(\(id))"
+        case .invalid(let value):
+            return value.isEmpty ? "invalid(empty)" : "invalid(\(value))"
+        }
     }
 }
 

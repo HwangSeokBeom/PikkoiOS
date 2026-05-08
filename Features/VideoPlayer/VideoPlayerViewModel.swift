@@ -96,13 +96,17 @@ final class VideoPlayerViewModel: ObservableObject {
         itemStatusObservation?.invalidate()
         playerStatusObservation?.invalidate()
         playerTimeControlObservation?.invalidate()
-        Task { @MainActor [videoId = playbackVideoID] in
-            VideoPlaybackCoordinator.shared.deactivate(videoId: videoId)
+        Task { @MainActor [videoId = playbackVideoID, context] in
+            VideoPlaybackCoordinator.shared.deactivate(videoId: videoId, context: context)
         }
     }
 
     func loadStreamIfNeeded() async {
         guard !hasLoadedInitialStream else { return }
+        if adoptTransferredPlaybackIfAvailable() {
+            hasLoadedInitialStream = true
+            return
+        }
         hasLoadedInitialStream = true
         await loadStream(shouldAutoplay: true, reason: "initialLoad")
     }
@@ -153,7 +157,7 @@ final class VideoPlayerViewModel: ObservableObject {
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         nowPlayingManager.clear(reason: "dismissed")
-        VideoPlaybackCoordinator.shared.deactivate(videoId: viewState.video.videoId)
+        VideoPlaybackCoordinator.shared.deactivate(videoId: viewState.video.videoId, context: context)
         playerStatusObservation?.invalidate()
         playerStatusObservation = nil
         playerTimeControlObservation?.invalidate()
@@ -170,9 +174,24 @@ final class VideoPlayerViewModel: ObservableObject {
             return
         }
         isDetachedFromView = true
+        if reason == "openOriginal",
+           context == .shorts,
+           VideoPlaybackCoordinator.shared.currentContext == .detail,
+           VideoPlaybackCoordinator.shared.currentVideoId == viewState.video.videoId {
+            removeCurrentItemObserver()
+            playerStatusObservation?.invalidate()
+            playerStatusObservation = nil
+            playerTimeControlObservation?.invalidate()
+            playerTimeControlObservation = nil
+            cancelSubtitleLoading(reason: reason)
+            logger.debug("[ShortsPlayer] global cleanup skipped reason=ownershipMovedToDetail videoId=\(viewState.video.videoId)")
+            logger.debug("[ShortsPlayer] detachOnly completed videoId=\(viewState.video.videoId) didNotStopCoordinator=true didNotRemoveGlobalTimeObserver=true")
+            logger.debug("[VideoPlayer] context=\(context.rawValue) detach reason=\(reason) videoId=\(viewState.video.videoId)")
+            return
+        }
         cancelPendingPlayback(reason: reason)
         player?.pause()
-        VideoPlaybackCoordinator.shared.deactivate(videoId: viewState.video.videoId)
+        VideoPlaybackCoordinator.shared.deactivate(videoId: viewState.video.videoId, context: context)
         if case .playing = viewState.playbackState {
             setPlaybackState(.paused)
         }
@@ -530,15 +549,31 @@ final class VideoPlayerViewModel: ObservableObject {
         switch state {
         case .playing:
             logger.debug("[VideoPlayer] context=\(context.rawValue) state=playing videoId=\(viewState.video.videoId)")
-            nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: viewState.currentTime, rate: 1, force: true)
+            if canUpdateSharedPlaybackSideEffects {
+                nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: viewState.currentTime, rate: 1, force: true)
+            } else {
+                logger.debug("[NowPlaying] update skipped reason=sessionMismatch videoId=\(viewState.video.videoId)")
+            }
         case .paused:
             logger.debug("[VideoPlayer] context=\(context.rawValue) state=paused videoId=\(viewState.video.videoId)")
-            nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: viewState.currentTime, rate: 0, force: true)
+            if canUpdateSharedPlaybackSideEffects {
+                nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: viewState.currentTime, rate: 0, force: true)
+            } else {
+                logger.debug("[NowPlaying] update skipped reason=sessionMismatch videoId=\(viewState.video.videoId)")
+            }
         case .ready:
             logger.debug("[VideoPlayer] context=\(context.rawValue) state=ready videoId=\(viewState.video.videoId)")
-            nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: viewState.currentTime, rate: 0, force: true)
+            if canUpdateSharedPlaybackSideEffects {
+                nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: viewState.currentTime, rate: 0, force: true)
+            } else {
+                logger.debug("[NowPlaying] update skipped reason=sessionMismatch videoId=\(viewState.video.videoId)")
+            }
         case .failed, .expiredOrUnavailable:
-            nowPlayingManager.clear(reason: "failed")
+            if canUpdateSharedPlaybackSideEffects {
+                nowPlayingManager.clear(reason: "failed")
+            } else {
+                logger.debug("[NowPlaying] update skipped reason=sessionMismatch videoId=\(viewState.video.videoId)")
+            }
         default:
             break
         }
@@ -553,6 +588,10 @@ final class VideoPlayerViewModel: ObservableObject {
         do {
             logger.debug("[NowPlaying] artwork load requested videoId=\(viewState.video.videoId) url=\(thumbnailURL)")
             let data = try await imageLoader.imageData(for: thumbnailURL)
+            guard canUpdateSharedPlaybackSideEffects else {
+                logger.debug("[NowPlaying] update skipped reason=sessionMismatch videoId=\(viewState.video.videoId)")
+                return
+            }
             nowPlayingManager.updateMetadata(video: viewState.video, artworkData: data)
         } catch {
             logger.debug("[NowPlaying] artwork fallback reason=loadFailed videoId=\(viewState.video.videoId)")
@@ -1334,6 +1373,7 @@ final class VideoPlayerViewModel: ObservableObject {
             context: context,
             item: item,
             generation: generation,
+            stream: viewState.stream,
             onTick: { [weak self] tick in
                 self?.handlePlaybackTick(tick)
             }
@@ -1343,6 +1383,7 @@ final class VideoPlayerViewModel: ObservableObject {
     private func handlePlaybackTick(_ tick: VideoPlaybackTick) {
         guard tick.videoId == viewState.video.videoId,
               tick.context == context,
+              VideoPlaybackCoordinator.shared.isCurrentSession(tick.sessionId, videoId: tick.videoId, context: context, generation: tick.generation),
               tick.generation == playbackGeneration else {
             logger.debug("[PlayerTimeObserver] tick skipped reason=inactiveSession videoId=\(tick.videoId)")
             return
@@ -1365,6 +1406,56 @@ final class VideoPlayerViewModel: ObservableObject {
         nowPlayingManager.updatePlaybackState(player: tick.player, duration: viewState.duration, elapsed: viewState.currentTime)
         updateActiveCaption(at: viewState.currentTime)
         logger.debug("[PlayerTimeObserver] tick handled elapsed=\(Int(viewState.currentTime)) duration=\(Int(viewState.duration ?? 0)) rate=\(tick.player.rate)")
+    }
+
+    private var canUpdateSharedPlaybackSideEffects: Bool {
+        if VideoPlaybackCoordinator.shared.currentVideoId == nil {
+            return true
+        }
+        guard let player else { return false }
+        guard VideoPlaybackCoordinator.shared.isCurrentSession(
+            VideoPlaybackCoordinator.shared.currentSessionId,
+            videoId: viewState.video.videoId,
+            context: context
+        ) else {
+            return false
+        }
+        return VideoPlaybackCoordinator.shared.currentPlaybackSession(videoId: viewState.video.videoId, context: context)?.player === player
+    }
+
+    private func adoptTransferredPlaybackIfAvailable() -> Bool {
+        guard context == .detail,
+              let session = VideoPlaybackCoordinator.shared.currentPlaybackSession(
+                videoId: viewState.video.videoId,
+                context: .detail
+              ) else {
+            return false
+        }
+
+        didTearDown = false
+        isDetachedFromView = false
+        player = session.player
+        if let stream = session.stream {
+            viewState.stream = stream
+            configureSubtitleSelection(for: stream)
+        }
+        if let generation = session.itemGeneration {
+            playbackGeneration = generation
+        }
+        installPlayerObserversIfNeeded(for: session.player)
+        installItemStatusObserver(
+            for: session.item,
+            quality: viewState.effectivePlaybackQuality ?? viewState.userSelectedQuality,
+            authMode: currentAttemptAuthMode ?? .tokenOnly,
+            generation: playbackGeneration,
+            failureMessage: nil
+        )
+        updatePlaybackTiming(from: session.item)
+        nowPlayingManager.configureSessionIfNeeded(player: session.player, videoId: viewState.video.videoId, context: context)
+        activatePlaybackCoordinator(for: session.player, item: session.item, generation: playbackGeneration)
+        setPlaybackState(session.player.rate == 0 ? .ready : .playing)
+        logger.debug("[VideoPlayer] context=detail adoptedTransferredPlayback videoId=\(viewState.video.videoId) sessionId=\(session.sessionId ?? "nil")")
+        return true
     }
 
     private func updatePlaybackTiming(from item: AVPlayerItem?) {

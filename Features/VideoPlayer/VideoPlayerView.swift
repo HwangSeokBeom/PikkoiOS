@@ -641,10 +641,22 @@ struct VideoPlayerLayerView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIView {
         let view = PlayerContainerView()
-        view.playerLayer.player = player
-        view.playerLayer.videoGravity = videoGravity
+        guard let playerLayer = view.safePlayerLayer else {
+            Logger(category: "VideoPlayer").error("[CrashGuard] recoveredInvalidState area=PlayerContainerView reason=missingAVPlayerLayer videoId=\(videoId ?? "nil") context=\(self.context.rawValue)")
+            return view
+        }
+        playerLayer.player = player
+        playerLayer.videoGravity = videoGravity
+        view.videoId = videoId
+        view.context = self.context
+        view.selectedGravity = videoGravity
+        if self.context == .shorts {
+            Logger(category: "ShortsLayout").debug("[ShortsLayout] aspectMode=fit reason=preserveOriginalRatio")
+            Logger(category: "ShortsLayout").debug("[ShortsLayout] videoGravity=\(videoGravity.rawValue)")
+            Logger(category: "ShortsLayout").debug("[ShortsLayout] background=blurredThumbnail enabled=false")
+        }
         PictureInPictureManager.shared.setup(
-            playerLayer: view.playerLayer,
+            playerLayer: playerLayer,
             videoId: videoId,
             context: self.context,
             isEnabled: isPictureInPictureEnabled
@@ -654,10 +666,21 @@ struct VideoPlayerLayerView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIView, context: Context) {
         guard let uiView = uiView as? PlayerContainerView else { return }
-        uiView.playerLayer.player = player
-        uiView.playerLayer.videoGravity = videoGravity
+        guard let playerLayer = uiView.safePlayerLayer else {
+            Logger(category: "VideoPlayer").error("[CrashGuard] recoveredInvalidState area=PlayerContainerView reason=missingAVPlayerLayer videoId=\(videoId ?? "nil") context=\(self.context.rawValue)")
+            return
+        }
+        playerLayer.player = player
+        playerLayer.videoGravity = videoGravity
+        uiView.videoId = videoId
+        uiView.context = self.context
+        uiView.selectedGravity = videoGravity
+        if self.context == .shorts {
+            Logger(category: "ShortsLayout").debug("[ShortsLayout] aspectMode=fit reason=preserveOriginalRatio")
+            Logger(category: "ShortsLayout").debug("[ShortsLayout] aspectMode=fill skipped reason=defaultPreserveOriginal")
+        }
         PictureInPictureManager.shared.setup(
-            playerLayer: uiView.playerLayer,
+            playerLayer: playerLayer,
             videoId: videoId,
             context: self.context,
             isEnabled: isPictureInPictureEnabled
@@ -666,23 +689,41 @@ struct VideoPlayerLayerView: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
         guard let uiView = uiView as? PlayerContainerView else { return }
-        PictureInPictureManager.shared.detach(playerLayer: uiView.playerLayer)
-        uiView.playerLayer.player = nil
+        guard let playerLayer = uiView.safePlayerLayer else { return }
+        PictureInPictureManager.shared.detach(playerLayer: playerLayer)
+        playerLayer.player = nil
     }
 }
 
 private final class PlayerContainerView: UIView {
+    private let logger = Logger(category: "ShortsLayout")
+    var videoId: String?
+    var context: VideoPlaybackContext = .detail
+    var selectedGravity: AVLayerVideoGravity = .resizeAspect
+
     override static var layerClass: AnyClass {
         AVPlayerLayer.self
     }
 
-    var playerLayer: AVPlayerLayer {
-        layer as! AVPlayerLayer
+    var safePlayerLayer: AVPlayerLayer? {
+        guard let playerLayer = layer as? AVPlayerLayer else {
+            Logger(category: "VideoPlayer").error("[CrashGuard] forceUnwrapRemoved area=PlayerContainerView.playerLayer")
+            return nil
+        }
+        return playerLayer
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        guard let playerLayer = safePlayerLayer else { return }
         playerLayer.frame = bounds
+        guard context == .shorts else { return }
+        let presentationSize = playerLayer.player?.currentItem?.presentationSize ?? .zero
+        if presentationSize.width <= 0 || presentationSize.height <= 0 {
+            logger.debug("[ShortsLayout] presentationSize unknown fallback=aspectFit")
+        }
+        let contentFrame = ShortsVideoAspectPolicy.aspectFitFrame(contentSize: presentationSize, containerSize: bounds.size)
+        logger.debug("[ShortsLayout] containerSize=\(Int(bounds.width))x\(Int(bounds.height)) presentationSize=\(Int(presentationSize.width))x\(Int(presentationSize.height)) contentFrame=\(Int(contentFrame.origin.x)),\(Int(contentFrame.origin.y)),\(Int(contentFrame.width))x\(Int(contentFrame.height)) selectedGravity=\(selectedGravity.rawValue)")
     }
 }
 
@@ -695,6 +736,7 @@ final class PictureInPictureManager: NSObject, AVPictureInPictureControllerDeleg
     private var controller: AVPictureInPictureController?
     private var videoId: String?
     private var context: VideoPlaybackContext?
+    private var sessionId: String?
 
     func setup(
         playerLayer: AVPlayerLayer?,
@@ -704,6 +746,8 @@ final class PictureInPictureManager: NSObject, AVPictureInPictureControllerDeleg
     ) {
         let isSupported = AVPictureInPictureController.isPictureInPictureSupported()
         logger.debug("[PiP] support available=\(isSupported)")
+        let requestedSessionId = videoId.flatMap { VideoPlaybackCoordinator.shared.currentPlaybackSession(videoId: $0, context: context)?.sessionId }
+        logger.debug("[PiP] setup requested videoId=\(videoId ?? "nil") context=\(context.rawValue) sessionId=\(requestedSessionId ?? "nil")")
 
         guard isEnabled else {
             if self.playerLayer === playerLayer {
@@ -722,10 +766,27 @@ final class PictureInPictureManager: NSObject, AVPictureInPictureControllerDeleg
             return
         }
 
+        if self.playerLayer === playerLayer,
+           self.videoId == videoId,
+           self.context == context,
+           self.sessionId == requestedSessionId,
+           controller != nil {
+            logger.debug("[PiP] setup skipped reason=alreadyConfigured videoId=\(videoId ?? "nil") sessionId=\(requestedSessionId ?? "nil")")
+            return
+        }
+
+        if self.videoId == videoId,
+           self.context == .shorts,
+           context == .detail {
+            logger.debug("[PiP] ownership transfer from=shorts to=detail videoId=\(videoId ?? "nil")")
+        }
+
         self.playerLayer = playerLayer
         self.videoId = videoId
         self.context = context
+        self.sessionId = requestedSessionId
 
+        controller?.delegate = nil
         guard let pipController = AVPictureInPictureController(playerLayer: playerLayer) else {
             logger.debug("[PiP] setup skipped reason=unsupported")
             return
@@ -733,11 +794,19 @@ final class PictureInPictureManager: NSObject, AVPictureInPictureControllerDeleg
         pipController.delegate = self
         pipController.canStartPictureInPictureAutomaticallyFromInline = true
         controller = pipController
-        logger.debug("[PiP] setup videoId=\(videoId ?? "nil") context=\(context.rawValue) playerLayerExists=true")
+        logger.debug("[PiP] setup videoId=\(videoId ?? "nil") context=\(context.rawValue) sessionId=\(requestedSessionId ?? "nil") playerLayerExists=true")
     }
 
     func detach(playerLayer: AVPlayerLayer?) {
         guard self.playerLayer === playerLayer else { return }
+        if let videoId,
+           context == .shorts,
+           VideoPlaybackCoordinator.shared.currentContext == .detail,
+           VideoPlaybackCoordinator.shared.currentVideoId == videoId {
+            logger.debug("[PiP] teardown skipped reason=ownershipMovedToDetail videoId=\(videoId)")
+            return
+        }
+        let detachedVideoId = videoId
         if controller?.isPictureInPictureActive == true {
             controller?.stopPictureInPicture()
         }
@@ -746,6 +815,8 @@ final class PictureInPictureManager: NSObject, AVPictureInPictureControllerDeleg
         self.playerLayer = nil
         videoId = nil
         context = nil
+        sessionId = nil
+        logger.debug("[PiP] teardown reason=featureExit videoId=\(detachedVideoId ?? "nil")")
     }
 
     func start(reason: String) {

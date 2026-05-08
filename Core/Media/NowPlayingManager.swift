@@ -363,16 +363,27 @@ final class VideoPlaybackCoordinator {
     static let shared = VideoPlaybackCoordinator()
 
     private let logger = Logger(category: "VideoPlayback")
+    private let sessionLogger = Logger(category: "PlaybackSession")
     private weak var activePlayer: AVPlayer?
     private weak var activeItem: AVPlayerItem?
     private var activeVideoID: String?
     private var activeContext: VideoPlaybackContext?
     private var activeGeneration: Int?
+    private var activeSessionID: String?
+    private var activeStream: VideoStream?
     private var periodicTimeObserverRegistration: PeriodicTimeObserverRegistration?
     private var tickHandler: ((VideoPlaybackTick) -> Void)?
 
     var currentVideoId: String? {
         activeVideoID
+    }
+
+    var currentSessionId: String? {
+        activeSessionID
+    }
+
+    var currentContext: VideoPlaybackContext? {
+        activeContext
     }
 
     func activate(player: AVPlayer, videoId: String, context: VideoPlaybackContext) {
@@ -385,39 +396,121 @@ final class VideoPlaybackCoordinator {
         context: VideoPlaybackContext,
         item: AVPlayerItem?,
         generation: Int?,
+        stream: VideoStream? = nil,
         onTick: ((VideoPlaybackTick) -> Void)?
     ) {
         logger.debug("[PlaybackOwner] mutation on MainActor=\(Thread.isMainThread) source=activate")
         if let activeContext, activeContext != context {
-            logger.debug("[PlaybackOwner] activeContext changed from=\(activeContext.rawValue) to=\(context.rawValue)")
+            logger.debug("[PlaybackOwner] activeContext changed from=\(activeContext.rawValue) to=\(context.rawValue) videoId=\(videoId)")
         }
         if let activePlayer, activePlayer !== player {
             removePeriodicTimeObserver(videoId: activeVideoID)
         } else if activePlayer === player, activeVideoID == videoId, periodicTimeObserverRegistration != nil {
             logger.debug("[PlaybackOwner] duplicate player creation blocked videoId=\(videoId)")
         }
+        if activeSessionID == nil || activeVideoID != videoId || activePlayer !== player {
+            activeSessionID = UUID().uuidString
+            sessionLogger.debug("[PlaybackSession] created sessionId=\(activeSessionID ?? "nil") videoId=\(videoId) context=\(context.rawValue)")
+        }
         activePlayer = player
         activeItem = item
         activeVideoID = videoId
         activeContext = context
         activeGeneration = generation
+        if let stream {
+            activeStream = stream
+        }
         tickHandler = onTick
         logger.debug("[VideoPlayback] coordinator active videoId=\(videoId) context=\(context.rawValue)")
         logger.debug("[PlaybackOwner] currentItem replaced videoId=\(videoId) generation=\(generation.map(String.init) ?? "nil")")
         installPeriodicTimeObserverIfNeeded(for: player, item: item, videoId: videoId, context: context, generation: generation)
     }
 
-    func deactivate(videoId: String) {
+    func deactivate(videoId: String, context: VideoPlaybackContext) {
         guard activeVideoID == videoId else { return }
+        guard activeContext == context else {
+            if activeContext == .detail, context == .shorts {
+                sessionLogger.debug("[PlaybackSession] stale cleanup ignored source=shortsDetach reason=ownershipMovedToDetail videoId=\(videoId)")
+                logger.debug("[PlaybackOwner] coordinator inactive skipped reason=activeContextIsDetail videoId=\(videoId)")
+            }
+            return
+        }
         removePeriodicTimeObserver(videoId: videoId)
         activePlayer = nil
         activeItem = nil
         activeVideoID = nil
         activeContext = nil
         activeGeneration = nil
+        activeSessionID = nil
+        activeStream = nil
         tickHandler = nil
         logger.debug("[VideoPlayback] coordinator inactive videoId=\(videoId)")
     }
+
+    @discardableResult
+    func transferToDetail(videoId: String) -> Bool {
+        guard activeVideoID == videoId,
+              activeContext == .shorts,
+              activePlayer != nil,
+              activeItem != nil else {
+            logger.debug("[VideoPlayback] transfer skipped reason=noMatchingShortsSession videoId=\(videoId)")
+            return false
+        }
+
+        let sessionID = activeSessionID ?? UUID().uuidString
+        activeSessionID = sessionID
+        logger.debug("[VideoPlayback] transfer started from=shorts to=detail videoId=\(videoId)")
+        logger.debug("[PlaybackOwner] activeContext changed from=shorts to=detail videoId=\(videoId)")
+        logger.debug("[PlaybackOwner] currentItem reused reason=sameVideoOriginalTransition videoId=\(videoId)")
+        logger.debug("[PlayerTimeObserver] transfer owner from=shorts to=detail videoId=\(videoId)")
+        logger.debug("[PlayerTimeObserver] add skipped reason=alreadyExists videoId=\(videoId)")
+        Logger(category: "NowPlaying").debug("[NowPlaying] preserve reason=sameVideoOriginalTransition videoId=\(videoId)")
+        Logger(category: "PiP").debug("[PiP] ownership transfer from=shorts to=detail videoId=\(videoId)")
+        activeContext = .detail
+        sessionLogger.debug("[PlaybackSession] transferred sessionId=\(sessionID) from=shorts to=detail videoId=\(videoId)")
+        logger.debug("[VideoPlayback] transfer completed from=shorts to=detail videoId=\(videoId) playerReused=true itemReused=true")
+        return true
+    }
+
+    func currentPlaybackSession(videoId: String, context: VideoPlaybackContext) -> ActiveVideoPlaybackSession? {
+        guard activeVideoID == videoId,
+              activeContext == context,
+              let activePlayer,
+              let activeItem else {
+            return nil
+        }
+        return ActiveVideoPlaybackSession(
+            sessionId: activeSessionID,
+            videoId: videoId,
+            context: context,
+            player: activePlayer,
+            item: activeItem,
+            itemGeneration: activeGeneration,
+            stream: activeStream
+        )
+    }
+
+    func isCurrentSession(_ sessionId: String?, videoId: String, context: VideoPlaybackContext? = nil, generation: Int? = nil) -> Bool {
+        guard activeVideoID == videoId else { return false }
+        if let context, activeContext != context { return false }
+        if let sessionId, activeSessionID != sessionId { return false }
+        if let generation, activeGeneration != generation { return false }
+        return true
+    }
+
+#if DEBUG
+    func resetForTesting() {
+        removePeriodicTimeObserver(videoId: activeVideoID)
+        activePlayer = nil
+        activeItem = nil
+        activeVideoID = nil
+        activeContext = nil
+        activeGeneration = nil
+        activeSessionID = nil
+        activeStream = nil
+        tickHandler = nil
+    }
+#endif
 
     @discardableResult
     func play() -> Bool {
@@ -448,6 +541,12 @@ final class VideoPlaybackCoordinator {
     }
 
     func removeTimeObserver(videoId: String?) {
+        if let videoId,
+           activeVideoID == videoId,
+           activeContext == .detail {
+            logger.debug("[PlayerTimeObserver] remove skipped reason=sessionMismatch videoId=\(videoId)")
+            return
+        }
         removePeriodicTimeObserver(videoId: videoId)
     }
 
@@ -479,8 +578,8 @@ final class VideoPlaybackCoordinator {
                     player: player,
                     item: item,
                     videoId: videoId,
-                    context: context,
-                    generation: generation
+                    installedContext: context,
+                    installedGeneration: generation
                 )
             }
         }
@@ -493,20 +592,21 @@ final class VideoPlaybackCoordinator {
         player: AVPlayer?,
         item: AVPlayerItem?,
         videoId: String,
-        context: VideoPlaybackContext,
-        generation: Int?
+        installedContext: VideoPlaybackContext,
+        installedGeneration: Int?
     ) {
         guard activeVideoID == videoId,
-              activeContext == context,
-              activeGeneration == generation,
               let activePlayer,
               let player,
               activePlayer === player,
               activeItem === item,
               player.currentItem === item else {
             logger.debug("[PlayerTimeObserver] tick skipped reason=inactiveSession videoId=\(videoId)")
-            if let generation, activeGeneration != generation {
-                logger.debug("[PlaybackOwner] stale item callback ignored generation=\(generation)")
+            if let installedGeneration, activeGeneration != installedGeneration {
+                logger.debug("[PlaybackOwner] stale item callback ignored generation=\(installedGeneration)")
+            }
+            if activeContext != installedContext {
+                sessionLogger.debug("[PlaybackSession] stale callback ignored source=timeObserver videoId=\(videoId) sessionId=\(activeSessionID ?? "nil")")
             }
             return
         }
@@ -519,8 +619,9 @@ final class VideoPlaybackCoordinator {
         tickHandler?(
             VideoPlaybackTick(
                 videoId: videoId,
-                context: context,
-                generation: generation,
+                context: activeContext ?? installedContext,
+                generation: activeGeneration,
+                sessionId: activeSessionID,
                 player: player,
                 item: item,
                 time: time
@@ -541,10 +642,21 @@ final class VideoPlaybackCoordinator {
     }
 }
 
+struct ActiveVideoPlaybackSession {
+    let sessionId: String?
+    let videoId: String
+    let context: VideoPlaybackContext
+    let player: AVPlayer
+    let item: AVPlayerItem
+    let itemGeneration: Int?
+    let stream: VideoStream?
+}
+
 struct VideoPlaybackTick {
     let videoId: String
     let context: VideoPlaybackContext
     let generation: Int?
+    let sessionId: String?
     let player: AVPlayer
     let item: AVPlayerItem?
     let time: CMTime

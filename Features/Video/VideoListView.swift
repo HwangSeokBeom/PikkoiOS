@@ -1,6 +1,28 @@
 import AVFoundation
 import SwiftUI
 
+enum ShortsVideoAspectPolicy {
+    static let defaultVideoGravity: AVLayerVideoGravity = .resizeAspect
+
+    static func aspectFitFrame(contentSize: CGSize, containerSize: CGSize) -> CGRect {
+        guard contentSize.width > 0,
+              contentSize.height > 0,
+              containerSize.width > 0,
+              containerSize.height > 0 else {
+            return CGRect(origin: .zero, size: containerSize)
+        }
+        let scale = min(containerSize.width / contentSize.width, containerSize.height / contentSize.height)
+        let width = contentSize.width * scale
+        let height = contentSize.height * scale
+        return CGRect(
+            x: (containerSize.width - width) / 2,
+            y: (containerSize.height - height) / 2,
+            width: width,
+            height: height
+        )
+    }
+}
+
 struct VideoListView: View {
     private enum ScrollAnchor {
         static let top = "video-scroll-top"
@@ -311,7 +333,7 @@ private struct ShortsVideoPageView: View {
         if let player = viewModel.player {
             VideoPlayerLayerView(
                 player: player,
-                videoGravity: .resizeAspectFill,
+                videoGravity: ShortsVideoAspectPolicy.defaultVideoGravity,
                 videoId: model.id,
                 context: .shorts,
                 isPictureInPictureEnabled: isActive
