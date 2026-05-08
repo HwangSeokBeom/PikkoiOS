@@ -1,5 +1,10 @@
 import Foundation
 
+enum VideoPlaybackContext: String, Sendable {
+    case shorts
+    case detail
+}
+
 enum VideoPlayerPlaybackState: Equatable {
     case idle
     case loadingStream

@@ -174,6 +174,26 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         XCTAssertNil(appState.pendingNotificationRoute)
     }
 
+    func testActiveChatRoomTrackerSkipsSameRoomPresentation() {
+        let appState = makeAppState(authenticated: true, launchPhase: .ready)
+        let tracker = ActiveChatRoomTracker()
+        tracker.activeRoomId = "room-A"
+        let router = AppNotificationRouter(
+            pendingRouteStore: PendingNotificationRouteStore(),
+            activeChatRoomTracker: tracker
+        )
+        router.attach(appState: appState)
+        router.setNavigationReady(true)
+
+        router.handleNotificationTap(
+            route: .chatRoom(roomId: "room-A", storeId: "store-A", title: "Updated"),
+            messageId: "message-1",
+            source: .remoteFCM
+        )
+
+        XCTAssertNil(appState.pendingNotificationRoute)
+    }
+
     func testDifferentRoomPushIsAllowedForRootReplacement() {
         let appState = makeAppState(authenticated: true, launchPhase: .ready)
         let router = makeRouter(attachedTo: appState)

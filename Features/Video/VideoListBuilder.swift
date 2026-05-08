@@ -7,6 +7,7 @@ struct VideoListBuilder {
     private let imageLoader: any AuthorizedImageLoading
     private let appConfiguration: AppConfiguration
     private let tokenStore: any TokenStore
+    private let videoLiveActivityManager: VideoLiveActivityManaging
     private let makeVideoPlayerView: (Video, @escaping (Video) -> Void) -> AnyView
 
     init(
@@ -15,6 +16,7 @@ struct VideoListBuilder {
         imageLoader: any AuthorizedImageLoading,
         appConfiguration: AppConfiguration,
         tokenStore: any TokenStore,
+        videoLiveActivityManager: VideoLiveActivityManaging = NoopVideoLiveActivityService.shared,
         makeVideoPlayerView: @escaping (Video, @escaping (Video) -> Void) -> AnyView
     ) {
         self.videoRepository = videoRepository
@@ -22,10 +24,11 @@ struct VideoListBuilder {
         self.imageLoader = imageLoader
         self.appConfiguration = appConfiguration
         self.tokenStore = tokenStore
+        self.videoLiveActivityManager = videoLiveActivityManager
         self.makeVideoPlayerView = makeVideoPlayerView
     }
 
-    func build(resetTrigger: Int = 0) -> VideoListRootView {
+    func build(resetTrigger: Int = 0, isTabActive: Bool = true) -> VideoListRootView {
         let router = VideoListRouter()
         let interactor = VideoListInteractor(
             fetchVideosUseCase: FetchVideosUseCase(repository: videoRepository),
@@ -34,7 +37,8 @@ struct VideoListBuilder {
         let presenter = VideoListPresenter(
             interactor: interactor,
             router: router,
-            sessionStore: sessionStore
+            sessionStore: sessionStore,
+            videoLiveActivityManager: videoLiveActivityManager
         )
         return VideoListRootView(
             presenter: presenter,
@@ -45,7 +49,8 @@ struct VideoListBuilder {
             appConfiguration: appConfiguration,
             tokenStore: tokenStore,
             makeVideoPlayerView: makeVideoPlayerView,
-            resetTrigger: resetTrigger
+            resetTrigger: resetTrigger,
+            isTabActive: isTabActive
         )
     }
 }

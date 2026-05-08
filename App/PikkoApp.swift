@@ -22,6 +22,7 @@ struct PikkoApp: App {
         let appState = container.makeAppState()
         PikkoAppDelegate.notificationService = container.appNotificationService
         PikkoAppDelegate.notificationDiagnosticsStore = container.notificationDiagnosticsStore
+        PikkoAppDelegate.orderBackgroundRefreshCoordinator = container.orderBackgroundRefreshCoordinator
 
         self.container = container
         self.bootstrapper = container.makeAppBootstrapper(appState: appState)
@@ -84,6 +85,7 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
     nonisolated(unsafe) private static var hasAssignedAPNsToken = false
     @MainActor static weak var notificationService: DefaultAppNotificationService?
     @MainActor static weak var notificationDiagnosticsStore: NotificationDiagnosticsStore?
+    @MainActor static weak var orderBackgroundRefreshCoordinator: OrderBackgroundRefreshing?
 
     private var isFirebaseConfigured = false
 
@@ -114,6 +116,9 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
             }
         } else {
             Self.logDebug("notification setup skipped because Firebase is not configured")
+        }
+        Task { @MainActor in
+            Self.orderBackgroundRefreshCoordinator?.register()
         }
 
         return true
@@ -171,6 +176,13 @@ final class PikkoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         Logger(category: "AppLifecycle").debug("[AppLifecycle] applicationDidBecomeActive")
+    }
+
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        Logger(category: "AppLifecycle").debug("[AppLifecycle] applicationDidEnterBackground")
+        Task { @MainActor in
+            Self.orderBackgroundRefreshCoordinator?.schedule()
+        }
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {

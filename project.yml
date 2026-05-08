@@ -97,6 +97,8 @@ targets:
         CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
+      - target: OrderLiveActivityExtension
+        embed: true
       - package: KakaoSDK
         product: KakaoSDKAuth
       - package: KakaoSDK
@@ -117,6 +119,22 @@ targets:
       gatherCoverageData: false
       testTargets:
         - PikkoTests
+  OrderLiveActivityExtension:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Extensions/OrderLiveActivityExtension
+      - path: Core/LiveActivity/OrderLiveActivityAttributes.swift
+      - path: Core/LiveActivity/VideoLiveActivityAttributes.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pikko.ios.OrderLiveActivityExtension
+        PRODUCT_NAME: OrderLiveActivityExtension
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Extensions/OrderLiveActivityExtension/Info.plist
+        DEVELOPMENT_TEAM: 63SB2B8YJ5
+        CODE_SIGN_STYLE: Automatic
   PikkoTests:
     type: bundle.unit-test
     platform: iOS

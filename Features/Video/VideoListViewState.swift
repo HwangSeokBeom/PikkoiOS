@@ -24,6 +24,8 @@ struct VideoListViewState: Equatable {
     var errorMessage: String?
     var activeShortsVideoID: String?
     var isShortsPlaying = false
+    var pendingDisappearReason: VideoListViewDisappearReason = .tabSwitch
+    var openingOriginalVideoID: String?
 
     var showsEmptyState: Bool {
         !isLoading && errorMessage == nil && videos.isEmpty

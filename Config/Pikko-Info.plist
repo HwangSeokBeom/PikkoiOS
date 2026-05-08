@@ -53,6 +53,10 @@
 	<string>1</string>
 	<key>FirebaseAppDelegateProxyEnabled</key>
 	<false/>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.pikko.ios.order-refresh</string>
+	</array>
 	<key>GIDClientID</key>
 	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
 	<key>GOOGLE_IOS_CLIENT_ID</key>
@@ -159,8 +163,12 @@
 	<string>$(PORTONE_USER_CODE)</string>
 	<key>PAYMENT_TEST_MODE</key>
 	<string>$(PAYMENT_TEST_MODE)</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
+		<string>audio</string>
+		<string>fetch</string>
 		<string>remote-notification</string>
 	</array>
 	<key>UILaunchStoryboardName</key>

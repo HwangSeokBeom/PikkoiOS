@@ -22,8 +22,12 @@ struct OrderRepositoryImpl: OrderRepository {
     }
 
     func fetchOrders(cursor: String?, filter: String?) async throws -> CursorPage<OrderSummary> {
+        try await fetchOrders(cursor: cursor, filter: filter, forceRefresh: false)
+    }
+
+    func fetchOrders(cursor: String?, filter: String?, forceRefresh: Bool) async throws -> CursorPage<OrderSummary> {
         do {
-            let response = try await remoteDataSource.fetchOrders(cursor: cursor, filter: filter)
+            let response = try await remoteDataSource.fetchOrders(cursor: cursor, filter: filter, forceRefresh: forceRefresh)
             let remotePage = await mergeCachedState(into: mapper.mapOrderPage(response))
             guard cursor == nil else {
                 return remotePage

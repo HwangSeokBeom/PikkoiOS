@@ -25,6 +25,7 @@ final class ChatPresenter: ObservableObject {
     private var isNearBottom = true
     private var scrollCommandID = 0
     private var cancellables = Set<AnyCancellable>()
+    private var lifecycle: ChatRoomLifecycleState = .idle
 
     init(
         interactor: ChatInteracting,
@@ -103,40 +104,21 @@ final class ChatPresenter: ObservableObject {
                 await send(.refreshRequested)
             }
         case .roomTapped(let roomID):
-            if viewState.mode == .roomDetail, viewState.selectedRoomID == normalizedRouteRoomID(from: roomID) {
-                Logger.shared.debug("[ChatNavigation] skipDuplicatePush roomId=\(viewState.selectedRoomID ?? "-")")
-                return
-            }
             guard let entry = listEntries.first(where: { $0.id == roomID }) else { return }
             switch entry {
             case .storeScoped(let summary):
-                Logger.shared.debug("[ChatNavigation] push roomId=\(summary.serverRoomID) reason=storeScopedRow")
-                selectedRoom = nil
-                await showLocalConversation(summary)
+                await openChatRoom(roomID: summary.serverRoomID, source: .storeScopedChatList) {
+                    selectedRoom = nil
+                    await showLocalConversation(summary)
+                }
             case .server(let room):
-                Logger.shared.debug("[ChatNavigation] push roomId=\(room.id) reason=serverRoomRow")
-                selectedRoom = room
-                await showRoom(room)
+                await openChatRoom(roomID: room.id, source: .chatList) {
+                    selectedRoom = room
+                    await showRoom(room)
+                }
             }
         case .backToRoomsTapped:
-            guard interactor.target == nil else { return }
-            let pathCountBefore = viewState.mode == .roomDetail ? 1 : 0
-            selectedRoom = nil
-            messages = []
-            isNearBottom = true
-            realtimeRoomID = nil
-            messageRequestID += 1
-            activeChatRoomTracker.activeRoomId = nil
-            interactor.stopRealtime()
-            viewState.mode = .roomList
-            viewState.title = "채팅"
-            viewState.messages = []
-            viewState.showsNewMessageIndicator = false
-            viewState.newMessageCount = 0
-            applyRooms()
-            Logger.shared.debug(
-                "[ChatNavigation] pop from=chatRoom pathCountBefore=\(pathCountBefore) pathCountAfter=0"
-            )
+            popChatRoom(reason: "backButton")
         case .messageTextChanged(let text):
             viewState.messageText = text
         case .filesSelected(let files):
@@ -187,17 +169,20 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func openStoreRoom() async {
+        transitionLifecycle(to: .entering(roomID: "pending-store"), reason: "storeTarget")
         viewState.mode = .roomDetail
         viewState.title = interactor.target?.preferredTitle ?? "문의하기"
         setLoading(isRefresh: false)
 
         do {
             let room = try await interactor.createOrFetchStoreChatRoom()
+            transitionLifecycle(to: .entering(roomID: room.id), reason: "storeRoomResolved")
             selectedRoom = room
             viewState.selectedRoomID = room.id
             applyContext(interactor.makeContext(for: room, entryPoint: .storeDetail))
             await loadCachedMessagesAndStartLiveSync(scope: currentScope(roomID: room.id), isRefresh: false)
         } catch {
+            transitionLifecycle(to: .idle, reason: "storeOpenFailed")
             apply(error: error, emptyTitle: "채팅을 시작하지 못했어요", isRefresh: false)
         }
 
@@ -205,17 +190,20 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func openUserRoom() async {
+        transitionLifecycle(to: .entering(roomID: "pending-user"), reason: "userTarget")
         viewState.mode = .roomDetail
         viewState.title = interactor.target?.preferredTitle ?? "채팅"
         setLoading(isRefresh: false)
 
         do {
             let room = try await interactor.createOrFetchUserChatRoom()
+            transitionLifecycle(to: .entering(roomID: room.id), reason: "userRoomResolved")
             selectedRoom = room
             viewState.selectedRoomID = room.id
             applyContext(interactor.makeContext(for: room, entryPoint: .userProfile))
             await loadCachedMessagesAndStartLiveSync(scope: currentScope(roomID: room.id), isRefresh: false)
         } catch {
+            transitionLifecycle(to: .idle, reason: "userOpenFailed")
             apply(error: error, emptyTitle: "채팅을 시작하지 못했어요", isRefresh: false)
         }
 
@@ -229,10 +217,13 @@ final class ChatPresenter: ObservableObject {
         storeID: String?,
         opponentID: String?
     ) async {
+        Logger.shared.debug("[ChatNavigation] open requested roomId=\(roomID) source=\(source.logValue)")
+        guard canOpenRoom(roomID) else { return }
         if viewState.mode == .roomDetail, viewState.selectedRoomID == roomID {
-            Logger.shared.debug("[ChatNavigation] skip reason=alreadyDisplayingSameRoom roomId=\(roomID)")
+            Logger.shared.debug("[ChatNavigation] open skipped reason=alreadyTop roomId=\(roomID)")
             return
         }
+        transitionLifecycle(to: .entering(roomID: roomID), reason: "routeOpen")
         Logger.shared.debug("[ChatNavigation] stateUpdate roomId=\(roomID) source=\(source.logValue) navigationSideEffect=false")
         let cachedContext = interactor.cachedStoreContext(roomID: roomID)
         let displayTitle = title.nilIfEmpty
@@ -241,6 +232,10 @@ final class ChatPresenter: ObservableObject {
         viewState.mode = .roomDetail
         viewState.selectedRoomID = roomID
         if let hydratedRoom = try? await interactor.loadRoom(roomID: roomID) {
+            guard isCurrentRoomLifecycle(roomID) else {
+                logStaleUpdateIgnored(source: "loadRoom", roomID: roomID)
+                return
+            }
             var context = interactor.makeContext(for: hydratedRoom, entryPoint: source)
             if context.displayTitle == "채팅", displayTitle != "채팅" {
                 context = ChatRoomContext(
@@ -258,6 +253,10 @@ final class ChatPresenter: ObservableObject {
             applyContext(context)
             Logger.shared.debug("[ChatRouteHydration] complete roomId=\(roomID) contextRecovered=true navigationSideEffect=false")
         } else {
+            guard isCurrentRoomLifecycle(roomID) else {
+                logStaleUpdateIgnored(source: "loadRoom", roomID: roomID)
+                return
+            }
             if source == .unknown {
                 Logger.shared.warning("[ChatRoute] missingSource fallback=unknown roomId=\(roomID)")
             }
@@ -277,9 +276,64 @@ final class ChatPresenter: ObservableObject {
         await loadCachedMessagesAndStartLiveSync(scope: currentScope(roomID: roomID), isRefresh: false)
     }
 
+    private func openChatRoom(
+        roomID: String,
+        source: ChatRoomEntryPoint,
+        operation: () async -> Void
+    ) async {
+        let normalizedRoomID = normalizedRouteRoomID(from: roomID)
+        Logger.shared.debug("[ChatNavigation] open requested roomId=\(normalizedRoomID) source=\(source.logValue)")
+
+        if viewState.mode == .roomDetail, viewState.selectedRoomID == normalizedRoomID {
+            Logger.shared.debug("[ChatNavigation] open skipped reason=alreadyTop roomId=\(normalizedRoomID)")
+            return
+        }
+
+        guard canOpenRoom(normalizedRoomID) else { return }
+        transitionLifecycle(to: .entering(roomID: normalizedRoomID), reason: "listTap")
+        await operation()
+    }
+
+    private func popChatRoom(reason: String) {
+        let topRoomID = viewState.mode == .roomDetail ? viewState.selectedRoomID : nil
+        Logger.shared.debug("[ChatNavigation] pop requested reason=\(reason) top=\(topRoomID ?? "nil")")
+        guard interactor.target == nil else { return }
+        if case .leaving(let roomID) = lifecycle {
+            Logger.shared.debug("[ChatLifecycle] leave ignored reason=alreadyLeaving roomId=\(roomID)")
+            return
+        }
+        guard viewState.mode == .roomDetail else {
+            Logger.shared.debug("[ChatNavigation] pop completed remainingTop=roomList")
+            return
+        }
+
+        if let topRoomID {
+            transitionLifecycle(to: .leaving(roomID: topRoomID), reason: reason)
+        }
+        cancelRoomTasks(reason: reason)
+        selectedRoom = nil
+        messages = []
+        isNearBottom = true
+        realtimeRoomID = nil
+        messageRequestID += 1
+        activeChatRoomTracker.activeRoomId = nil
+        interactor.stopRealtime()
+        viewState.mode = .roomList
+        viewState.title = "채팅"
+        viewState.messages = []
+        viewState.isLoading = false
+        viewState.isRefreshing = false
+        viewState.showsNewMessageIndicator = false
+        viewState.newMessageCount = 0
+        applyRooms()
+        transitionLifecycle(to: .idle, reason: "roomListVisible")
+        Logger.shared.debug("[ChatNavigation] pop completed remainingTop=roomList activeRoomId=nil")
+        Logger.shared.debug("[ChatNavigation] state cleared selectedRoom=false pendingDeepLink=false activeRoomId=nil")
+    }
+
     private func showRoom(_ room: ChatRoom) async {
         guard viewState.selectedRoomID != room.id || viewState.mode != .roomDetail else {
-            Logger.shared.debug("[ChatNavigation] skipDuplicatePush roomId=\(room.id)")
+            Logger.shared.debug("[ChatNavigation] open skipped reason=alreadyTop roomId=\(room.id)")
             return
         }
         viewState.mode = .roomDetail
@@ -291,7 +345,7 @@ final class ChatPresenter: ObservableObject {
     private func showLocalConversation(_ summary: ChatLocalConversationSummary) async {
         if viewState.mode == .roomDetail,
            viewState.selectedRoomID == summary.serverRoomID {
-            Logger.shared.debug("[ChatNavigation] skipDuplicatePush roomId=\(summary.serverRoomID)")
+            Logger.shared.debug("[ChatNavigation] open skipped reason=alreadyTop roomId=\(summary.serverRoomID)")
             return
         }
         viewState.mode = .roomDetail
@@ -303,16 +357,20 @@ final class ChatPresenter: ObservableObject {
     private func loadCachedMessagesAndStartLiveSync(scope: ChatRoomScope, isRefresh: Bool) async {
         messageRequestID += 1
         let requestID = messageRequestID
+        let roomID = scope.roomID
         setLoading(isRefresh: isRefresh)
         defer {
-            if requestID == messageRequestID {
+            if requestID == messageRequestID, isCurrentRoomLifecycle(roomID) {
                 clearLoading()
             }
         }
 
         do {
             let cachedMessages = try await interactor.loadCachedMessages(scope: scope)
-            guard requestID == messageRequestID else { return }
+            guard requestID == messageRequestID, isCurrentRoomLifecycle(roomID) else {
+                logStaleUpdateIgnored(source: "loadLocalMessages", roomID: roomID)
+                return
+            }
             Logger.shared.debug("[ChatViewModel] loadLocalMessages count=\(cachedMessages.count) scope=\(scope.localCacheKey)")
             messages = cachedMessages
             applyMessages()
@@ -322,7 +380,10 @@ final class ChatPresenter: ObservableObject {
 
         do {
             let loadedMessages = try await interactor.synchronizeMessages(scope: scope)
-            guard requestID == messageRequestID else { return }
+            guard requestID == messageRequestID, isCurrentRoomLifecycle(roomID) else {
+                logStaleUpdateIgnored(source: "syncLatestMessages", roomID: roomID)
+                return
+            }
             messages = loadedMessages
             applyMessages()
             enqueueInitialScroll()
@@ -330,15 +391,22 @@ final class ChatPresenter: ObservableObject {
                 viewState.errorMessage = nil
             }
         } catch is CancellationError {
-            guard requestID == messageRequestID else { return }
+            guard requestID == messageRequestID, isCurrentRoomLifecycle(roomID) else { return }
             throwCancellationDebugLog()
             return
         } catch {
-            guard requestID == messageRequestID else { return }
+            guard requestID == messageRequestID, isCurrentRoomLifecycle(roomID) else {
+                logStaleUpdateIgnored(source: "syncLatestMessages", roomID: roomID)
+                return
+            }
             apply(error: error, emptyTitle: "메시지를 불러오지 못했어요", isRefresh: isRefresh)
             return
         }
 
+        guard isCurrentRoomLifecycle(roomID) else {
+            logStaleUpdateIgnored(source: "connectSocket", roomID: roomID)
+            return
+        }
         guard realtimeRoomID != scope.roomID else {
             Logger.shared.debug("[ChatViewModel] connectSocket skipped reason=alreadyActive roomId=\(scope.roomID)")
             return
@@ -346,12 +414,20 @@ final class ChatPresenter: ObservableObject {
         Logger.shared.debug("[ChatViewModel] connectSocket afterSync=true scope=\(scope.localCacheKey)")
         do {
             try await interactor.startRealtime(scope: scope) { [weak self] message in
-                guard let self, self.viewState.selectedRoomID == message.roomID else { return }
+                guard let self, self.viewState.selectedRoomID == message.roomID, self.lifecycle == .active(roomID: message.roomID) else {
+                    Logger.shared.debug("[ChatLifecycle] stale update ignored source=socketMessage roomId=\(message.roomID)")
+                    return
+                }
                 self.handleIncomingMessageNotification(message)
                 self.merge(message)
                 self.updateRoomList(with: message)
                 self.applyMessages()
                 self.applyScrollPolicyForReceivedMessage(message)
+            }
+            guard isCurrentRoomLifecycle(roomID) else {
+                interactor.stopRealtime()
+                logStaleUpdateIgnored(source: "socketConnected", roomID: roomID)
+                return
             }
             realtimeRoomID = scope.roomID
         } catch {
@@ -397,7 +473,10 @@ final class ChatPresenter: ObservableObject {
 
         do {
             let loadedMessages = try await interactor.synchronizeMessages(scope: scope)
-            guard requestID == messageRequestID else { return }
+            guard requestID == messageRequestID, isCurrentRoomLifecycle(scope.roomID) else {
+                logStaleUpdateIgnored(source: "syncLatestMessages", roomID: scope.roomID)
+                return
+            }
             messages = loadedMessages
             applyMessages()
             enqueueScroll(target: .bottom, reason: "refresh", animated: false)
@@ -405,9 +484,12 @@ final class ChatPresenter: ObservableObject {
                 viewState.errorMessage = nil
             }
         } catch is CancellationError {
-            guard requestID == messageRequestID else { return }
+            guard requestID == messageRequestID, isCurrentRoomLifecycle(scope.roomID) else { return }
         } catch {
-            guard requestID == messageRequestID else { return }
+            guard requestID == messageRequestID, isCurrentRoomLifecycle(scope.roomID) else {
+                logStaleUpdateIgnored(source: "syncLatestMessages", roomID: scope.roomID)
+                return
+            }
             apply(error: error, emptyTitle: "메시지를 불러오지 못했어요", isRefresh: isRefresh)
         }
     }
@@ -415,6 +497,10 @@ final class ChatPresenter: ObservableObject {
     private func sendMessage() async {
         guard !viewState.isSending else { return }
         guard let roomID = viewState.selectedRoomID else { return }
+        guard lifecycle == .active(roomID: roomID) else {
+            logStaleUpdateIgnored(source: "sendMessage", roomID: roomID)
+            return
+        }
         let content = viewState.messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         let files = viewState.attachedFilePaths
         guard !content.isEmpty || !files.isEmpty else { return }
@@ -446,6 +532,10 @@ final class ChatPresenter: ObservableObject {
             applyMessages()
             applyScrollAction(.optimisticAppend, localTemporaryId: localTemporaryID)
             let message = try await interactor.sendMessage(scope: scope, content: content, files: files)
+            guard lifecycle == .active(roomID: roomID) else {
+                logStaleUpdateIgnored(source: "sendMessage", roomID: roomID)
+                return
+            }
             let serverChatID = message.effectiveServerChatID ?? message.id
             Logger.shared.debug("[ChatSend] postSuccess localTemporaryId=\(localTemporaryID) serverChatId=\(serverChatID)")
             if messages.contains(where: { $0.effectiveServerChatID == serverChatID }) {
@@ -472,6 +562,10 @@ final class ChatPresenter: ObservableObject {
             applyMessages()
             applyScrollAction(.echoReplace(localTemporaryId: localTemporaryID), localTemporaryId: localTemporaryID)
         } catch {
+            guard lifecycle == .active(roomID: roomID) else {
+                logStaleUpdateIgnored(source: "sendMessage", roomID: roomID)
+                return
+            }
             if let pendingMessageID {
                 messages = (try? await interactor.markMessageFailed(messageID: pendingMessageID, scope: currentScope(roomID: roomID))) ?? messages
                 applyMessages()
@@ -484,6 +578,10 @@ final class ChatPresenter: ObservableObject {
         guard !viewState.isUploadingFiles,
               let roomID = viewState.selectedRoomID,
               !files.isEmpty else { return }
+        guard lifecycle == .active(roomID: roomID) else {
+            logStaleUpdateIgnored(source: "upload", roomID: roomID)
+            return
+        }
 
         viewState.isUploadingFiles = true
         viewState.errorMessage = nil
@@ -491,8 +589,16 @@ final class ChatPresenter: ObservableObject {
 
         do {
             let uploadedPaths = try await interactor.uploadFiles(roomID: roomID, files: files)
+            guard lifecycle == .active(roomID: roomID) else {
+                logStaleUpdateIgnored(source: "upload", roomID: roomID)
+                return
+            }
             viewState.attachedFilePaths.append(contentsOf: uploadedPaths)
         } catch {
+            guard lifecycle == .active(roomID: roomID) else {
+                logStaleUpdateIgnored(source: "upload", roomID: roomID)
+                return
+            }
             viewState.errorMessage = transientErrorMessage(from: error)
         }
     }
@@ -511,6 +617,12 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func applyRooms() {
+        if case .leaving = lifecycle {
+            // popChatRoom owns the final idle transition after the room list is
+            // rendered, so duplicate list updates cannot reopen the previous room.
+        } else {
+            transitionLifecycle(to: .idle, reason: "roomListApplied")
+        }
         viewState.mode = .roomList
         viewState.title = "채팅"
         serverRooms = deduplicatedRooms(serverRooms)
@@ -662,6 +774,7 @@ final class ChatPresenter: ObservableObject {
 
     private func applyContext(_ context: ChatRoomContext) {
         currentContext = context
+        transitionLifecycle(to: .active(roomID: context.roomID), reason: "contextApplied")
         activeChatRoomTracker.activeRoomId = context.roomID
         viewState.title = context.displayTitle
         Logger.shared.debug("[ChatRoute] entered source=\(context.entryPoint.logValue) roomId=\(context.roomID)")
@@ -755,6 +868,41 @@ final class ChatPresenter: ObservableObject {
             return currentContext.localCacheScope
         }
         return ChatRoomScope(roomID: roomID, storeID: nil, opponentID: nil)
+    }
+
+    private func canOpenRoom(_ roomID: String) -> Bool {
+        if case .leaving(let leavingRoomID) = lifecycle, leavingRoomID == roomID {
+            Logger.shared.debug("[ChatNavigation] duplicate open blocked reason=leaving roomId=\(roomID)")
+            return false
+        }
+        if case .entering(let enteringRoomID) = lifecycle, enteringRoomID == roomID {
+            Logger.shared.debug("[ChatNavigation] duplicate open blocked reason=entering roomId=\(roomID)")
+            return false
+        }
+        return true
+    }
+
+    private func isCurrentRoomLifecycle(_ roomID: String) -> Bool {
+        lifecycle == .entering(roomID: roomID) || lifecycle == .active(roomID: roomID)
+    }
+
+    private func transitionLifecycle(to newState: ChatRoomLifecycleState, reason: String) {
+        let oldState = lifecycle
+        guard oldState != newState else { return }
+        lifecycle = newState
+        if let roomID = newState.roomID ?? oldState.roomID {
+            Logger.shared.debug("[ChatLifecycle] transition from=\(oldState.logValue) roomId=\(roomID) to=\(newState.logValue) reason=\(reason)")
+        } else {
+            Logger.shared.debug("[ChatLifecycle] transition from=\(oldState.logValue) roomId=nil to=\(newState.logValue) reason=\(reason)")
+        }
+    }
+
+    private func logStaleUpdateIgnored(source: String, roomID: String) {
+        Logger.shared.debug("[ChatLifecycle] stale update ignored source=\(source) roomId=\(roomID)")
+    }
+
+    private func cancelRoomTasks(reason: String) {
+        Logger.shared.debug("[ChatViewModel] cancelled room tasks count=0 reason=\(reason)")
     }
 
     private func normalizedRouteRoomID(from rowID: String) -> String {
@@ -871,6 +1019,35 @@ private enum ChatListEntry: Equatable, Identifiable {
             return summary.id
         case .server(let room):
             return "server:\(room.id)"
+        }
+    }
+}
+
+private enum ChatRoomLifecycleState: Equatable {
+    case idle
+    case entering(roomID: String)
+    case active(roomID: String)
+    case leaving(roomID: String)
+
+    var roomID: String? {
+        switch self {
+        case .idle:
+            return nil
+        case .entering(let roomID), .active(let roomID), .leaving(let roomID):
+            return roomID
+        }
+    }
+
+    var logValue: String {
+        switch self {
+        case .idle:
+            return "idle"
+        case .entering:
+            return "entering"
+        case .active:
+            return "active"
+        case .leaving:
+            return "leaving"
         }
     }
 }

@@ -7,6 +7,7 @@ struct OrderBuilder {
     private let sessionStore: SessionStore
     private let notificationService: AppNotificationService
     private let orderStatusSnapshotStore: OrderStatusSnapshotStore
+    private let liveActivityManager: OrderLiveActivityManaging
     private let imageLoader: any AuthorizedImageLoading
     private let makeAuthView: () -> AnyView
     private let makeOrderDetailView: (String) -> AnyView
@@ -19,6 +20,7 @@ struct OrderBuilder {
         sessionStore: SessionStore,
         notificationService: AppNotificationService = NoopAppNotificationService(),
         orderStatusSnapshotStore: OrderStatusSnapshotStore = InMemoryOrderStatusSnapshotStore(),
+        liveActivityManager: OrderLiveActivityManaging = NoopOrderLiveActivityManager.shared,
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping () -> AnyView,
         makeOrderDetailView: @escaping (String) -> AnyView,
@@ -30,6 +32,7 @@ struct OrderBuilder {
         self.sessionStore = sessionStore
         self.notificationService = notificationService
         self.orderStatusSnapshotStore = orderStatusSnapshotStore
+        self.liveActivityManager = liveActivityManager
         self.imageLoader = imageLoader
         self.makeAuthView = makeAuthView
         self.makeOrderDetailView = makeOrderDetailView
@@ -44,7 +47,8 @@ struct OrderBuilder {
             orderRepository: orderRepository,
             sessionStore: sessionStore,
             notificationService: notificationService,
-            orderStatusSnapshotStore: orderStatusSnapshotStore
+            orderStatusSnapshotStore: orderStatusSnapshotStore,
+            liveActivityManager: liveActivityManager
         )
         let presenter = OrderPresenter(interactor: interactor, router: router)
 

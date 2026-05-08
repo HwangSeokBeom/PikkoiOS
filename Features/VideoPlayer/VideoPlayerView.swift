@@ -1,9 +1,11 @@
 import AVFoundation
+import AVKit
 import SwiftUI
 
 struct VideoPlayerView: View {
     @StateObject private var viewModel: VideoPlayerViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     init(viewModel: VideoPlayerViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -58,6 +60,10 @@ struct VideoPlayerView: View {
             guard notification.object as? AVPlayerItem === viewModel.player?.currentItem else { return }
             viewModel.handlePlaybackStalled()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+            guard notification.object as? AVPlayerItem === viewModel.player?.currentItem else { return }
+            viewModel.handlePlaybackEnded()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemNewErrorLogEntry)) { notification in
             guard notification.object as? AVPlayerItem === viewModel.player?.currentItem else { return }
             viewModel.logCurrentItemErrorLog()
@@ -82,6 +88,11 @@ struct VideoPlayerView: View {
         .onAppear {
             viewModel.logNavigationRender()
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                PictureInPictureManager.shared.start(reason: "appBackgrounded")
+            }
+        }
     }
 
     private var playerSurface: some View {
@@ -90,7 +101,12 @@ struct VideoPlayerView: View {
                 .fill(.black)
 
             if let player = viewModel.player {
-                VideoPlayerLayerView(player: player)
+                VideoPlayerLayerView(
+                    player: player,
+                    videoId: viewModel.viewState.video.videoId,
+                    context: .detail,
+                    isPictureInPictureEnabled: true
+                )
                     .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
             }
 
@@ -619,11 +635,20 @@ struct VideoPlayerView: View {
 struct VideoPlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
     var videoGravity: AVLayerVideoGravity = .resizeAspect
+    var videoId: String?
+    var context: VideoPlaybackContext = .detail
+    var isPictureInPictureEnabled = false
 
     func makeUIView(context: Context) -> UIView {
         let view = PlayerContainerView()
         view.playerLayer.player = player
         view.playerLayer.videoGravity = videoGravity
+        PictureInPictureManager.shared.setup(
+            playerLayer: view.playerLayer,
+            videoId: videoId,
+            context: self.context,
+            isEnabled: isPictureInPictureEnabled
+        )
         return view
     }
 
@@ -631,6 +656,18 @@ struct VideoPlayerLayerView: UIViewRepresentable {
         guard let uiView = uiView as? PlayerContainerView else { return }
         uiView.playerLayer.player = player
         uiView.playerLayer.videoGravity = videoGravity
+        PictureInPictureManager.shared.setup(
+            playerLayer: uiView.playerLayer,
+            videoId: videoId,
+            context: self.context,
+            isEnabled: isPictureInPictureEnabled
+        )
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
+        guard let uiView = uiView as? PlayerContainerView else { return }
+        PictureInPictureManager.shared.detach(playerLayer: uiView.playerLayer)
+        uiView.playerLayer.player = nil
     }
 }
 
@@ -646,5 +683,122 @@ private final class PlayerContainerView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         playerLayer.frame = bounds
+    }
+}
+
+@MainActor
+final class PictureInPictureManager: NSObject, AVPictureInPictureControllerDelegate {
+    static let shared = PictureInPictureManager()
+
+    private let logger = Logger(category: "PiP")
+    private weak var playerLayer: AVPlayerLayer?
+    private var controller: AVPictureInPictureController?
+    private var videoId: String?
+    private var context: VideoPlaybackContext?
+
+    func setup(
+        playerLayer: AVPlayerLayer?,
+        videoId: String?,
+        context: VideoPlaybackContext,
+        isEnabled: Bool
+    ) {
+        let isSupported = AVPictureInPictureController.isPictureInPictureSupported()
+        logger.debug("[PiP] support available=\(isSupported)")
+
+        guard isEnabled else {
+            if self.playerLayer === playerLayer {
+                detach(playerLayer: playerLayer)
+            }
+            return
+        }
+
+        guard isSupported else {
+            logger.debug("[PiP] setup skipped reason=unsupported")
+            return
+        }
+
+        guard let playerLayer else {
+            logger.debug("[PiP] setup skipped reason=noPlayerLayer")
+            return
+        }
+
+        self.playerLayer = playerLayer
+        self.videoId = videoId
+        self.context = context
+
+        guard let pipController = AVPictureInPictureController(playerLayer: playerLayer) else {
+            logger.debug("[PiP] setup skipped reason=unsupported")
+            return
+        }
+        pipController.delegate = self
+        pipController.canStartPictureInPictureAutomaticallyFromInline = true
+        controller = pipController
+        logger.debug("[PiP] setup videoId=\(videoId ?? "nil") context=\(context.rawValue) playerLayerExists=true")
+    }
+
+    func detach(playerLayer: AVPlayerLayer?) {
+        guard self.playerLayer === playerLayer else { return }
+        if controller?.isPictureInPictureActive == true {
+            controller?.stopPictureInPicture()
+        }
+        controller?.delegate = nil
+        controller = nil
+        self.playerLayer = nil
+        videoId = nil
+        context = nil
+    }
+
+    func start(reason: String) {
+        logger.debug("[PiP] start requested reason=\(reason) videoId=\(videoId ?? "nil")")
+        guard AVPictureInPictureController.isPictureInPictureSupported() else {
+            logger.debug("[PiP] setup skipped reason=unsupported")
+            return
+        }
+        guard playerLayer != nil else {
+            logger.debug("[PiP] setup skipped reason=noPlayerLayer")
+            return
+        }
+        guard let controller else {
+            logger.debug("[PiP] setup skipped reason=noPlayerLayer")
+            return
+        }
+        guard !controller.isPictureInPictureActive else { return }
+        guard controller.isPictureInPicturePossible else {
+            logger.debug("[PiP] setup skipped reason=unsupported")
+            return
+        }
+        controller.startPictureInPicture()
+    }
+
+    nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        Task { @MainActor in
+            logger.debug("[PiP] didStart videoId=\(videoId ?? "nil")")
+        }
+    }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        failedToStartPictureInPictureWithError error: Error
+    ) {
+        Task { @MainActor in
+            logger.warning("[PiP] failedToStart error=\(error.localizedDescription)")
+        }
+    }
+
+    nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        Task { @MainActor in
+            logger.debug("[PiP] didStop videoId=\(videoId ?? "nil")")
+        }
+    }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+    ) {
+        completionHandler(true)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            logger.debug("[PiP] restoreUI requested videoId=\(videoId ?? "nil")")
+        }
     }
 }

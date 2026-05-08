@@ -2,11 +2,18 @@ import Foundation
 
 protocol OrderRemoteDataSourceProtocol: Sendable {
     func fetchOrders(cursor: String?, filter: String?) async throws -> OrderListResponseDTO
+    func fetchOrders(cursor: String?, filter: String?, forceRefresh: Bool) async throws -> OrderListResponseDTO
     func fetchPaymentReceipt(orderCode: String) async throws -> PaymentResponseDTO
     func validatePayment(_ request: PaymentValidationRequestDTO) async throws -> ReceiptOrderResponseDTO
     func validatePrice(_ request: CheckoutPriceValidationRequestDTO) async throws -> CheckoutPriceValidationResponseDTO
     func createOrder(_ request: OrderCreateRequestDTO) async throws -> OrderCreateResponseDTO
     func updateOrderStatus(orderCode: String, nextStatus: String) async throws
+}
+
+extension OrderRemoteDataSourceProtocol {
+    func fetchOrders(cursor: String?, filter: String?, forceRefresh: Bool) async throws -> OrderListResponseDTO {
+        try await fetchOrders(cursor: cursor, filter: filter)
+    }
 }
 
 struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
@@ -17,12 +24,17 @@ struct OrderRemoteDataSource: OrderRemoteDataSourceProtocol {
     }
 
     func fetchOrders(cursor: String?, filter: String?) async throws -> OrderListResponseDTO {
+        try await fetchOrders(cursor: cursor, filter: filter, forceRefresh: false)
+    }
+
+    func fetchOrders(cursor: String?, filter: String?, forceRefresh: Bool) async throws -> OrderListResponseDTO {
         // TODO: Confirm if the backend will expose cursor/filter parameters for /v1/orders.
         // Current Swagger describes GET /v1/orders without query parameters.
         let endpoint = Endpoint<OrderListResponseDTO>(
             path: "/v1/orders",
             method: .get,
-            authorizationPolicy: .accessToken
+            authorizationPolicy: .accessToken,
+            cachePolicy: forceRefresh ? .reloadIgnoringLocalCache : .automatic
         )
         return try await apiClient.execute(endpoint)
     }

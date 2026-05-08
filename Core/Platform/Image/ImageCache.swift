@@ -22,7 +22,7 @@ actor ImageCache {
             queue: nil
         ) { [weak storage] _ in
             storage?.cache.removeAllObjects()
-            Logger(category: "ImageCache").debug("[ImageCache] memoryWarning clear=true")
+            Logger(category: "ImageCache").debug("[ImageCache] clear reason=memoryWarning")
         }
     }
 
@@ -35,14 +35,25 @@ actor ImageCache {
 
     func insert(_ data: Data, for url: URL) {
         storage.cache.setObject(data as NSData, forKey: url as NSURL, cost: data.count)
+        logger.debug("[ImageCache] store key=\(diagnosticKey(for: url)) cost=\(data.count)")
     }
 
     func removeValue(for url: URL) {
         storage.cache.removeObject(forKey: url as NSURL)
+        logger.debug("[ImageCache] invalidate key=\(diagnosticKey(for: url))")
     }
 
     func removeAll() {
         storage.cache.removeAllObjects()
-        logger.debug("[ImageCache] memoryWarning clear=true")
+        logger.debug("[ImageCache] clear reason=memoryWarning")
+    }
+
+    private func diagnosticKey(for url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.path
+        }
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? url.path
     }
 }

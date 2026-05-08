@@ -55,17 +55,18 @@ struct FeatureBuilderFactory {
         ).build(resetTrigger: resetTrigger)
     }
 
-    func makeVideoListView(resetTrigger: Int = 0) -> VideoListRootView {
+    func makeVideoListView(resetTrigger: Int = 0, isTabActive: Bool = true) -> VideoListRootView {
         VideoListBuilder(
             videoRepository: container.videoRepository,
             sessionStore: appState.sessionStore,
             imageLoader: container.authorizedImageLoader,
             appConfiguration: container.appConfiguration,
             tokenStore: container.tokenStore,
+            videoLiveActivityManager: container.videoLiveActivityManager,
             makeVideoPlayerView: { video, onVideoUpdated in
                 AnyView(makeVideoPlayerView(video: video, onVideoUpdated: onVideoUpdated))
             }
-        ).build(resetTrigger: resetTrigger)
+        ).build(resetTrigger: resetTrigger, isTabActive: isTabActive)
     }
 
     func makeStoreDetailView(storeID: String = "mock-store") -> StoreDetailRootView {
@@ -138,6 +139,7 @@ struct FeatureBuilderFactory {
             sessionStore: appState.sessionStore,
             notificationService: container.appNotificationService,
             orderStatusSnapshotStore: container.orderStatusSnapshotStore,
+            liveActivityManager: container.orderLiveActivityManager,
             imageLoader: container.authorizedImageLoader,
             makeAuthView: {
                 AnyView(makeAuthView(context: .orderHistory))
@@ -288,8 +290,31 @@ struct FeatureBuilderFactory {
         container.appNotificationRouter.routePendingIfNeeded()
     }
 
+    func routeDeepLink(_ url: URL) {
+        guard url.scheme?.lowercased() == "pikko" else { return }
+        let components = url.pathComponents.filter { $0 != "/" }
+        let host = url.host?.lowercased()
+        if host == "orders" {
+            let orderID = components.first
+            container.appNotificationRouter.route(to: orderID.map { .orderDetail(orderCode: $0) } ?? .orderList)
+        }
+    }
+
     func setNotificationNavigationReady(_ isReady: Bool) {
         container.appNotificationRouter.setNavigationReady(isReady)
+    }
+
+    func registerOrderBackgroundRefresh() {
+        container.orderLiveActivityManager.restoreExistingActivitiesIfNeeded()
+        container.orderBackgroundRefreshCoordinator?.register()
+    }
+
+    func scheduleOrderBackgroundRefresh() {
+        container.orderBackgroundRefreshCoordinator?.schedule()
+    }
+
+    func refreshOrdersForSystemState(source: OrderRefreshSource, force: Bool) async {
+        await container.orderBackgroundRefreshCoordinator?.refreshActiveOrders(source: source, force: force)
     }
 
     func makeCommunityView() -> CommunityRootView {
@@ -454,6 +479,8 @@ struct FeatureBuilderFactory {
             setLikeUseCase: SetVideoLikeUseCase(repository: container.videoRepository),
             appConfiguration: container.appConfiguration,
             tokenStore: container.tokenStore,
+            imageLoader: container.authorizedImageLoader,
+            context: .detail,
             onVideoUpdated: onVideoUpdated
         ).build()
     }

@@ -54,9 +54,10 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
             throw error
         }
 
-        if let cachedData = await imageCache.data(for: url) {
+        let cacheURL = safeCacheURL(for: url)
+        if let cachedData = await imageCache.data(for: cacheURL) {
 #if DEBUG
-            logger.debug("[ImageLoader] cacheHit url=\(url.absoluteString)")
+            logger.debug("[ImageLoader] cacheHit url=\(diagnosticURL(url))")
 #endif
             return cachedData
         }
@@ -78,7 +79,7 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
 
         do {
             let data = try await task.value
-            await imageCache.insert(data, for: url)
+            await imageCache.insert(data, for: cacheURL)
             inFlightTasks[url] = nil
             return data
         } catch {
@@ -97,12 +98,12 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
 
     func cachedImageData(for path: String) async throws -> Data? {
         let url = try fileURLResolver.resolveURL(from: path)
-        return await imageCache.data(for: url)
+        return await imageCache.data(for: safeCacheURL(for: url))
     }
 
     func removeCachedImage(for path: String) async throws {
         let url = try fileURLResolver.resolveURL(from: path)
-        await imageCache.removeValue(for: url)
+        await imageCache.removeValue(for: safeCacheURL(for: url))
     }
 
     private func fetchImageData(from url: URL, didRetryAfterRefresh: Bool) async throws -> Data {
@@ -200,5 +201,14 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
         components.query = nil
         components.fragment = nil
         return components.string ?? url.path
+    }
+
+    private func safeCacheURL(for url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        components.query = nil
+        components.fragment = nil
+        return components.url ?? url
     }
 }

@@ -79,6 +79,7 @@ struct DefaultChatRouteHydrator: ChatRouteHydrating {
 final class AppNotificationRouter: AppNotificationRouting {
     private weak var appState: AppState?
     private let pendingRouteStore: PendingNotificationRouteStore
+    private let activeChatRoomTracker: ActiveChatRoomTracking?
     private var navigationReady = false
     private var isConsumingPendingRoute = false
     private var consumedPendingKeys: Set<String> = []
@@ -87,10 +88,12 @@ final class AppNotificationRouter: AppNotificationRouting {
 
     init(
         pendingRouteStore: PendingNotificationRouteStore,
+        activeChatRoomTracker: ActiveChatRoomTracking? = nil,
         dedupeInterval: TimeInterval = 10,
         now: @escaping () -> Date = Date.init
     ) {
         self.pendingRouteStore = pendingRouteStore
+        self.activeChatRoomTracker = activeChatRoomTracker
         self.dedupeStore = PushNotificationDedupeStore(ttl: dedupeInterval, now: now)
     }
 
@@ -150,12 +153,16 @@ final class AppNotificationRouter: AppNotificationRouting {
             return
         }
 
+        if case .chatRoom(let roomId, _, _) = route {
+            Logger(category: "ChatNavigation").debug("[ChatNavigation] open requested roomId=\(roomId) source=\(source.rawValue)")
+        }
+
         guard !isAlreadyActiveOrPending(route: route, appState: appState) else {
             Logger(category: "DeepLink").debug("[DeepLink] skipped reason=alreadyAtDestination route=\(route.debugDescription)")
             Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate skipped reason=alreadyAtDestination routeKey=\(route.routeKey)")
             if case .chatRoom(let roomId, _, _) = route {
                 Logger(category: "ChatNavigation").debug("[ChatNavigation] requested roomId=\(roomId) source=\(source.rawValue) currentRoomId=\(roomId) stackContains=true")
-                Logger(category: "ChatNavigation").debug("[ChatNavigation] skip reason=alreadyDisplayingSameRoom roomId=\(roomId)")
+                Logger(category: "ChatNavigation").debug("[ChatNavigation] open skipped reason=alreadyTop roomId=\(roomId)")
             }
             return
         }
@@ -286,6 +293,7 @@ final class AppNotificationRouter: AppNotificationRouting {
         if let roomId = route.chatRoomId {
             return appState.activeNotificationRoute?.chatRoomId == roomId
                 || appState.pendingNotificationRoute?.chatRoomId == roomId
+                || activeChatRoomTracker?.activeRoomId == roomId
         }
 
         return appState.activeNotificationRoute == route

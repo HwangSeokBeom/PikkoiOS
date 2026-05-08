@@ -10,10 +10,9 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
 
     private var manager: SocketManager?
     private var socket: SocketIOClient?
-    private var activeRoomID: String?
     private var activeNamespace: String?
-    private var isDisconnecting = false
-    private var lastDisconnectReason = "none"
+    private var lifecycle: SocketLifecycleState = .disconnected
+    private var connectionGeneration = 0
 
     init(
         configuration: AppConfiguration,
@@ -26,26 +25,41 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
     }
 
     func connect(roomID: String, currentUserID: String?, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
-        if activeRoomID == roomID {
-            let status = socket?.status
-            if status == .connected || status == .connecting {
+        if lifecycle.roomID == roomID {
+            switch lifecycle {
+            case .connecting, .connected:
                 Logger.shared.debug("[ChatSocket] connect ignored roomId=\(roomID) reason=already-active")
                 return
+            case .disconnecting:
+                Logger.shared.debug("[ChatSocket] connect ignored roomId=\(roomID) reason=disconnecting")
+                return
+            case .disconnected:
+                break
             }
         }
 
-        if activeRoomID != nil {
+        if lifecycle.roomID != nil {
             disconnect()
         }
+        connectionGeneration += 1
+        let generation = connectionGeneration
+        lifecycle = .connecting(roomID: roomID)
 
         guard configuration.hasValidSeSACKey else {
+            lifecycle = .disconnected
             throw NetworkError.configuration(configuration.seSACKeyError ?? .missingSeSACKey)
         }
         guard let originURL = try makeSocketOriginURL() else {
+            lifecycle = .disconnected
             throw NetworkError.configuration(configuration.baseURLError ?? .missingBaseURL)
         }
         let tokens = try await tokenStore.loadTokens()
+        guard generation == connectionGeneration, lifecycle == .connecting(roomID: roomID) else {
+            Logger.shared.debug("[ChatSocket] connect ignored roomId=\(roomID) reason=staleTokenLoad")
+            return
+        }
         guard let accessToken = tokens?.accessToken, !accessToken.isEmpty else {
+            lifecycle = .disconnected
             throw NetworkError.unauthorized
         }
 
@@ -78,32 +92,37 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
 
         self.manager = manager
         self.socket = socket
-        activeRoomID = roomID
         activeNamespace = namespace
-        lastDisconnectReason = "active"
+        lifecycle = .connected(roomID: roomID)
 
         socket.connect()
     }
 
     func disconnect() {
-        guard socket != nil || manager != nil else {
+        guard socket != nil || manager != nil || lifecycle.roomID != nil else {
+            Logger.shared.debug("[ChatSocket] disconnect skipped reason=alreadyDisconnected roomId=nil")
             return
         }
-        guard !isDisconnecting else {
+        if case .disconnecting(let roomID) = lifecycle {
+            Logger.shared.debug("[ChatSocket] disconnect skipped reason=alreadyDisconnecting roomId=\(roomID)")
             return
         }
-        isDisconnecting = true
-        lastDisconnectReason = "clientRequested"
-        defer { isDisconnecting = false }
 
+        let roomID = lifecycle.roomID
         let namespace = activeNamespace
-        socket?.removeAllHandlers()
+        connectionGeneration += 1
+        if let roomID {
+            lifecycle = .disconnecting(roomID: roomID)
+        }
+        // Do not call removeAllHandlers() here. Socket.IO can be delivering a
+        // callback while this lifecycle cleanup runs, and mutating its internal
+        // handler set during enumeration is the crash we need to avoid.
         socket?.disconnect()
         manager?.disconnect()
         socket = nil
         manager = nil
-        activeRoomID = nil
         activeNamespace = nil
+        lifecycle = .disconnected
 
         if let namespace {
             Logger.shared.debug("[ChatSocket] disconnected reason=clientRequested namespace=\(namespace)")
@@ -118,15 +137,23 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         onMessage: @escaping @MainActor (ChatMessage) async -> Void
     ) {
         socket.on(clientEvent: .connect) { _, _ in
-            Logger.shared.debug("[ChatSocket] connected namespace=\(namespace)")
+            Task { @MainActor [weak self] in
+                guard self?.lifecycle == .connected(roomID: roomID) else {
+                    Logger.shared.debug("[ChatSocket] stale event ignored type=connect roomId=\(roomID)")
+                    return
+                }
+                Logger.shared.debug("[ChatSocket] connected namespace=\(namespace)")
+            }
         }
 
         socket.on(clientEvent: .disconnect) { [weak self] data, _ in
-            let reason = data.first.map(String.init(describing:)) ?? "unknown"
-            let lifecycleReason = self?.isDisconnecting == true ? "clientRequested" : "serverOrTransport"
-            Logger.shared.debug(
-                "[ChatSocket] disconnected reason=\(reason) lifecycleReason=\(lifecycleReason) namespace=\(namespace)"
-            )
+            Task { @MainActor in
+                let reason = data.first.map(String.init(describing:)) ?? "unknown"
+                let lifecycleReason = self?.lifecycle == .disconnecting(roomID: roomID) ? "clientRequested" : "serverOrTransport"
+                Logger.shared.debug(
+                    "[ChatSocket] disconnected reason=\(reason) lifecycleReason=\(lifecycleReason) namespace=\(namespace)"
+                )
+            }
         }
 
         socket.on(clientEvent: .error) { data, _ in
@@ -137,6 +164,10 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         socket.on("chat") { [weak self] data, _ in
             Task { @MainActor in
                 guard let self else { return }
+                guard self.lifecycle == .connected(roomID: roomID) else {
+                    Logger.shared.debug("[ChatSocket] stale event ignored type=chat roomId=\(roomID)")
+                    return
+                }
                 let messages = self.decodeMessages(from: data)
                 if messages.isEmpty {
                     Logger.shared.warning("[ChatSocket] chat received roomId=\(roomID) chatId=<decode-failed>")
@@ -182,5 +213,21 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         }
 
         return []
+    }
+}
+
+private enum SocketLifecycleState: Equatable {
+    case disconnected
+    case connecting(roomID: String)
+    case connected(roomID: String)
+    case disconnecting(roomID: String)
+
+    var roomID: String? {
+        switch self {
+        case .disconnected:
+            return nil
+        case .connecting(let roomID), .connected(let roomID), .disconnecting(let roomID):
+            return roomID
+        }
     }
 }

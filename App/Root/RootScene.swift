@@ -39,16 +39,21 @@ struct RootScene: View {
         }
         .task {
             Logger(category: "AppLifecycle").debug("[AppLifecycle] scene willConnect")
+            featureBuilderFactory.registerOrderBackgroundRefresh()
             await bootstrapper.bootstrapIfNeeded()
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
                 Logger(category: "AppLifecycle").debug("[AppLifecycle] sceneDidBecomeActive")
+                Task {
+                    await featureBuilderFactory.refreshOrdersForSystemState(source: .foreground, force: true)
+                }
             case .inactive:
                 Logger(category: "AppLifecycle").debug("[AppLifecycle] sceneDidBecomeInactive")
             case .background:
                 Logger(category: "AppLifecycle").debug("[AppLifecycle] sceneDidEnterBackground")
+                featureBuilderFactory.scheduleOrderBackgroundRefresh()
             @unknown default:
                 Logger(category: "AppLifecycle").debug("[AppLifecycle] scenePhaseUnknown")
             }
@@ -64,6 +69,11 @@ struct RootScene: View {
                 await featureBuilderFactory.syncCurrentDeviceTokenIfNeeded(source: "authStateChanged")
             }
             featureBuilderFactory.routePendingNotificationIfNeeded()
+        }
+        .onChange(of: appState.pendingDeepLink) { _, url in
+            guard let url else { return }
+            featureBuilderFactory.routeDeepLink(url)
+            appState.pendingDeepLink = nil
         }
     }
 }

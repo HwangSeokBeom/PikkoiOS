@@ -43,6 +43,7 @@ struct ChatRootView: View {
         Group {
             if presenter.viewState.mode == .roomDetail {
                 roomDetailView
+                    .id(presenter.viewState.selectedRoomID ?? "room-detail")
             } else if presenter.viewState.isLoading {
                 loadingView
             } else if presenter.viewState.showsEmptyState {

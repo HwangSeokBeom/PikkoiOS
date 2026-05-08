@@ -18,6 +18,7 @@ struct OrderInteractor: OrderInteracting {
     private let localCancellationStore: LocalOrderCancellationStore
     private let notificationService: AppNotificationService
     private let orderStatusSnapshotStore: OrderStatusSnapshotStore
+    private let liveActivityManager: OrderLiveActivityManaging
 
     init(
         initialOrderID: String? = nil,
@@ -25,6 +26,7 @@ struct OrderInteractor: OrderInteracting {
         sessionStore: SessionStore,
         notificationService: AppNotificationService = NoopAppNotificationService(),
         orderStatusSnapshotStore: OrderStatusSnapshotStore = InMemoryOrderStatusSnapshotStore(),
+        liveActivityManager: OrderLiveActivityManaging = NoopOrderLiveActivityManager.shared,
         localCancellationStore: LocalOrderCancellationStore = .shared
     ) {
         self.initialOrderID = initialOrderID
@@ -32,6 +34,7 @@ struct OrderInteractor: OrderInteracting {
         self.sessionStore = sessionStore
         self.notificationService = notificationService
         self.orderStatusSnapshotStore = orderStatusSnapshotStore
+        self.liveActivityManager = liveActivityManager
         self.localCancellationStore = localCancellationStore
     }
 
@@ -58,6 +61,7 @@ struct OrderInteractor: OrderInteracting {
             let mergedPage = await applyLocalCancellations(to: page)
             if cursor == nil {
                 detectOrderStatusChanges(in: mergedPage.items)
+                liveActivityManager.sync(orders: mergedPage.items, source: "orderList")
             }
             return mergedPage
         } catch {
@@ -147,6 +151,14 @@ struct OrderInteractor: OrderInteracting {
     func updateOrderStatus(orderCode: String, status: OrderStatus) async throws {
         do {
             try await orderRepository.updateOrderStatus(orderCode: orderCode, status: status)
+            let page = try? await orderRepository.fetchOrders(cursor: nil, filter: nil, forceRefresh: true)
+            if let order = page?.items.first(where: { $0.orderCode == orderCode || $0.id == orderCode }) {
+                if status == .completed {
+                    liveActivityManager.end(order: order, reason: .pickedUp)
+                } else {
+                    liveActivityManager.update(order: order)
+                }
+            }
         } catch {
             throw map(error: error, fallbackMessage: "주문 상태 변경에 실패했어요. 다시 시도해 주세요.")
         }

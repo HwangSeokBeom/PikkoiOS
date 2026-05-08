@@ -663,12 +663,13 @@ struct ChatRemoteDataSource: ChatRemoteDataSourceProtocol {
         var multipartBuilder = MultipartFormDataBuilder()
         for file in files {
             multipartBuilder.addFile(
-                fieldName: "files",
+                fieldName: UploadFieldName.files,
                 fileName: file.fileName,
                 mimeType: file.mimeType,
                 fileData: file.data
             )
         }
+        Logger(category: "MultipartUpload").debug("[MultipartUpload] request path=/v1/chats/{room_id}/files fieldName=\(UploadFieldName.files) fileCount=\(files.count) totalBytes=\(files.reduce(0) { $0 + $1.data.count })")
 
         let endpoint = Endpoint<ChatFileResponseDTO>(
             path: "/v1/chats/\(roomID)/files",
@@ -677,7 +678,9 @@ struct ChatRemoteDataSource: ChatRemoteDataSourceProtocol {
             timeout: .upload,
             authorizationPolicy: .accessToken
         )
-        return try await apiClient.execute(endpoint)
+        let response = try await apiClient.execute(endpoint)
+        Logger(category: "MultipartUpload").debug("[MultipartUpload] response success path=/v1/chats/{room_id}/files")
+        return response
     }
 }
 

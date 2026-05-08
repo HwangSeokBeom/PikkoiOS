@@ -7,6 +7,7 @@ final class VideoListPresenter: ObservableObject {
     private let interactor: VideoListInteracting
     private let router: VideoListRouting
     private let sessionStore: SessionStore?
+    private let videoLiveActivityManager: VideoLiveActivityManaging
     private let logger = Logger(category: "VideoList")
     private let relativeDateFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -21,24 +22,37 @@ final class VideoListPresenter: ObservableObject {
     private var updatingVideoLikeIDs = Set<String>()
     private var reloadGeneration = 0
     private var pagingGeneration = 0
+    private var shortsPlaybackSnapshotByVideoID: [String: VideoLiveActivitySnapshot] = [:]
+    private var hasPerformedInitialAutoplayForCurrentEntry = false
+    private var isVideoScreenVisible = false
     private let pageLimit = 20
 
     init(
         interactor: VideoListInteracting,
         router: VideoListRouting,
         sessionStore: SessionStore? = nil,
+        videoLiveActivityManager: VideoLiveActivityManaging = NoopVideoLiveActivityService.shared,
         initialState: VideoListViewState = VideoListViewState()
     ) {
         self.interactor = interactor
         self.router = router
         self.sessionStore = sessionStore
+        self.videoLiveActivityManager = videoLiveActivityManager
         self.viewState = initialState
     }
 
     func send(_ action: VideoListAction) async {
         switch action {
         case .onAppear:
-            guard !hasLoaded else { return }
+            isVideoScreenVisible = true
+            viewState.pendingDisappearReason = .tabSwitch
+            if !hasPerformedInitialAutoplayForCurrentEntry {
+                logger.debug("[VideoAutoplay] initial entry armed")
+            }
+            guard !hasLoaded else {
+                attemptInitialAutoplayIfNeeded(reason: "appear")
+                return
+            }
             await reload(reason: "initial")
         case .refreshRequested:
             await reload(reason: "refresh")
@@ -69,37 +83,95 @@ final class VideoListPresenter: ObservableObject {
             logger.debug("[ShortsVideo] tap action=togglePlayPause videoId=\(videoID) activeVideoId=\(nextState.activeVideoID ?? "nil") isPlaying=\(nextState.isPlaying)")
         case .originalVideoTapped(let videoID):
             let normalizedVideoID = videoID.trimmingCharacters(in: .whitespacesAndNewlines)
+            logger.debug("[ShortsOriginal] tap videoId=\(normalizedVideoID) shortsIndex=\(videos.firstIndex(where: { $0.videoId == normalizedVideoID }) ?? -1)")
+            guard viewState.openingOriginalVideoID == nil else {
+                logger.debug("[ShortsOriginal] open skipped reason=duplicateTap videoId=\(normalizedVideoID)")
+                return
+            }
             guard !normalizedVideoID.isEmpty else {
-                logger.warning("[VideoList] blocked selection because videoId is empty title=unknown")
+                logger.warning("[ShortsOriginal] open failed reason=missingVideoId")
                 viewState.errorMessage = "영상 정보를 불러올 수 없어요."
                 return
             }
 
             guard let video = videos.first(where: { $0.videoId == normalizedVideoID }) else {
-                logger.warning("[VideoList] blocked selection because video was not found videoId=\(normalizedVideoID)")
+                logger.warning("[ShortsOriginal] open failed reason=missingOriginalMetadata videoId=\(normalizedVideoID)")
                 viewState.errorMessage = "영상 정보를 불러올 수 없어요."
                 return
             }
 
-            let nextState = ShortsPlayerStateReducer.pauseForOriginal()
-            viewState.activeShortsVideoID = nextState.activeVideoID
-            viewState.isShortsPlaying = nextState.isPlaying
-            logger.debug("[ShortsVideo] OriginalVideo button action=openOriginal videoId=\(video.videoId)")
+            logger.debug("[ShortsOriginal] open requested videoId=\(video.videoId) source=shorts")
+            logger.debug("[ShortsOriginal] transition state from=active to=openingOriginal videoId=\(video.videoId)")
+            logger.debug("[ShortsOriginal] player policy=restartInDetail videoId=\(video.videoId)")
+            logger.debug("[VideoPlayback] stop reason=shortsOriginalTransition videoId=\(video.videoId)")
+            viewState.pendingDisappearReason = .openOriginal
+            viewState.openingOriginalVideoID = video.videoId
+            viewState.activeShortsVideoID = nil
+            viewState.isShortsPlaying = false
+            logger.debug("[ShortsOriginal] route append videoId=\(video.videoId) destination=videoDetail")
             router.routeToOriginalVideo(video: video)
+        case .originalRouteCleared:
+            viewState.openingOriginalVideoID = nil
+            viewState.pendingDisappearReason = .tabSwitch
+            if isVideoScreenVisible {
+                hasPerformedInitialAutoplayForCurrentEntry = false
+                attemptInitialAutoplayIfNeeded(reason: "originalRouteCleared")
+            }
         case .videoLikeTapped(let videoID):
             await toggleVideoLike(for: videoID)
         case .videoUpdated(let updatedVideo):
             applyUpdatedVideo(updatedVideo)
-        case .viewDisappeared:
-            viewState.isShortsPlaying = false
-            logger.debug("[ShortsPlayer] activeVideoId changed from=\(viewState.activeShortsVideoID ?? "nil") to=\(viewState.activeShortsVideoID ?? "nil") reason=viewDisappear paused=true")
+        case .viewDisappeared(let reason):
+            isVideoScreenVisible = false
+            let activeVideoID = viewState.activeShortsVideoID
+            if reason == .openOriginal {
+                logger.debug("[ShortsPlayer] viewDisappear reason=openOriginal activeVideoId=\(activeVideoID ?? viewState.openingOriginalVideoID ?? "nil") cleanupMode=detachOnly")
+                return
+            }
+            if reason == .appBackground {
+                logger.debug("[VideoPlayback] continue reason=appBackgrounded videoId=\(activeVideoID ?? "nil")")
+                return
+            }
+            if reason == .tabSwitch || reason == .pop || reason == .deinitializing {
+                hasPerformedInitialAutoplayForCurrentEntry = false
+            }
+            if viewState.isShortsPlaying {
+                viewState.isShortsPlaying = false
+                logger.debug("[VideoPlayback] stop reason=\(reason.rawValue) videoId=\(activeVideoID ?? "nil")")
+            } else {
+                logger.debug("[VideoPlayback] stop skipped reason=alreadyStopped")
+            }
         case .scenePhaseChanged(let isActive):
             if isActive {
-                logger.debug("[ShortsPlayer] scenePhase=active resumeCandidate=\(viewState.activeShortsVideoID ?? "nil")")
+                isVideoScreenVisible = true
+                viewState.pendingDisappearReason = .tabSwitch
+                logger.debug("[VideoPlayback] appWillEnterForeground restoreVisibleState videoId=\(viewState.activeShortsVideoID ?? "nil")")
+                if let activeVideoID = viewState.activeShortsVideoID {
+                    videoLiveActivityManager.end(videoId: activeVideoID, reason: .foreground)
+                }
             } else {
-                viewState.isShortsPlaying = false
-                logger.debug("[ShortsPlayer] scenePhase=background paused=true activeVideoId=\(viewState.activeShortsVideoID ?? "nil")")
+                let activeVideoID = viewState.activeShortsVideoID
+                let wasPlaying = viewState.isShortsPlaying
+                viewState.pendingDisappearReason = .appBackground
+                logger.debug("[VideoVisibility] event=appBackgrounded activeVideoId=\(activeVideoID ?? "nil")")
+                videoLiveActivityManager.startOrUpdate(
+                    snapshot: makeBackgroundLiveActivitySnapshot(activeVideoID: activeVideoID, wasPlaying: wasPlaying)
+                )
+                if wasPlaying, let activeVideoID {
+                    logger.debug("[VideoPlayback] appDidEnterBackground keepPlaying=true videoId=\(activeVideoID)")
+                    logger.debug("[VideoPlayback] continue reason=appBackgrounded videoId=\(activeVideoID)")
+                    logger.debug("[LiveActivity] preserve reason=backgroundPlayback videoId=\(activeVideoID)")
+                }
             }
+        case .visibilityChanged(let isVisible, let reason):
+            if isVisible {
+                await send(.onAppear)
+            } else {
+                logger.debug("[VideoVisibility] event=\(reason.rawValue) activeVideoId=\(viewState.activeShortsVideoID ?? "nil")")
+                await send(.viewDisappeared(reason: reason))
+            }
+        case .shortsPlaybackSnapshotUpdated(let snapshot):
+            shortsPlaybackSnapshotByVideoID[snapshot.videoId] = snapshot
         }
     }
 
@@ -138,6 +210,7 @@ final class VideoListPresenter: ObservableObject {
             viewState.errorMessage = nil
             hasLoaded = true
             logger.debug("[VideoList] loaded count=\(videos.count) nextCursor=\(page.nextCursor ?? "nil")")
+            attemptInitialAutoplayIfNeeded(reason: "listLoaded")
         } catch {
             guard generation == reloadGeneration else {
                 logger.debug("[VideoList] stale reload failure ignored generation=\(generation) current=\(reloadGeneration)")
@@ -231,10 +304,56 @@ final class VideoListPresenter: ObservableObject {
         viewState.videos = videos.map(makeVideoCardModel)
     }
 
+    private func makeBackgroundLiveActivitySnapshot(activeVideoID: String?, wasPlaying: Bool) -> VideoLiveActivitySnapshot? {
+        guard let activeVideoID,
+              let video = videos.first(where: { $0.videoId == activeVideoID }) else {
+            return nil
+        }
+
+        var snapshot = shortsPlaybackSnapshotByVideoID[activeVideoID] ?? VideoLiveActivitySnapshot(
+            videoId: video.videoId,
+            title: video.title,
+            thumbnailURLString: video.thumbnailURL,
+            playbackState: .paused,
+            elapsedTime: 0,
+            duration: video.duration,
+            quality: video.availableQualities.first ?? "auto"
+        )
+
+        snapshot = VideoLiveActivitySnapshot(
+            videoId: snapshot.videoId,
+            title: snapshot.title,
+            thumbnailURLString: snapshot.thumbnailURLString,
+            playbackState: wasPlaying ? .playing : .paused,
+            elapsedTime: snapshot.elapsedTime,
+            duration: snapshot.duration > 0 ? snapshot.duration : video.duration,
+            quality: snapshot.quality
+        )
+        return snapshot
+    }
+
     private func applyUnavailableState(message: String) {
         viewState.errorMessage = message
         viewState.isLoading = false
         viewState.isRefreshing = false
+    }
+
+    private func attemptInitialAutoplayIfNeeded(reason: String) {
+        guard !hasPerformedInitialAutoplayForCurrentEntry else { return }
+        guard isVideoScreenVisible else {
+            logger.debug("[VideoAutoplay] skipped reason=viewNotVisible")
+            return
+        }
+        guard let firstVideo = videos.first else {
+            logger.debug("[VideoAutoplay] skipped reason=listEmpty")
+            return
+        }
+
+        hasPerformedInitialAutoplayForCurrentEntry = true
+        viewState.activeShortsVideoID = firstVideo.videoId
+        viewState.isShortsPlaying = true
+        logger.debug("[VideoAutoplay] selected first videoId=\(firstVideo.videoId)")
+        logger.debug("[VideoPlayback] state from=ready to=playing videoId=\(firstVideo.videoId) reason=initialAutoplay")
     }
 
     private func applyUpdatedVideo(_ updatedVideo: Video) {

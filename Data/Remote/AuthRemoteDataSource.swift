@@ -149,11 +149,12 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
     ) async throws -> ProfileImageUploadResponseDTO {
         var builder = MultipartFormDataBuilder()
         builder.addFile(
-            fieldName: "profile",
+            fieldName: UploadFieldName.profile,
             fileName: fileName,
             mimeType: mimeType,
             fileData: data
         )
+        Logger(category: "MultipartUpload").debug("[MultipartUpload] request path=/v1/users/profile/image fieldName=\(UploadFieldName.profile) fileCount=1 totalBytes=\(data.count)")
         let endpoint = Endpoint<ProfileImageUploadResponseDTO>(
             path: "/v1/users/profile/image",
             method: .post,
@@ -161,7 +162,9 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
             timeout: .upload,
             authorizationPolicy: .accessToken
         )
-        return try await apiClient.execute(endpoint)
+        let response = try await apiClient.execute(endpoint)
+        Logger(category: "MultipartUpload").debug("[MultipartUpload] response success path=/v1/users/profile/image")
+        return response
     }
 
     func updateDeviceToken(_ deviceToken: String) async throws {

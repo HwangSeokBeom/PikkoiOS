@@ -305,6 +305,7 @@ final class APIClient: APIClientProtocol {
         guard endpoint.method == .get,
               endpoint.body == nil,
               endpoint.authorizationPolicy != .refreshToken,
+              endpoint.cachePolicy == .automatic,
               !didRetryAfterRefresh,
               !isVideoStreamEndpoint(endpoint),
               let url = request.url,

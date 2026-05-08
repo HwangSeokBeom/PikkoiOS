@@ -44,6 +44,11 @@ enum RequestBody: Sendable, Equatable {
     }
 }
 
+enum EndpointCachePolicy: Sendable, Equatable {
+    case automatic
+    case reloadIgnoringLocalCache
+}
+
 struct Endpoint<ResponseDTO: Decodable & Sendable>: Sendable {
     let path: String
     let method: HTTPMethod
@@ -52,6 +57,7 @@ struct Endpoint<ResponseDTO: Decodable & Sendable>: Sendable {
     let body: RequestBody?
     let timeout: RequestTimeoutPreset
     let authorizationPolicy: AuthorizationPolicy
+    let cachePolicy: EndpointCachePolicy
 
     init(
         path: String,
@@ -60,7 +66,8 @@ struct Endpoint<ResponseDTO: Decodable & Sendable>: Sendable {
         headers: [String: String] = [:],
         body: RequestBody? = nil,
         timeout: RequestTimeoutPreset = .default,
-        authorizationPolicy: AuthorizationPolicy = .none
+        authorizationPolicy: AuthorizationPolicy = .none,
+        cachePolicy: EndpointCachePolicy = .automatic
     ) {
         self.path = path
         self.method = method
@@ -69,6 +76,7 @@ struct Endpoint<ResponseDTO: Decodable & Sendable>: Sendable {
         self.body = body
         self.timeout = timeout
         self.authorizationPolicy = authorizationPolicy
+        self.cachePolicy = cachePolicy
     }
 }
 

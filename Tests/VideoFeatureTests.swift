@@ -1,7 +1,15 @@
+import AVFoundation
 import XCTest
 @testable import Pikko
 
 final class VideoFeatureTests: XCTestCase {
+    func testVideoPlaybackTimingSafeSecondsHandlesInvalidIndefiniteAndNegativeTimes() {
+        XCTAssertNil(VideoPlaybackTiming.safeSeconds(.invalid))
+        XCTAssertNil(VideoPlaybackTiming.safeSeconds(.indefinite))
+        XCTAssertEqual(VideoPlaybackTiming.safeSeconds(CMTime(seconds: -3, preferredTimescale: 600)), 0)
+        XCTAssertEqual(VideoPlaybackTiming.safeSeconds(CMTime(seconds: 12.5, preferredTimescale: 600)), 12.5)
+    }
+
     func testVideoResponseDTODecodesSwaggerSnakeCaseFields() throws {
         let dto = try NetworkCoding.makeJSONDecoder().decode(
             VideoResponseDTO.self,
@@ -494,6 +502,59 @@ final class VideoListPresenterTests: XCTestCase {
         XCTAssertNil(presenter.viewState.errorMessage)
     }
 
+    func testInitialVideoTabEntryAutoplaysFirstVideoOnce() async {
+        let interactor = StubVideoListInteractor(
+            pages: [CursorPage(items: [makeVideo()], nextCursor: nil)]
+        )
+        let presenter = VideoListPresenter(interactor: interactor, router: SpyVideoListRouter())
+
+        await presenter.send(.onAppear)
+        await presenter.send(.onAppear)
+
+        XCTAssertEqual(interactor.loadVideosCallCount, 1)
+        XCTAssertEqual(presenter.viewState.activeShortsVideoID, "video-1")
+        XCTAssertTrue(presenter.viewState.isShortsPlaying)
+    }
+
+    func testHiddenVideoTabDoesNotAutoplayBeforeVisible() async {
+        let interactor = StubVideoListInteractor(
+            pages: [CursorPage(items: [makeVideo()], nextCursor: nil)]
+        )
+        let presenter = VideoListPresenter(interactor: interactor, router: SpyVideoListRouter())
+
+        await presenter.send(.visibilityChanged(isVisible: false, reason: .tabSwitch))
+
+        XCTAssertEqual(interactor.loadVideosCallCount, 0)
+        XCTAssertNil(presenter.viewState.activeShortsVideoID)
+        XCTAssertFalse(presenter.viewState.isShortsPlaying)
+    }
+
+    func testTabChangedStopsHiddenShortsPlayback() async {
+        let presenter = VideoListPresenter(
+            interactor: StubVideoListInteractor(pages: [CursorPage(items: [makeVideo()], nextCursor: nil)]),
+            router: SpyVideoListRouter()
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.visibilityChanged(isVisible: false, reason: .tabSwitch))
+
+        XCTAssertEqual(presenter.viewState.activeShortsVideoID, "video-1")
+        XCTAssertFalse(presenter.viewState.isShortsPlaying)
+    }
+
+    func testAppBackgroundPreservesShortsPlaybackState() async {
+        let presenter = VideoListPresenter(
+            interactor: StubVideoListInteractor(pages: [CursorPage(items: [makeVideo()], nextCursor: nil)]),
+            router: SpyVideoListRouter()
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.scenePhaseChanged(isActive: false))
+
+        XCTAssertEqual(presenter.viewState.activeShortsVideoID, "video-1")
+        XCTAssertTrue(presenter.viewState.isShortsPlaying)
+    }
+
     func testVideoListFailureShowsErrorState() async {
         let presenter = VideoListPresenter(
             interactor: StubVideoListInteractor(error: NetworkError.transport),
@@ -561,7 +622,7 @@ final class VideoListPresenterTests: XCTestCase {
 
         XCTAssertNil(router.routedVideo)
         XCTAssertEqual(presenter.viewState.activeShortsVideoID, "video-1")
-        XCTAssertTrue(presenter.viewState.isShortsPlaying)
+        XCTAssertFalse(presenter.viewState.isShortsPlaying)
     }
 
     func testOriginalButtonRoutesToOriginalPlayer() async {

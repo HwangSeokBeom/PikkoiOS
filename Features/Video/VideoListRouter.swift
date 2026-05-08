@@ -14,11 +14,15 @@ final class VideoListRouter: ObservableObject, VideoListRouting {
     func routeToOriginalVideo(video: Video) {
         let videoID = video.videoId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !videoID.isEmpty else {
-            logger.warning("[VideoList] blocked selection because videoId is empty title=\(video.title)")
+            logger.warning("[ShortsOriginal] open failed reason=missingVideoId")
+            return
+        }
+        if pendingVideo?.videoId == videoID {
+            logger.debug("[RouteGuard] append skipped reason=duplicate destination=videoDetail videoId=\(videoID)")
             return
         }
 
-        logger.debug("[VideoList] OriginalVideo button action=openOriginal videoId=\(videoID)")
+        logger.debug("[RouteGuard] mutation serialized destination=videoDetail videoId=\(videoID)")
         pendingVideo = video
     }
 

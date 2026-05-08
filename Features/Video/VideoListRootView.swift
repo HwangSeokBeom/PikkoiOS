@@ -10,6 +10,7 @@ struct VideoListRootView: View {
     private let tokenStore: any TokenStore
     private let makeVideoPlayerView: (Video, @escaping (Video) -> Void) -> AnyView
     private let resetTrigger: Int
+    private let isTabActive: Bool
 
     init(
         presenter: VideoListPresenter,
@@ -20,7 +21,8 @@ struct VideoListRootView: View {
         appConfiguration: AppConfiguration,
         tokenStore: any TokenStore,
         makeVideoPlayerView: @escaping (Video, @escaping (Video) -> Void) -> AnyView,
-        resetTrigger: Int = 0
+        resetTrigger: Int = 0,
+        isTabActive: Bool = true
     ) {
         _presenter = StateObject(wrappedValue: presenter)
         _router = StateObject(wrappedValue: router)
@@ -31,6 +33,7 @@ struct VideoListRootView: View {
         self.tokenStore = tokenStore
         self.makeVideoPlayerView = makeVideoPlayerView
         self.resetTrigger = resetTrigger
+        self.isTabActive = isTabActive
     }
 
     var body: some View {
@@ -41,7 +44,8 @@ struct VideoListRootView: View {
             setLikeUseCase: setLikeUseCase,
             appConfiguration: appConfiguration,
             tokenStore: tokenStore,
-            resetTrigger: resetTrigger
+            resetTrigger: resetTrigger,
+            isTabActive: isTabActive
         )
         .navigationDestination(isPresented: videoPresentedBinding) {
             if let video = router.pendingVideo {
@@ -53,7 +57,14 @@ struct VideoListRootView: View {
             }
         }
         .task {
-            await presenter.send(.onAppear)
+            if isTabActive {
+                await presenter.send(.onAppear)
+            } else {
+                await presenter.send(.visibilityChanged(isVisible: false, reason: .tabSwitch))
+            }
+        }
+        .onChange(of: isTabActive) { _, isActive in
+            Task { await presenter.send(.visibilityChanged(isVisible: isActive, reason: .tabSwitch)) }
         }
     }
 
@@ -63,6 +74,7 @@ struct VideoListRootView: View {
             set: { isPresented in
                 if !isPresented {
                     router.clearPendingRoute()
+                    Task { await presenter.send(.originalRouteCleared) }
                 }
             }
         )

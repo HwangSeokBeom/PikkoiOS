@@ -40,6 +40,9 @@ final class AppDIContainer {
     let orderStatusSnapshotStore: OrderStatusSnapshotStore
     let communityNotificationSnapshotStore: CommunityNotificationSnapshotStore
     let notificationDiagnosticsStore: NotificationDiagnosticsStore
+    let orderLiveActivityManager: OrderLiveActivityManaging
+    let videoLiveActivityManager: VideoLiveActivityManaging
+    private(set) var orderBackgroundRefreshCoordinator: OrderBackgroundRefreshing?
 
     init(
         environment: AppEnvironment = .current,
@@ -57,8 +60,11 @@ final class AppDIContainer {
         let resolvedUserDefaultsStore = userDefaultsStore ?? UserDefaultsStore()
         let resolvedNotificationRepository = UserDefaultsAppNotificationRepository(store: resolvedUserDefaultsStore)
         let resolvedPendingNotificationRouteStore = PendingNotificationRouteStore()
-        let resolvedNotificationRouter = AppNotificationRouter(pendingRouteStore: resolvedPendingNotificationRouteStore)
         let resolvedActiveChatRoomTracker = ActiveChatRoomTracker()
+        let resolvedNotificationRouter = AppNotificationRouter(
+            pendingRouteStore: resolvedPendingNotificationRouteStore,
+            activeChatRoomTracker: resolvedActiveChatRoomTracker
+        )
         let resolvedActiveCommunityPostTracker = ActiveCommunityPostTracker()
         let resolvedNotificationDiagnosticsStore = NotificationDiagnosticsStore()
         let resolvedNotificationService = DefaultAppNotificationService(
@@ -191,6 +197,8 @@ final class AppDIContainer {
         self.orderStatusSnapshotStore = resolvedOrderStatusSnapshotStore
         self.communityNotificationSnapshotStore = resolvedCommunityNotificationSnapshotStore
         self.notificationDiagnosticsStore = resolvedNotificationDiagnosticsStore
+        self.orderLiveActivityManager = OrderLiveActivityManager.shared
+        self.videoLiveActivityManager = VideoLiveActivityService.shared
     }
 
     func makeAppState() -> AppState {
@@ -201,6 +209,11 @@ final class AppDIContainer {
         )
         let cartStore = CartStore(cartRepository: cartRepository)
         let appState = AppState(sessionStore: sessionStore, cartStore: cartStore)
+        orderBackgroundRefreshCoordinator = OrderBackgroundRefreshCoordinator(
+            orderRepository: orderRepository,
+            sessionStore: sessionStore,
+            liveActivityManager: orderLiveActivityManager
+        )
         appNotificationRouter.attach(appState: appState)
         appNotificationService.currentUserIDProvider = { [weak sessionStore] in
             sessionStore?.currentUserID

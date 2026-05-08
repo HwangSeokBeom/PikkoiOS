@@ -2,6 +2,7 @@ import Foundation
 
 protocol OrderRepository: Sendable {
     func fetchOrders(cursor: String?, filter: String?) async throws -> CursorPage<OrderSummary>
+    func fetchOrders(cursor: String?, filter: String?, forceRefresh: Bool) async throws -> CursorPage<OrderSummary>
     func fetchOrderDetail(orderID: String) async throws -> OrderDetail
     func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt
     func cancelOrder(orderCode: String) async throws -> OrderDetail
@@ -9,4 +10,10 @@ protocol OrderRepository: Sendable {
     func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt
     func validatePrice(_ request: CheckoutPriceValidationRequest) async throws -> CheckoutPriceValidationResult
     func createOrder(_ submission: CheckoutOrderSubmission) async throws -> CreatedOrder
+}
+
+extension OrderRepository {
+    func fetchOrders(cursor: String?, filter: String?, forceRefresh: Bool) async throws -> CursorPage<OrderSummary> {
+        try await fetchOrders(cursor: cursor, filter: filter)
+    }
 }

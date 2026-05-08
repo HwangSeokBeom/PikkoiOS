@@ -13,6 +13,7 @@ struct VideoListView: View {
     let appConfiguration: AppConfiguration
     let tokenStore: any TokenStore
     let resetTrigger: Int
+    let isTabActive: Bool
     @Environment(\.scenePhase) private var scenePhase
     @State private var visibleVideoID: String?
 
@@ -49,10 +50,13 @@ struct VideoListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
         .onDisappear {
-            Task { await presenter.send(.viewDisappeared) }
+            Task { await presenter.send(.viewDisappeared(reason: presenter.viewState.pendingDisappearReason)) }
         }
         .onChange(of: scenePhase) { _, phase in
             Task { await presenter.send(.scenePhaseChanged(isActive: phase == .active)) }
+            if phase == .background {
+                PictureInPictureManager.shared.start(reason: "appBackgrounded")
+            }
         }
         .refreshable {
             await presenter.send(.refreshRequested)
@@ -82,6 +86,7 @@ struct VideoListView: View {
                             tokenStore: tokenStore,
                             isActive: presenter.viewState.activeShortsVideoID == video.id,
                             isPlaying: presenter.viewState.activeShortsVideoID == video.id && presenter.viewState.isShortsPlaying,
+                            disappearReason: presenter.viewState.pendingDisappearReason,
                             onTap: {
                                 Task { await presenter.send(.videoTapped(video.id)) }
                             },
@@ -90,6 +95,9 @@ struct VideoListView: View {
                             },
                             onLikeTap: {
                                 Task { await presenter.send(.videoLikeTapped(video.id)) }
+                            },
+                            onPlaybackSnapshot: { snapshot in
+                                Task { await presenter.send(.shortsPlaybackSnapshotUpdated(snapshot)) }
                             }
                         )
                         .containerRelativeFrame(.vertical)
@@ -136,9 +144,11 @@ private struct ShortsVideoPageView: View {
     let tokenStore: any TokenStore
     let isActive: Bool
     let isPlaying: Bool
+    let disappearReason: VideoListViewDisappearReason
     let onTap: () -> Void
     let onOriginalTap: () -> Void
     let onLikeTap: () -> Void
+    let onPlaybackSnapshot: (VideoLiveActivitySnapshot) -> Void
 
     @StateObject private var viewModel: VideoPlayerViewModel
     @State private var areControlsExpanded = false
@@ -155,9 +165,11 @@ private struct ShortsVideoPageView: View {
         tokenStore: any TokenStore,
         isActive: Bool,
         isPlaying: Bool,
+        disappearReason: VideoListViewDisappearReason,
         onTap: @escaping () -> Void,
         onOriginalTap: @escaping () -> Void,
-        onLikeTap: @escaping () -> Void
+        onLikeTap: @escaping () -> Void,
+        onPlaybackSnapshot: @escaping (VideoLiveActivitySnapshot) -> Void
     ) {
         self.model = model
         self.imageLoader = imageLoader
@@ -167,16 +179,19 @@ private struct ShortsVideoPageView: View {
         self.tokenStore = tokenStore
         self.isActive = isActive
         self.isPlaying = isPlaying
+        self.disappearReason = disappearReason
         self.onTap = onTap
         self.onOriginalTap = onOriginalTap
         self.onLikeTap = onLikeTap
+        self.onPlaybackSnapshot = onPlaybackSnapshot
         _viewModel = StateObject(
             wrappedValue: VideoPlayerViewModel(
                 video: model.video,
                 fetchStreamUseCase: fetchStreamUseCase,
                 setLikeUseCase: setLikeUseCase,
                 appConfiguration: appConfiguration,
-                tokenStore: tokenStore
+                tokenStore: tokenStore,
+                context: .shorts
             )
         )
     }
@@ -261,9 +276,24 @@ private struct ShortsVideoPageView: View {
             } else {
                 viewModel.pause()
             }
+            publishPlaybackSnapshot()
+        }
+        .onChange(of: viewModel.viewState.currentTime) { _, _ in
+            guard isActive else { return }
+            publishPlaybackSnapshot()
+        }
+        .onChange(of: viewModel.viewState.playbackState) { _, _ in
+            guard isActive else { return }
+            publishPlaybackSnapshot()
         }
         .onDisappear {
-            viewModel.pause()
+            if disappearReason == .openOriginal {
+                viewModel.detachFromView(reason: "openOriginal")
+            } else if disappearReason == .appBackground {
+                Logger(category: "VideoList").debug("[VideoPlayback] continue reason=appBackgrounded videoId=\(model.id)")
+            } else {
+                viewModel.pause()
+            }
             controlsFadeTask?.cancel()
         }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
@@ -279,7 +309,13 @@ private struct ShortsVideoPageView: View {
     @ViewBuilder
     private var mediaSurface: some View {
         if let player = viewModel.player {
-            VideoPlayerLayerView(player: player, videoGravity: .resizeAspectFill)
+            VideoPlayerLayerView(
+                player: player,
+                videoGravity: .resizeAspectFill,
+                videoId: model.id,
+                context: .shorts,
+                isPictureInPictureEnabled: isActive
+            )
                 .ignoresSafeArea()
         } else {
             AuthorizedAsyncImage(
@@ -482,5 +518,27 @@ private struct ShortsVideoPageView: View {
                 .font(PikkoTypography.captionStrong)
         }
         .foregroundStyle(.white.opacity(0.84))
+    }
+
+    private func publishPlaybackSnapshot() {
+        let state: VideoLiveActivityPlaybackState
+        if isPlaying {
+            state = .playing
+        } else if case .playing = viewModel.viewState.playbackState {
+            state = .playing
+        } else {
+            state = .paused
+        }
+        onPlaybackSnapshot(
+            VideoLiveActivitySnapshot(
+                videoId: model.id,
+                title: model.title,
+                thumbnailURLString: model.thumbnailURL,
+                playbackState: state,
+                elapsedTime: viewModel.viewState.currentTime,
+                duration: viewModel.viewState.duration ?? model.video.duration,
+                quality: viewModel.viewState.effectivePlaybackQuality ?? viewModel.viewState.userSelectedQuality
+            )
+        )
     }
 }

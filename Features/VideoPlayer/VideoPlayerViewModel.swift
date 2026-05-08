@@ -17,7 +17,11 @@ final class VideoPlayerViewModel: ObservableObject {
     private let appConfiguration: AppConfiguration
     private let tokenStore: (any TokenStore)?
     private let protectedResourceHeaderProvider: ProtectedResourceHeaderProvider?
+    private let imageLoader: (any AuthorizedImageLoading)?
+    private let nowPlayingManager: NowPlayingManager
+    private let context: VideoPlaybackContext
     private let onVideoUpdated: (Video) -> Void
+    private let playbackVideoID: String
     private let logger = Logger(category: "VideoPlayer")
     private let qualityLogger = Logger(category: "VideoQuality")
     private let streamServerFailureMessage = "영상 스트리밍 주소가 만료되었거나 서버 설정이 올바르지 않습니다. 다시 시도해 주세요."
@@ -28,7 +32,6 @@ final class VideoPlayerViewModel: ObservableObject {
     private var itemStatusObservation: NSKeyValueObservation?
     private var playerStatusObservation: NSKeyValueObservation?
     private var playerTimeControlObservation: NSKeyValueObservation?
-    private var periodicTimeObserverRegistration: PeriodicTimeObserverRegistration?
     private var pendingSeekTime: CMTime?
     private var pendingResumeAfterReady = false
     private var playbackGeneration = 0
@@ -41,6 +44,9 @@ final class VideoPlayerViewModel: ObservableObject {
     private var subtitleGeneration = 0
     private var subtitleCues: [VideoSubtitleCue] = []
     private let subtitlePreferenceStore = VideoSubtitlePreferenceStore()
+    private var didTearDown = false
+    private var isDetachedFromView = false
+    private var lastKnownDuration: Double?
 
     init(
         video: Video,
@@ -48,6 +54,9 @@ final class VideoPlayerViewModel: ObservableObject {
         setLikeUseCase: SetVideoLikeUseCase,
         appConfiguration: AppConfiguration = AppConfiguration(),
         tokenStore: (any TokenStore)? = nil,
+        imageLoader: (any AuthorizedImageLoading)? = nil,
+        nowPlayingManager: NowPlayingManager = .shared,
+        context: VideoPlaybackContext = .detail,
         onVideoUpdated: @escaping (Video) -> Void = { _ in }
     ) {
         self.viewState = VideoPlayerViewState(video: video)
@@ -58,7 +67,11 @@ final class VideoPlayerViewModel: ObservableObject {
         self.protectedResourceHeaderProvider = tokenStore.map {
             ProtectedResourceHeaderProvider(configuration: appConfiguration, tokenStore: $0)
         }
+        self.imageLoader = imageLoader
+        self.nowPlayingManager = nowPlayingManager
+        self.context = context
         self.onVideoUpdated = onVideoUpdated
+        self.playbackVideoID = video.videoId
     }
 
     convenience init(
@@ -73,6 +86,8 @@ final class VideoPlayerViewModel: ObservableObject {
             setLikeUseCase: setLikeUseCase,
             appConfiguration: AppConfiguration(),
             tokenStore: nil,
+            imageLoader: nil,
+            context: .detail,
             onVideoUpdated: onVideoUpdated
         )
     }
@@ -81,7 +96,9 @@ final class VideoPlayerViewModel: ObservableObject {
         itemStatusObservation?.invalidate()
         playerStatusObservation?.invalidate()
         playerTimeControlObservation?.invalidate()
-        periodicTimeObserverRegistration?.invalidate()
+        Task { @MainActor [videoId = playbackVideoID] in
+            VideoPlaybackCoordinator.shared.deactivate(videoId: videoId)
+        }
     }
 
     func loadStreamIfNeeded() async {
@@ -99,6 +116,13 @@ final class VideoPlayerViewModel: ObservableObject {
     }
 
     func play() {
+        didTearDown = false
+        if isDetachedFromView {
+            isDetachedFromView = false
+            if let player, let item = player.currentItem {
+                activatePlaybackCoordinator(for: player, item: item, generation: playbackGeneration)
+            }
+        }
         switch viewState.playbackState {
         case .ready, .paused:
             break
@@ -117,19 +141,42 @@ final class VideoPlayerViewModel: ObservableObject {
     }
 
     func tearDown() {
+        guard !didTearDown else {
+            logger.debug("[VideoPlayer] context=\(context.rawValue) cleanup skipped reason=alreadyRemoved videoId=\(viewState.video.videoId)")
+            return
+        }
+        didTearDown = true
+        isDetachedFromView = true
         cancelPendingPlayback(reason: "viewDisappear")
         cancelSubtitleLoading(reason: "viewDisappear")
         removeCurrentItemObserver()
         player?.pause()
         player?.replaceCurrentItem(with: nil)
+        nowPlayingManager.clear(reason: "dismissed")
+        VideoPlaybackCoordinator.shared.deactivate(videoId: viewState.video.videoId)
         playerStatusObservation?.invalidate()
         playerStatusObservation = nil
         playerTimeControlObservation?.invalidate()
         playerTimeControlObservation = nil
-        removePeriodicTimeObserver()
         viewState.currentTime = 0
         viewState.duration = nil
+        lastKnownDuration = nil
         viewState.activeCaptionText = nil
+    }
+
+    func detachFromView(reason: String) {
+        guard !isDetachedFromView else {
+            logger.debug("[VideoPlayer] context=\(context.rawValue) cleanup skipped reason=alreadyDetached videoId=\(viewState.video.videoId)")
+            return
+        }
+        isDetachedFromView = true
+        cancelPendingPlayback(reason: reason)
+        player?.pause()
+        VideoPlaybackCoordinator.shared.deactivate(videoId: viewState.video.videoId)
+        if case .playing = viewState.playbackState {
+            setPlaybackState(.paused)
+        }
+        logger.debug("[VideoPlayer] context=\(context.rawValue) detach reason=\(reason) videoId=\(viewState.video.videoId)")
     }
 
     func openQualityMenu() {
@@ -171,7 +218,7 @@ final class VideoPlayerViewModel: ObservableObject {
         } catch {
             viewState.detailReason = detailReason(for: error)
             setPlaybackState(.failed(userFacingPlaybackFailureMessage(forExplicitQuality: true)))
-            logger.error("[VideoPlayer] selected quality unavailable quality=\(nextQuality)")
+            logger.error("[VideoPlayer] context=\(context.rawValue) selected quality unavailable quality=\(nextQuality)")
             return
         }
 
@@ -193,7 +240,7 @@ final class VideoPlayerViewModel: ObservableObject {
         guard let item = player?.currentItem else {
             viewState.detailReason = "playerItemFailed"
             setPlaybackState(.failed(userFacingPlaybackFailureMessage(forExplicitQuality: viewState.userSelectedQuality != "auto")))
-            logger.error("[VideoPlayer] failed videoId=\(viewState.video.videoId) reason=playbackFailure")
+            logger.error("[VideoPlayer] context=\(context.rawValue) item failed videoId=\(viewState.video.videoId) reason=playbackFailure")
             return
         }
 
@@ -211,7 +258,7 @@ final class VideoPlayerViewModel: ObservableObject {
         if isLikelyExpired() {
             viewState.detailReason = "playerPlaybackStalledExpired"
             setPlaybackState(.expiredOrUnavailable(streamServerFailureMessage))
-            logger.error("[VideoPlayer] failed videoId=\(viewState.video.videoId) reason=playbackStalledExpired")
+            logger.error("[VideoPlayer] context=\(context.rawValue) item failed videoId=\(viewState.video.videoId) reason=playbackStalledExpired")
         }
     }
 
@@ -358,7 +405,13 @@ final class VideoPlayerViewModel: ObservableObject {
         logger.debug("[ShortsPlayer] ended policy=replay videoId=\(viewState.video.videoId)")
         seek(toSeconds: 0)
         player?.play()
+        nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: viewState.currentTime, rate: 1, force: true)
         setPlaybackState(.playing)
+    }
+
+    func handlePlaybackEnded() {
+        setPlaybackState(.ready)
+        nowPlayingManager.clear(reason: "ended")
     }
 
     func seek(toProgress progress: Double) {
@@ -376,6 +429,7 @@ final class VideoPlayerViewModel: ObservableObject {
         let targetTime = CMTime(seconds: seconds, preferredTimescale: 600)
         viewState.currentTime = max(0, seconds)
         player?.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: seconds, force: true)
     }
 
     func qualityActionTitle(_ title: String, isSelected: Bool) -> String {
@@ -388,13 +442,13 @@ final class VideoPlayerViewModel: ObservableObject {
             viewState.toastMessage = nil
             viewState.detailReason = "selectedQualityUnavailable"
             setPlaybackState(.failed("영상 정보를 불러올 수 없어요."))
-            logger.error("[VideoPlayer] invalid empty videoId")
+            logger.error("[VideoPlayer] context=\(context.rawValue) invalid empty videoId")
             return
         }
 
         let requestKey = "\(videoID)|\(viewState.userSelectedQuality)"
         guard activeStreamRequestKey != requestKey else {
-            logger.debug("[VideoPlayer] skip duplicate requestStream key=\(requestKey)")
+            logger.debug("[VideoPlayer] context=\(context.rawValue) skip duplicate requestStream key=\(requestKey)")
             return
         }
         activeStreamRequestKey = requestKey
@@ -403,18 +457,22 @@ final class VideoPlayerViewModel: ObservableObject {
         setPlaybackState(.loadingStream)
         viewState.toastMessage = nil
         viewState.detailReason = nil
-        logger.debug("[VideoPlayer] state=loadingStream videoId=\(videoID)")
+        logger.debug("[VideoPlayer] context=\(context.rawValue) state=loadingStream videoId=\(videoID)")
 
         do {
             if try await isMissingAuthenticatedSession() {
-                logger.warning("[VideoPlayer] stream skipped videoId=\(videoID) reason=missingAuthenticatedSession")
+                logger.warning("[VideoPlayer] context=\(context.rawValue) stream skipped videoId=\(videoID) reason=missingAuthenticatedSession")
                 setPlaybackState(.failed("로그인이 필요합니다."))
                 return
             }
 
             let stream = try await fetchStreamUseCase.execute(videoId: videoID)
             guard !Task.isCancelled else {
-                logger.debug("[VideoPlayer] stream cancelled videoId=\(videoID) reason=taskCancelled")
+                logger.debug("[VideoPlayer] context=\(context.rawValue) stream cancelled videoId=\(videoID) reason=taskCancelled")
+                return
+            }
+            guard !isDetachedFromView, !didTearDown else {
+                logger.debug("[ShortsOriginal] stale update ignored source=streamResolve videoId=\(videoID)")
                 return
             }
             streamIssuedAt = Date()
@@ -461,9 +519,9 @@ final class VideoPlayerViewModel: ObservableObject {
             viewState.detailReason = detailReason(for: error)
             setPlaybackState(.failed(message))
             if case .forbidden = error as? NetworkError {
-                logger.warning("[VideoPlayer] stream forbidden videoId=\(videoID) keepSession=true")
+                logger.warning("[VideoPlayer] context=\(context.rawValue) stream forbidden videoId=\(videoID) keepSession=true")
             }
-            logger.error("[VideoPlayer] failed videoId=\(viewState.video.videoId) reason=\(error.localizedDescription)")
+            logger.error("[VideoPlayer] context=\(context.rawValue) item failed videoId=\(viewState.video.videoId) error=\(error.localizedDescription)")
         }
     }
 
@@ -471,13 +529,33 @@ final class VideoPlayerViewModel: ObservableObject {
         viewState.playbackState = state
         switch state {
         case .playing:
-            logger.debug("[VideoPlayer] state=playing videoId=\(viewState.video.videoId)")
+            logger.debug("[VideoPlayer] context=\(context.rawValue) state=playing videoId=\(viewState.video.videoId)")
+            nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: viewState.currentTime, rate: 1, force: true)
         case .paused:
-            logger.debug("[VideoPlayer] state=paused videoId=\(viewState.video.videoId)")
+            logger.debug("[VideoPlayer] context=\(context.rawValue) state=paused videoId=\(viewState.video.videoId)")
+            nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: viewState.currentTime, rate: 0, force: true)
         case .ready:
-            logger.debug("[VideoPlayer] state=ready videoId=\(viewState.video.videoId)")
+            logger.debug("[VideoPlayer] context=\(context.rawValue) state=ready videoId=\(viewState.video.videoId)")
+            nowPlayingManager.updatePlaybackState(player: player, duration: viewState.duration, elapsed: viewState.currentTime, rate: 0, force: true)
+        case .failed, .expiredOrUnavailable:
+            nowPlayingManager.clear(reason: "failed")
         default:
             break
+        }
+    }
+
+    private func loadNowPlayingArtworkIfNeeded() async {
+        guard let imageLoader,
+              let thumbnailURL = viewState.video.thumbnailURL,
+              !thumbnailURL.isEmpty else {
+            return
+        }
+        do {
+            logger.debug("[NowPlaying] artwork load requested videoId=\(viewState.video.videoId) url=\(thumbnailURL)")
+            let data = try await imageLoader.imageData(for: thumbnailURL)
+            nowPlayingManager.updateMetadata(video: viewState.video, artworkData: data)
+        } catch {
+            logger.debug("[NowPlaying] artwork fallback reason=loadFailed videoId=\(viewState.video.videoId)")
         }
     }
 
@@ -504,9 +582,9 @@ final class VideoPlayerViewModel: ObservableObject {
         let generation = nextPlaybackGeneration()
         let descriptor = VideoURLLogDescriptor(url: resolvedQuality.url)
         logger.debug(
-            "[VideoPlayer] prepare item reason=\(reason) requested=\(resolvedQuality.identifier) playbackURLPath=\(descriptor.path) queryExists=\(descriptor.queryExists) queryKeys=\(descriptor.queryKeys) preserveTime=\(seekTime.seconds.isFinite ? seekTime.seconds : 0) generation=\(generation)"
+            "[VideoPlayer] context=\(context.rawValue) prepare item reason=\(reason) requested=\(resolvedQuality.identifier) playbackURLPath=\(descriptor.path) queryExists=\(descriptor.queryExists) queryKeys=\(descriptor.queryKeys) preserveTime=\(seekTime.seconds.isFinite ? seekTime.seconds : 0) generation=\(generation)"
         )
-        logger.debug("[VideoPlayer] selected quality=\(resolvedQuality.identifier) urlExists=\(!resolvedQuality.url.absoluteString.isEmpty)")
+        logger.debug("[VideoPlayer] context=\(context.rawValue) selected quality=\(resolvedQuality.identifier) urlExists=\(!resolvedQuality.url.absoluteString.isEmpty)")
         logStreamURL(rawPath: resolvedQuality.rawPath, resolvedURL: resolvedQuality.url, quality: resolvedQuality.identifier)
         setPlaybackState(.loadingStream)
         currentAttemptQuality = resolvedQuality.identifier
@@ -524,7 +602,7 @@ final class VideoPlayerViewModel: ObservableObject {
         } catch {
             guard generation == playbackGeneration else {
                 logger.debug(
-                    "[VideoPlayer] ignore stale item build failure generation=\(generation) current=\(playbackGeneration) quality=\(resolvedQuality.identifier)"
+                    "[VideoPlayer] context=\(context.rawValue) ignore stale item build failure generation=\(generation) current=\(playbackGeneration) quality=\(resolvedQuality.identifier)"
                 )
                 return
             }
@@ -549,13 +627,13 @@ final class VideoPlayerViewModel: ObservableObject {
                     selectedQuality: resolvedQuality.identifier,
                     retryExhausted: true
                 )
-                logger.error("[VideoPlayer] failed videoId=\(viewState.video.videoId) reason=\(probeFailure.detailReason)")
+                logger.error("[VideoPlayer] context=\(context.rawValue) item failed videoId=\(viewState.video.videoId) error=\(probeFailure.detailReason)")
                 return
             }
 
             viewState.detailReason = detailReason(for: error)
             setPlaybackState(.failed(failureMessage ?? userFacingPlaybackFailureMessage(forExplicitQuality: viewState.userSelectedQuality != "auto")))
-            logger.error("[VideoPlayer] player error=\(error.localizedDescription)")
+            logger.error("[VideoPlayer] context=\(context.rawValue) item failed error=\(error.localizedDescription)")
             return
         }
 
@@ -563,12 +641,12 @@ final class VideoPlayerViewModel: ObservableObject {
         currentAttemptQuality = playbackCandidate.quality
         currentAttemptAuthMode = playbackCandidate.authMode
         logger.debug(
-            "[VideoPlayer] replace item reason=\(reason) quality=\(playbackCandidate.quality) authMode=\(playbackCandidate.authMode.rawValue) hlsHeaderMode=\(playbackCandidate.authMode.rawValue) assetHeaders=true hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false playbackURLPath=\(playbackDescriptor.path) queryExists=\(playbackDescriptor.queryExists) queryKeys=\(playbackDescriptor.queryKeys) preserveTime=\(seekTime.seconds.isFinite ? seekTime.seconds : 0) generation=\(generation)"
+            "[VideoPlayer] context=\(context.rawValue) replace item reason=\(reason) quality=\(playbackCandidate.quality) authMode=\(playbackCandidate.authMode.rawValue) hlsHeaderMode=\(playbackCandidate.authMode.rawValue) assetHeaders=true hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false playbackURLPath=\(playbackDescriptor.path) queryExists=\(playbackDescriptor.queryExists) queryKeys=\(playbackDescriptor.queryKeys) preserveTime=\(seekTime.seconds.isFinite ? seekTime.seconds : 0) generation=\(generation)"
         )
 
         guard generation == playbackGeneration else {
             logger.debug(
-                "[VideoPlayer] ignore stale item build generation=\(generation) current=\(playbackGeneration) quality=\(resolvedQuality.identifier)"
+                "[VideoPlayer] context=\(context.rawValue) ignore stale item build generation=\(generation) current=\(playbackGeneration) quality=\(resolvedQuality.identifier)"
             )
             return
         }
@@ -577,6 +655,8 @@ final class VideoPlayerViewModel: ObservableObject {
         pendingResumeAfterReady = shouldResume
 
         let targetPlayer: AVPlayer
+        didTearDown = false
+        isDetachedFromView = false
         if let player {
             targetPlayer = player
             installPlayerObserversIfNeeded(for: player)
@@ -586,7 +666,12 @@ final class VideoPlayerViewModel: ObservableObject {
             player = targetPlayer
             installPlayerObserversIfNeeded(for: targetPlayer)
         }
-        installPeriodicTimeObserverIfNeeded(for: targetPlayer)
+        nowPlayingManager.configureSessionIfNeeded(player: targetPlayer, videoId: viewState.video.videoId, context: context)
+        nowPlayingManager.updateMetadata(video: viewState.video)
+        Task { [weak self] in
+            await self?.loadNowPlayingArtworkIfNeeded()
+        }
+        activatePlaybackCoordinator(for: targetPlayer, item: item, generation: generation)
 
         installItemStatusObserver(
             for: item,
@@ -625,15 +710,15 @@ final class VideoPlayerViewModel: ObservableObject {
         }
         viewState.detailReason = detailReason
         logger.error(
-            "[VideoPlayer] item status=failed requested=\(quality) userSelected=\(viewState.userSelectedQuality) error=\(itemError?.localizedDescription ?? "unknown") domain=\(nsError?.domain ?? "nil") code=\(nsError?.code ?? 0) detailReason=\(detailReason)"
+            "[VideoPlayer] context=\(context.rawValue) item status=failed requested=\(quality) userSelected=\(viewState.userSelectedQuality) error=\(itemError?.localizedDescription ?? "unknown") domain=\(nsError?.domain ?? "nil") code=\(nsError?.code ?? 0) detailReason=\(detailReason)"
         )
         logger.error(
-            "[VideoPlayer] item failed quality=\(quality) nsErrorDomain=\(nsError?.domain ?? "nil") nsErrorCode=\(nsError?.code ?? 0) underlying=\(underlyingError.map { "\($0.domain)(\($0.code))" } ?? "nil")"
+            "[VideoPlayer] context=\(context.rawValue) item failed quality=\(quality) nsErrorDomain=\(nsError?.domain ?? "nil") nsErrorCode=\(nsError?.code ?? 0) underlying=\(underlyingError.map { "\($0.domain)(\($0.code))" } ?? "nil")"
         )
         logItemErrorLog(for: item)
         logAccessLog(for: item)
         if let playerError = player?.error {
-            logger.error("[VideoPlayer] player error=\(playerError.localizedDescription)")
+            logger.error("[VideoPlayer] context=\(context.rawValue) player error=\(playerError.localizedDescription)")
         }
 #if DEBUG
         debugLogPlayerFailure(item: item, player: player)
@@ -1008,7 +1093,7 @@ final class VideoPlayerViewModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if observedPlayer.status == .failed {
-                    self.logger.error("[VideoPlayer] player error=\(observedPlayer.error?.localizedDescription ?? "unknown")")
+                    self.logger.error("[VideoPlayer] context=\(self.context.rawValue) player error=\(observedPlayer.error?.localizedDescription ?? "unknown")")
 #if DEBUG
                     self.debugLogPlayerError(observedPlayer, item: observedPlayer.currentItem)
 #endif
@@ -1020,7 +1105,7 @@ final class VideoPlayerViewModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if let error = observedPlayer.error {
-                    self.logger.error("[VideoPlayer] player error=\(error.localizedDescription)")
+                    self.logger.error("[VideoPlayer] context=\(self.context.rawValue) player error=\(error.localizedDescription)")
 #if DEBUG
                     self.debugLogPlayerError(observedPlayer, item: observedPlayer.currentItem)
 #endif
@@ -1042,14 +1127,14 @@ final class VideoPlayerViewModel: ObservableObject {
                 guard let self, item === observedItem else { return }
                 guard generation == self.playbackGeneration else {
                     self.logger.debug(
-                        "[VideoPlayer] ignore stale item status generation=\(generation) current=\(self.playbackGeneration) quality=\(quality)"
+                        "[VideoPlayer] context=\(self.context.rawValue) ignore stale item status generation=\(generation) current=\(self.playbackGeneration) quality=\(quality)"
                     )
                     return
                 }
                 switch observedItem.status {
                 case .readyToPlay:
                     self.logger.debug(
-                        "[VideoPlayer] itemReadyToPlay videoId=\(self.viewState.video.videoId) quality=\(quality) authMode=\(authMode.rawValue)"
+                        "[VideoPlayer] context=\(self.context.rawValue) itemReadyToPlay videoId=\(self.viewState.video.videoId) quality=\(quality) authMode=\(authMode.rawValue)"
                     )
                     self.viewState.effectivePlaybackQuality = quality
                     self.viewState.detailReason = nil
@@ -1085,7 +1170,7 @@ final class VideoPlayerViewModel: ObservableObject {
                     )
                 case .unknown:
                     self.logger.debug(
-                        "[VideoPlayer] item status=unknown videoID=\(self.viewState.video.videoId) quality=\(quality) generation=\(generation)"
+                        "[VideoPlayer] context=\(self.context.rawValue) item status=unknown videoID=\(self.viewState.video.videoId) quality=\(quality) generation=\(generation)"
                     )
                     break
                 @unknown default:
@@ -1096,6 +1181,10 @@ final class VideoPlayerViewModel: ObservableObject {
     }
 
     private func removeCurrentItemObserver() {
+        guard itemStatusObservation != nil else {
+            logger.warning("[VideoPlayer] observer cleanup skipped reason=alreadyRemoved context=\(context.rawValue)")
+            return
+        }
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
     }
@@ -1238,38 +1327,70 @@ final class VideoPlayerViewModel: ObservableObject {
         return error.localizedDescription
     }
 
-    private func installPeriodicTimeObserverIfNeeded(for player: AVPlayer) {
-        removePeriodicTimeObserver()
-        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
-        let token = player.addPeriodicTimeObserver(
-            forInterval: interval,
-            queue: .main
-        ) { [weak self, weak player] time in
-            Task { @MainActor in
-                guard let self else { return }
-                if !self.viewState.isScrubbing {
-                    self.viewState.currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
-                }
-                self.updatePlaybackTiming(from: player?.currentItem)
-                self.updateActiveCaption(at: self.viewState.currentTime)
+    private func activatePlaybackCoordinator(for player: AVPlayer, item: AVPlayerItem, generation: Int) {
+        VideoPlaybackCoordinator.shared.activate(
+            player: player,
+            videoId: viewState.video.videoId,
+            context: context,
+            item: item,
+            generation: generation,
+            onTick: { [weak self] tick in
+                self?.handlePlaybackTick(tick)
             }
-        }
-        periodicTimeObserverRegistration = PeriodicTimeObserverRegistration(player: player, token: token)
+        )
     }
 
-    private func removePeriodicTimeObserver() {
-        periodicTimeObserverRegistration?.invalidate()
-        periodicTimeObserverRegistration = nil
+    private func handlePlaybackTick(_ tick: VideoPlaybackTick) {
+        guard tick.videoId == viewState.video.videoId,
+              tick.context == context,
+              tick.generation == playbackGeneration else {
+            logger.debug("[PlayerTimeObserver] tick skipped reason=inactiveSession videoId=\(tick.videoId)")
+            return
+        }
+        guard let currentPlayer = player,
+              currentPlayer === tick.player,
+              currentPlayer.currentItem === tick.item else {
+            logger.debug("[PlayerTimeObserver] tick skipped reason=inactiveSession videoId=\(tick.videoId)")
+            return
+        }
+        guard let elapsed = VideoPlaybackTiming.safeSeconds(tick.time) else {
+            logger.debug("[PlayerTimeObserver] tick skipped reason=invalidTime videoId=\(tick.videoId)")
+            return
+        }
+
+        if !viewState.isScrubbing {
+            viewState.currentTime = elapsed
+        }
+        updatePlaybackTiming(from: tick.item)
+        nowPlayingManager.updatePlaybackState(player: tick.player, duration: viewState.duration, elapsed: viewState.currentTime)
+        updateActiveCaption(at: viewState.currentTime)
+        logger.debug("[PlayerTimeObserver] tick handled elapsed=\(Int(viewState.currentTime)) duration=\(Int(viewState.duration ?? 0)) rate=\(tick.player.rate)")
     }
 
     private func updatePlaybackTiming(from item: AVPlayerItem?) {
         guard let item else {
-            viewState.duration = nil
+            if let lastKnownDuration {
+                viewState.duration = lastKnownDuration
+                logger.debug("[NowPlayingUX] duration preserved source=previousSession duration=\(Int(lastKnownDuration))")
+            } else {
+                viewState.duration = nil
+            }
             return
         }
 
-        let durationSeconds = item.duration.seconds
-        viewState.duration = durationSeconds.isFinite && durationSeconds > 0 ? durationSeconds : nil
+        if let durationSeconds = VideoPlaybackTiming.safeSeconds(item.duration), durationSeconds > 0 {
+            viewState.duration = durationSeconds
+            lastKnownDuration = durationSeconds
+        } else if let lastKnownDuration {
+            viewState.duration = lastKnownDuration
+            logger.debug("[NowPlayingUX] duration preserved source=previousSession duration=\(Int(lastKnownDuration))")
+        } else if viewState.video.duration.isFinite && viewState.video.duration > 0 {
+            viewState.duration = viewState.video.duration
+            lastKnownDuration = viewState.video.duration
+            logger.debug("[NowPlayingUX] duration preserved source=videoMetadata duration=\(Int(viewState.video.duration))")
+        } else {
+            viewState.duration = nil
+        }
     }
 
     private func configureSubtitleSelection(for stream: VideoStream) {
@@ -1379,20 +1500,6 @@ final class VideoPlayerViewModel: ObservableObject {
             return
         }
         item.select(nil, in: group)
-    }
-}
-
-private final class PeriodicTimeObserverRegistration: @unchecked Sendable {
-    private weak var player: AVPlayer?
-    private let token: Any
-
-    init(player: AVPlayer, token: Any) {
-        self.player = player
-        self.token = token
-    }
-
-    func invalidate() {
-        player?.removeTimeObserver(token)
     }
 }
 
