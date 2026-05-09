@@ -167,7 +167,7 @@ struct AuthRemoteDataSource: AuthRemoteDataSourceProtocol {
         )
 #if DEBUG
         Logger(category: "ProfileImageUpload").debug("[ProfileImageUpload] prepared path=/v1/users/profile/image field=profile filename=\(fileName) mime=\(mimeType) byteSize=\(data.count) underLimit=\(data.count <= maxProfileImageBytes)")
-        Logger(category: "ProfileImage").debug("[ProfileImage] upload start fieldName=profile fileName=\(fileName) mime=\(mimeType) bytes=\(data.count)")
+        Logger(category: "ProfileImage").debug("[ProfileImage] upload start endpoint=/v1/users/profile/image fieldName=profile fileName=\(fileName) mime=\(mimeType) bytes=\(data.count)")
 #endif
         let endpoint = Endpoint<ProfileImageUploadResponseDTO>(
             path: "/v1/users/profile/image",

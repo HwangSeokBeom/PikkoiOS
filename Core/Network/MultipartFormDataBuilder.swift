@@ -20,6 +20,9 @@ struct MultipartFormDataBuilder {
         mimeType: String,
         fileData: Data
     ) {
+#if DEBUG
+        Logger(category: "Multipart").debug("[Multipart] part name=\(fieldName) fileName=\(fileName) mime=\(mimeType) bytes=\(fileData.count)")
+#endif
         append("--\(boundary)\r\n")
         append("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n")
         append("Content-Type: \(mimeType)\r\n\r\n")

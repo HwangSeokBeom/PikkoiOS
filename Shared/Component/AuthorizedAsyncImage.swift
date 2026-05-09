@@ -73,9 +73,18 @@ struct AuthorizedAsyncImage: View {
             await MainActor.run {
                 phase = .success(Image(uiImage: uiImage))
             }
+#if DEBUG
+            if isProfileImagePath(path) {
+                Logger(category: "ProfileImage").debug("[ProfileImage] display updated url=\(path)")
+            }
+#endif
         } catch {
             await MainActor.run { phase = .failure }
         }
+    }
+
+    private func isProfileImagePath(_ path: String) -> Bool {
+        path.contains("/profiles/") || path.contains("avatarRevision=")
     }
 }
 

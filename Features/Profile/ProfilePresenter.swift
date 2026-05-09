@@ -132,35 +132,35 @@ final class ProfilePresenter: ObservableObject {
             let processed: ProfileImagePreprocessResult
             do {
 #if DEBUG
-                Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] selectedFilename=\(fileName) originalByteSize=\(data.count)")
+                Logger(category: "ProfileImage").debug("[ProfileImage] preprocess start targetMaxBytes=\(ProfileImagePreprocessor.maxBytes) allowedExtensions=jpg,jpeg,png")
 #endif
                 processed = try await ProfileImagePreprocessor().processForProfileUpload(data: data, originalFileName: fileName)
 #if DEBUG
                 Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] originalUTI=\(processed.originalUTI) originalMime=\(processed.originalMimeType) originalByteSize=\(processed.originalBytes) originalPixelSize=\(Int(processed.originalPixelSize.width))x\(Int(processed.originalPixelSize.height)) orientation=\(processed.orientation)")
                 Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] outputMime=\(processed.mimeType) outputExtension=\(processed.fileExtension) outputByteSize=\(processed.data.count) outputPixelSize=\(Int(processed.pixelSize.width))x\(Int(processed.pixelSize.height)) compressionQuality=\(String(format: "%.2f", processed.compressionQuality)) downsampled=\(processed.didDownsample)")
-                Logger(category: "ProfileImage").debug("[ProfileImage] normalized outputType=\(profileImageOutputType(mimeType: processed.mimeType)) outputBytes=\(processed.data.count) maxBytes=\(ProfileImagePreprocessor.maxBytes) compression=\(String(format: "%.2f", processed.compressionQuality))")
+                Logger(category: "ProfileImage").debug("[ProfileImage] preprocess success outputType=\(profileImageOutputType(mimeType: processed.mimeType)) outputBytes=\(processed.data.count) compression=\(String(format: "%.2f", processed.compressionQuality)) maxPixel=\(Int(max(processed.pixelSize.width, processed.pixelSize.height)))")
 #endif
             } catch {
 #if DEBUG
-                Logger(category: "ProfileImage").warning("[ProfileImage] upload failed reason=\(redactedProfileImageFailureReason(from: error)) status=none isATS=\(isATSBlocked(error)) isValidation=\(isProfileImageValidationFailure(error))")
+                Logger(category: "ProfileImage").warning("[ProfileImage] preprocess failed reason=\(profileImageFailureClassification(from: error))")
 #endif
                 throw error
             }
 
             guard !processed.data.isEmpty else {
                 Logger(category: "ProfileImage").warning("[ProfileImage] upload skipped reason=processedDataEmpty")
-                throw ProfileImagePreprocessorError.invalidImage
+                throw ProfileImagePreprocessorError.decodeFailed
             }
 
             guard processed.data.count <= ProfileImagePreprocessor.maxBytes else {
                 Logger(category: "ProfileImage").warning("[ProfileImage] upload skipped reason=fileTooLarge bytes=\(processed.data.count) limit=\(ProfileImagePreprocessor.maxBytes)")
-                throw ProfileImagePreprocessorError.exceedsLimit
+                throw ProfileImagePreprocessorError.fileTooLargeAfterCompression
             }
 
             viewState.editorLocalProfileImageData = processed.data
             viewState.profileImageUpdateState = .uploadingImage(progress: nil)
 #if DEBUG
-            Logger(category: "ProfileImageUpload").debug("[ProfileImageUpload] start requestID=\(requestID) byteSize=\(processed.data.count) mime=\(processed.mimeType)")
+            Logger(category: "ProfileImage").debug("[ProfileImage] upload start endpoint=/v1/users/profile/image fieldName=profile fileName=\(processed.fileName) mime=\(processed.mimeType) bytes=\(processed.data.count)")
 #endif
             let uploadedPath = try await interactor.uploadProfileImage(
                 data: processed.data,
@@ -182,21 +182,26 @@ final class ProfilePresenter: ObservableObject {
             )
             Logger(category: "ProfileState").debug("[ProfileState] imageURLUpdated userId=\(sessionStore.currentUserID ?? "unknown") imageURL=\(effectiveUploadedPath)")
             Logger(category: "ProfileImage").debug("[ProfileImage] currentUser updated oldProfileImageExists=\(oldConfirmedProfileImagePath?.isEmpty == false) newProfileImageExists=\(!effectiveUploadedPath.isEmpty)")
+            Logger(category: "ProfileImage").debug("[ProfileImage] state update oldProfileImage=\(oldConfirmedProfileImagePath ?? "nil") newProfileImage=\(effectiveUploadedPath)")
             viewState.profileImagePath = effectiveUploadedPath
             viewState.profileImageCacheRevision += 1
             viewState.editorProfileImagePath = effectiveUploadedPath
             viewState.editorProfileImageCacheRevision = viewState.profileImageCacheRevision
             viewState.editorLocalProfileImageData = nil
             viewState.profileImageUploadErrorMessage = nil
-            viewState.editorInfoMessage = "프로필 이미지를 업로드했어요."
+            viewState.editorInfoMessage = "프로필 이미지가 변경되었어요."
             viewState.profileImageUpdateState = .success
 
             do {
+#if DEBUG
+                Logger(category: "ProfileImage").debug("[ProfileImage] refresh profile after upload start")
+#endif
                 let confirmedProfile = try await interactor.fetchMyProfile()
                 let confirmedPath = confirmedProfile.profileImagePath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 let ignoredAsStale = confirmedPath != nil && confirmedPath != effectiveUploadedPath
 #if DEBUG
                 Logger(category: "ProfileImageRefetch").debug("[ProfileImageRefetch] uncached=true status=success returnedProfileImage=\(confirmedPath ?? "nil") ignoredAsStale=\(ignoredAsStale)")
+                Logger(category: "ProfileImage").debug("[ProfileImage] refresh profile after upload success profileImage=\(confirmedPath ?? "nil")")
 #endif
                 viewState.displayName = confirmedProfile.nick
                 viewState.email = confirmedProfile.email
@@ -212,6 +217,7 @@ final class ProfilePresenter: ObservableObject {
             } catch {
 #if DEBUG
                 Logger(category: "ProfileImageRefetch").warning("[ProfileImageRefetch] uncached=true status=\(statusCodeDescription(from: error)) returnedProfileImage=nil ignoredAsStale=false")
+                Logger(category: "ProfileImage").warning("[ProfileImage] refresh profile after upload failed reason=profileRefreshFailedAfterUpload status=\(statusCodeDescription(from: error))")
 #endif
             }
         } catch {
@@ -221,7 +227,7 @@ final class ProfilePresenter: ObservableObject {
             viewState.editorLocalProfileImageData = nil
 #if DEBUG
             Logger(category: "ProfileImageUpload").warning("[ProfileImageUpload] failed requestID=\(requestID) status=\(statusCodeDescription(from: error)) reason=\(error.localizedDescription)")
-            Logger(category: "ProfileImage").warning("[ProfileImage] upload failed reason=\(redactedProfileImageFailureReason(from: error)) status=\(statusCodeDescription(from: error)) isATS=\(isATSBlocked(error)) isValidation=\(isProfileImageValidationFailure(error))")
+            Logger(category: "ProfileImage").warning("[ProfileImage] upload failed reason=\(profileImageFailureClassification(from: error)) status=\(statusCodeDescription(from: error)) isATS=\(isATSBlocked(error)) isValidation=\(isProfileImageValidationFailure(error))")
 #endif
         }
 
@@ -306,7 +312,7 @@ final class ProfilePresenter: ObservableObject {
                 try await imageLoader.removeCachedImage(for: path)
                 cacheInvalidated = true
 #if DEBUG
-                Logger(category: "ProfileImage").debug("[ProfileImage] cache invalidated oldUrlExists=\(oldPath?.isEmpty == false) newUrlExists=\(newPath?.isEmpty == false)")
+                Logger(category: "ProfileImage").debug("[ProfileImage] image cache invalidated oldURL=\(oldPath ?? "nil") newURL=\(newPath ?? "nil")")
 #endif
             } catch {
 #if DEBUG
@@ -378,14 +384,17 @@ final class ProfilePresenter: ObservableObject {
     }
 
     private func resolveProfileImageUploadMessage(from error: Error) -> String {
-        if error is ProfileImagePreprocessorError {
-            return error.localizedDescription
+        if let preprocessingError = error as? ProfileImagePreprocessorError {
+            return preprocessingError.localizedDescription
         }
 
         if let networkError = error as? NetworkError {
             switch networkError {
-            case .invalidRequest, .abnormalRequest, .businessAuthorization:
-                return "이미지 용량이 너무 커서 자동으로 줄였지만 업로드에 실패했어요. 다른 사진을 선택해 주세요."
+            case .invalidRequest, .abnormalRequest:
+                return "업로드 가능한 이미지 형식과 용량을 확인해주세요."
+            case .businessAuthorization(let message):
+                Logger(category: "ProfileImage").warning("[ProfileImage] server validation failed status=400 message=\(message)")
+                return "업로드 가능한 이미지 형식과 용량을 확인해주세요."
             case .decoding:
                 return "프로필 이미지를 저장하지 못했어요. 네트워크 상태를 확인한 뒤 다시 시도해 주세요."
             default:
@@ -436,17 +445,38 @@ final class ProfilePresenter: ObservableObject {
         }
     }
 
-    private func redactedProfileImageFailureReason(from error: Error) -> String {
+    private func profileImageFailureClassification(from error: Error) -> String {
+        if let error = error as? ProfileImagePreprocessorError {
+            switch error {
+            case .unsupportedFormat:
+                return "unsupportedFormat"
+            case .decodeFailed:
+                return "decodeFailed"
+            case .compressionFailed:
+                return "compressionFailed"
+            case .fileTooLargeAfterCompression:
+                return "fileTooLargeAfterCompression"
+            }
+        }
+
         if isATSBlocked(error) {
             return "atsBlocked"
         }
-        if isProfileImageValidationFailure(error) {
-            return "validation"
+
+        guard let networkError = error as? NetworkError else {
+            return "networkFailure"
         }
-        if error is NetworkError {
-            return "network"
+
+        switch networkError {
+        case .unauthorized, .authenticationFailed, .accessTokenExpired, .refreshTokenExpired:
+            return "unauthorized"
+        case .invalidRequest, .abnormalRequest, .businessAuthorization:
+            return "serverValidationFailed400"
+        case .configuration(.atsBlocked):
+            return "atsBlocked"
+        default:
+            return "networkFailure"
         }
-        return "processing"
     }
 
     private func isATSBlocked(_ error: Error) -> Bool {

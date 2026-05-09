@@ -63,9 +63,9 @@ final class ProfileImageUpdateTests: XCTestCase {
 
     func testUnsupportedDataReturnsClearFailure() {
         XCTAssertThrowsError(
-            try ProfileImagePreprocessor().process(data: Data("not-image".utf8), originalFileName: "avatar.txt")
+            try ProfileImagePreprocessor().process(data: Data("not-image".utf8), originalFileName: "avatar.jpg")
         ) { error in
-            XCTAssertEqual(error as? ProfileImagePreprocessorError, .invalidImage)
+            XCTAssertEqual(error as? ProfileImagePreprocessorError, .decodeFailed)
         }
     }
 

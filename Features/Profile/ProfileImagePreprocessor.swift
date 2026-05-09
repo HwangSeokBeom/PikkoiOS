@@ -61,17 +61,21 @@ struct ProfileImagePreprocessResult: Equatable, Sendable {
 }
 
 enum ProfileImagePreprocessorError: Error, Equatable {
-    case invalidImage
-    case exceedsLimit
+    case unsupportedFormat
+    case decodeFailed
+    case compressionFailed
+    case fileTooLargeAfterCompression
 }
 
 extension ProfileImagePreprocessorError: LocalizedError {
     var errorDescription: String? {
         switch self {
-        case .invalidImage:
+        case .unsupportedFormat:
             return "지원하지 않는 이미지 형식이에요. 다른 사진을 선택해 주세요."
-        case .exceedsLimit:
-            return "이미지 용량이 너무 커서 자동으로 줄였지만 업로드에 실패했어요. 다른 사진을 선택해 주세요."
+        case .decodeFailed:
+            return "이미지를 불러오지 못했어요. 다른 사진을 선택해 주세요."
+        case .compressionFailed, .fileTooLargeAfterCompression:
+            return "이미지를 업로드 가능한 크기로 변환하지 못했어요. 다른 사진을 선택해주세요."
         }
     }
 }
@@ -81,12 +85,13 @@ struct ProfileImagePreprocessor {
     static let targetBytes: Int = 900 * 1024
     private let preprocessor = ImageUploadPreprocessor(maxInitialPixel: 1_024)
 
-    static func diagnosticMetadata(data: Data, filename: String) -> (contentType: String, pixelWidth: Int, pixelHeight: Int) {
+    static func diagnosticMetadata(data: Data, filename: String) -> (contentType: String, pixelWidth: Int, pixelHeight: Int, orientation: String) {
         let metadata = sourceMetadata(data: data, filename: filename)
         return (
             metadata.mimeType == "unknown" ? metadata.uti : metadata.mimeType,
             Int(metadata.size.width),
-            Int(metadata.size.height)
+            Int(metadata.size.height),
+            metadata.orientation
         )
     }
 
@@ -102,7 +107,7 @@ struct ProfileImagePreprocessor {
 
     func processImage(data: Data, originalFileName: String) throws -> ProcessedProfileImage {
         guard !data.isEmpty else {
-            throw ProfileImagePreprocessorError.invalidImage
+            throw ProfileImagePreprocessorError.decodeFailed
         }
 
         do {
@@ -152,11 +157,14 @@ struct ProfileImagePreprocessor {
                 compressionQuality: output.compressionQuality,
                 didDownsample: output.didDownsample
             )
-        } catch ImageUploadPreprocessorError.unsupportedType,
-                ImageUploadPreprocessorError.cannotEncode {
-            throw ProfileImagePreprocessorError.invalidImage
+        } catch ImageUploadPreprocessorError.unsupportedType {
+            throw ProfileImagePreprocessorError.unsupportedFormat
+        } catch ImageUploadPreprocessorError.cannotEncode {
+            throw ProfileImagePreprocessorError.decodeFailed
+        } catch ImageUploadPreprocessorError.overLimitAfterCompression {
+            throw ProfileImagePreprocessorError.fileTooLargeAfterCompression
         } catch {
-            throw ProfileImagePreprocessorError.exceedsLimit
+            throw ProfileImagePreprocessorError.compressionFailed
         }
     }
 

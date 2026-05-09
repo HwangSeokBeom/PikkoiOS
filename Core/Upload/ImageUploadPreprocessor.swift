@@ -121,7 +121,10 @@ struct ImageUploadPreprocessor {
                 continue
             }
 
-            for quality in [0.85, 0.8, 0.75, 0.7, 0.62, 0.54, 0.46, 0.38, 0.3, 0.22] as [CGFloat] {
+            let qualityCandidates: [CGFloat] = input.purpose == .profile
+                ? [0.85, 0.8, 0.75, 0.7, 0.62, 0.55]
+                : [0.85, 0.8, 0.75, 0.7, 0.62, 0.54, 0.46, 0.38, 0.3, 0.22]
+            for quality in qualityCandidates {
                 guard let jpegData = candidate.jpegData(compressionQuality: quality) else { continue }
                 logger.debug("[ImagePreprocess] downsample result bytes=\(jpegData.count) pixel=\(Int(candidate.size.width))x\(Int(candidate.size.height)) quality=\(String(format: "%.2f", quality))")
                 if jpegData.count <= input.targetLimitBytes {

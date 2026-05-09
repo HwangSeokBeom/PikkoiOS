@@ -758,6 +758,8 @@ final class NetworkInfrastructureTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/users/profile/image")
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertTrue(request.value(forHTTPHeaderField: "Content-Type")?.contains("multipart/form-data") == true)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "access-token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "SesacKey"), "test-sesac-key")
             counter.increment()
             Thread.sleep(forTimeInterval: 0.1)
             return (
