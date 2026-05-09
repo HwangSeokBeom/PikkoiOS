@@ -44,7 +44,16 @@ struct OrderView: View {
                         }
 
                         if let successMessage = presenter.viewState.successMessage {
-                            ToastView(message: successMessage, tone: .success)
+                            ToastView(
+                                message: successMessage,
+                                tone: .success,
+                                actionTitle: presenter.viewState.hiddenOrderUndoCode == nil ? nil : "실행 취소",
+                                action: presenter.viewState.hiddenOrderUndoCode.map { orderCode in
+                                    {
+                                        Task { await presenter.send(.undoHideOrderFromHistory(orderCode)) }
+                                    }
+                                }
+                            )
                         }
 
                         if !activeOrders.isEmpty {
@@ -178,6 +187,11 @@ struct OrderView: View {
                                     .paymentReceiptRefreshRequested(orderCode: order.orderCode, force: true)
                                 )
                             }
+                        },
+                        onHideFromHistory: {
+                            Task {
+                                await presenter.send(.hideOrderFromHistory(order.orderCode))
+                            }
                         }
                     )
                     .onAppear {
@@ -289,6 +303,7 @@ private struct OrderRowView: View {
     let onCancelTap: () -> Void
     let onStatusSelect: (OrderStatus) -> Void
     let onRefreshPaymentReceipt: () -> Void
+    let onHideFromHistory: () -> Void
 
     var body: some View {
         Group {
@@ -477,6 +492,23 @@ private struct OrderRowView: View {
                 .buttonStyle(.plain)
             } else if let reviewDisabledReasonText = order.reviewDisabledReasonText {
                 reviewUnavailableMessage(reviewDisabledReasonText)
+            }
+
+            if order.canHideFromHistory {
+                Button(action: onHideFromHistory) {
+                    HStack(spacing: PikkoSpacing.xs) {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("내역 숨기기")
+                            .font(PikkoTypography.captionStrong)
+                    }
+                    .foregroundStyle(PikkoColor.secondaryText)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 36)
+                    .background(PikkoColor.gray100)
+                    .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
         }
     }

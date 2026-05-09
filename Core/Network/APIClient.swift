@@ -5,6 +5,7 @@ final class APIClient: APIClientProtocol {
     private let requestBuilder: RequestBuilder
     private let tokenRefreshCoordinator: TokenRefreshCoordinator
     private let responseCache = APIResponseCache()
+    private let transportFailureThrottle = TransportFailureThrottle()
 
     init(
         session: URLSession,
@@ -80,6 +81,15 @@ final class APIClient: APIClientProtocol {
         logRequestBodyIfNeeded(endpoint: endpoint, request: request)
         logProfileImageUploadRequestIfNeeded(endpoint: endpoint, request: request)
         logRequestStartedIfNeeded(endpoint: endpoint)
+
+        if await transportFailureThrottle.shouldShortCircuitATSFailure(endpointPath: endpoint.path, url: request.url) {
+#if DEBUG
+            Logger.shared.warning(
+                "[Network] ATS blocked insecure HTTP request. Check scoped ATS exception or use HTTPS. endpoint=\(endpoint.method.rawValue) \(endpoint.path) throttled=true"
+            )
+#endif
+            throw NetworkError.configuration(.atsBlocked)
+        }
 
         if let cacheDescriptor = cacheDescriptor(
             for: endpoint,
@@ -227,6 +237,17 @@ final class APIClient: APIClientProtocol {
                 throw CancellationError()
             }
 
+            if let urlError = error as? URLError,
+               urlError.isATSBlocked {
+                await transportFailureThrottle.recordATSFailure(endpointPath: endpoint.path, url: request.url)
+#if DEBUG
+                Logger.shared.warning(
+                    "[Network] ATS blocked insecure HTTP request. Check scoped ATS exception or use HTTPS. endpoint=\(endpoint.method.rawValue) \(endpoint.path) url=\(diagnosticURL(request.url))"
+                )
+#endif
+                throw NetworkError.configuration(.atsBlocked)
+            }
+
             if endpoint.method.isTransportRetryEligible,
                !didRetryTransport,
                error is URLError {
@@ -303,6 +324,10 @@ final class APIClient: APIClientProtocol {
         Logger(category: "ProfileImageUpload").debug(
             "[ProfileImageUpload] response status=\(statusCode) durationMs=\(durationMs) responseProfileImage=\(profileImagePath(from: data) ?? "nil")"
         )
+        if (200..<300).contains(statusCode),
+           let profileImage = profileImagePath(from: data) {
+            Logger(category: "ProfileImage").debug("[ProfileImage] upload success profileImage=\(profileImage)")
+        }
 #endif
     }
 
@@ -640,6 +665,22 @@ final class APIClient: APIClientProtocol {
     private func firstBytesHex(_ data: Data) -> String {
         data.prefix(64).map { String(format: "%02x", $0) }.joined()
     }
+
+    private func diagnosticURL(_ url: URL?) -> String {
+        guard let url,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return "<invalid-url>"
+        }
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? url.path
+    }
+}
+
+private extension URLError {
+    var isATSBlocked: Bool {
+        code == .appTransportSecurityRequiresSecureConnection || errorCode == -1022
+    }
 }
 
 private struct APICacheDescriptor: Sendable {
@@ -726,5 +767,38 @@ private actor APIResponseCache {
         for key in keysToRemove {
             storage[key] = nil
         }
+    }
+}
+
+private actor TransportFailureThrottle {
+    private var atsFailedEndpoints: [String: Date] = [:]
+    private let shortCircuitWindow: TimeInterval = 30
+
+    func shouldShortCircuitATSFailure(endpointPath: String, url: URL?) -> Bool {
+        let key = makeKey(endpointPath: endpointPath, url: url)
+        guard let failedAt = atsFailedEndpoints[key] else {
+            return false
+        }
+
+        if Date().timeIntervalSince(failedAt) <= shortCircuitWindow {
+            return true
+        }
+
+        atsFailedEndpoints[key] = nil
+        return false
+    }
+
+    func recordATSFailure(endpointPath: String, url: URL?) {
+        atsFailedEndpoints[makeKey(endpointPath: endpointPath, url: url)] = Date()
+    }
+
+    private func makeKey(endpointPath: String, url: URL?) -> String {
+        guard let url,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return endpointPath
+        }
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? endpointPath
     }
 }

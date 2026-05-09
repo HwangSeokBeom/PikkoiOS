@@ -80,6 +80,15 @@ extension NetworkError {
         }
     }
 
+    var isRetryableTransportFailure: Bool {
+        switch self {
+        case .transport:
+            return true
+        default:
+            return false
+        }
+    }
+
     var appConfigurationError: AppConfigurationError? {
         if case .configuration(let error) = self {
             return error

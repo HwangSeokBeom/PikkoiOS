@@ -3,12 +3,19 @@ import Foundation
 @MainActor
 protocol CheckoutInteracting {
     func loadInitialState() async -> CheckoutViewState
+    func loadRecoverablePaymentSession() async -> PendingPaymentSession?
+    func makePendingPaymentSession(createdOrder: CreatedOrder, state: PaymentFlowState, impUID: String?) async throws -> PendingPaymentSession
+    func savePendingPaymentSession(_ session: PendingPaymentSession) async
+    func updatePendingPaymentSession(orderCode: String, state: PaymentFlowState, impUID: String?) async
+    func removePendingPaymentSession(orderCode: String) async
     func validatePrice(input: CheckoutSubmissionInput) async throws -> CheckoutPriceValidationResult
     func validatePaymentConfigurationBeforeOrderCreation() async throws
     func createOrder(input: CheckoutSubmissionInput) async throws -> CreatedOrder
     func makePaymentRequest(createdOrder: CreatedOrder) async throws -> PaymentGatewayRequest
+    func makePaymentRequest(pendingSession: PendingPaymentSession) async throws -> PaymentGatewayRequest
     func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt
     func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt
+    func refreshOrdersAfterAlreadyValidatedPayment(orderCode: String) async -> Bool
 }
 
 @MainActor
@@ -17,6 +24,7 @@ struct CheckoutInteractor: CheckoutInteracting {
     private let orderRepository: OrderRepository
     private let appConfiguration: AppConfiguration
     private let sessionStore: SessionStore?
+    private let pendingPaymentSessionStore: PendingPaymentSessionStore
     private let placeholderAddress = CheckoutAddress.placeholder
     private let paymentMethod: CheckoutPaymentMethod = .card
     private let coupon: CheckoutCoupon? = nil
@@ -25,12 +33,14 @@ struct CheckoutInteractor: CheckoutInteracting {
         draft: CheckoutDraft,
         orderRepository: OrderRepository,
         appConfiguration: AppConfiguration,
-        sessionStore: SessionStore? = nil
+        sessionStore: SessionStore? = nil,
+        pendingPaymentSessionStore: PendingPaymentSessionStore = .shared
     ) {
         self.draft = draft
         self.orderRepository = orderRepository
         self.appConfiguration = appConfiguration
         self.sessionStore = sessionStore
+        self.pendingPaymentSessionStore = pendingPaymentSessionStore
     }
 
     func loadInitialState() async -> CheckoutViewState {
@@ -82,6 +92,67 @@ struct CheckoutInteractor: CheckoutInteracting {
             isEmpty: false
         )
         return viewState
+    }
+
+    func loadRecoverablePaymentSession() async -> PendingPaymentSession? {
+        guard let userID = sessionStore?.currentUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userID.isEmpty else {
+            return nil
+        }
+        return await pendingPaymentSessionStore.recoverableSession(
+            userID: userID,
+            storeID: draft.storeID,
+            totalPriceAmount: draft.subtotalAmount
+        )
+    }
+
+    func makePendingPaymentSession(
+        createdOrder: CreatedOrder,
+        state: PaymentFlowState,
+        impUID: String?
+    ) async throws -> PendingPaymentSession {
+        guard let userID = sessionStore?.currentUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userID.isEmpty else {
+            throw CheckoutFeatureError.authenticationRequired
+        }
+        return PendingPaymentSession(
+            userID: userID,
+            orderCode: createdOrder.orderCode,
+            orderID: createdOrder.id,
+            storeID: draft.storeID,
+            storeName: draft.storeName,
+            menuSummary: makeOrderName(),
+            totalPriceAmount: createdOrder.totalPriceAmount,
+            createdAt: createdOrder.createdAt,
+            state: state,
+            impUID: impUID,
+            lastUpdatedAt: Date()
+        )
+    }
+
+    func savePendingPaymentSession(_ session: PendingPaymentSession) async {
+        await pendingPaymentSessionStore.upsert(session)
+    }
+
+    func updatePendingPaymentSession(orderCode: String, state: PaymentFlowState, impUID: String?) async {
+        guard let userID = sessionStore?.currentUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userID.isEmpty else {
+            return
+        }
+        await pendingPaymentSessionStore.update(
+            orderCode: orderCode,
+            userID: userID,
+            state: state,
+            impUID: impUID
+        )
+    }
+
+    func removePendingPaymentSession(orderCode: String) async {
+        guard let userID = sessionStore?.currentUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userID.isEmpty else {
+            return
+        }
+        await pendingPaymentSessionStore.remove(orderCode: orderCode, userID: userID)
     }
 
     func validatePrice(input: CheckoutSubmissionInput) async throws -> CheckoutPriceValidationResult {
@@ -215,6 +286,19 @@ struct CheckoutInteractor: CheckoutInteracting {
         )
     }
 
+    func makePaymentRequest(pendingSession: PendingPaymentSession) async throws -> PaymentGatewayRequest {
+        try await makePaymentRequest(
+            createdOrder: CreatedOrder(
+                id: pendingSession.orderID ?? pendingSession.orderCode,
+                orderCode: pendingSession.orderCode,
+                totalPriceAmount: pendingSession.totalPriceAmount,
+                createdAt: pendingSession.createdAt,
+                updatedAt: pendingSession.lastUpdatedAt,
+                paymentBridgePayload: nil
+            )
+        )
+    }
+
     func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt {
         let trimmedImpUID = request.impUID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedImpUID.isEmpty else {
@@ -233,6 +317,9 @@ struct CheckoutInteractor: CheckoutInteracting {
         do {
             return try await orderRepository.validatePayment(validationRequest)
         } catch let error as NetworkError {
+            if case .conflict = error {
+                throw CheckoutFeatureError.alreadyValidated
+            }
             throw map(error: error)
         } catch let error as CheckoutFeatureError {
             throw error
@@ -250,6 +337,20 @@ struct CheckoutInteractor: CheckoutInteracting {
             throw error
         } catch {
             throw CheckoutFeatureError.unavailable(message: "결제 영수증을 확인하지 못했어요.")
+        }
+    }
+
+    func refreshOrdersAfterAlreadyValidatedPayment(orderCode: String) async -> Bool {
+        do {
+            let page = try await orderRepository.fetchOrders(cursor: nil, filter: nil, forceRefresh: true)
+            return page.items.contains { order in
+                order.orderCode == orderCode && order.isPaymentCompleted
+            }
+        } catch {
+            Logger.shared.warning(
+                "[PaymentValidation] alreadyValidated orderRefreshFailed orderCode=\(orderCode) message=\(error.localizedDescription)"
+            )
+            return false
         }
     }
 
@@ -429,11 +530,13 @@ struct CheckoutInteractor: CheckoutInteracting {
             return .businessAuthorization(message: message)
         case .configuration:
             return .configurationRequired
+        case .conflict:
+            return .alreadyValidated
         case .transport:
             return .unavailable(message: "네트워크 상태를 확인한 뒤 다시 시도해 주세요.")
         case .decoding:
             return .unavailable(message: "주문 응답을 해석하지 못했어요. 잠시 후 다시 시도해 주세요.")
-        case .conflict(let message), .server(let message):
+        case .server(let message):
             return .unavailable(message: message)
         case .forbidden:
             return .businessAuthorization(message: "주문 생성 권한을 확인해 주세요.")

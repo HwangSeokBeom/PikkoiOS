@@ -27,6 +27,18 @@ final class ProfileImageUpdateTests: XCTestCase {
         XCTAssertLessThanOrEqual(result.data.count, ProfileImagePreprocessor.targetBytes)
     }
 
+    func testSmallPNGInputCanRemainPNGUnderLimit() throws {
+        let image = makeTestImage(size: CGSize(width: 300, height: 300))
+        let data = try XCTUnwrap(image.pngData())
+
+        let result = try ProfileImagePreprocessor().process(data: data, originalFileName: "avatar.png")
+
+        XCTAssertLessThanOrEqual(result.data.count, ProfileImagePreprocessor.maxBytes)
+        XCTAssertEqual(result.mimeType, "image/png")
+        XCTAssertEqual(result.fileName, "profile.png")
+        XCTAssertEqual((result.fileName as NSString).pathExtension, "png")
+    }
+
     func testOversizedImageIsDownsampledBelowLimit() throws {
         let image = makeTestImage(size: CGSize(width: 4_000, height: 3_000))
         let data = try XCTUnwrap(image.jpegData(compressionQuality: 1.0))
@@ -205,6 +217,31 @@ final class ProfileImageUpdateTests: XCTestCase {
         XCTAssertTrue(removedPaths.contains(interactor.uploadedPath))
     }
 
+    func testDuplicateProfileImageUploadTapIsIgnoredWhileUploadInProgress() async throws {
+        let sessionStore = makeAuthenticatedSessionStore()
+        let interactor = StubProfileInteractor()
+        interactor.holdUpload = true
+        let presenter = ProfilePresenter(
+            interactor: interactor,
+            router: StubProfileRouter(),
+            sessionStore: sessionStore,
+            imageLoader: StubProfileImageLoader()
+        )
+        let data = try XCTUnwrap(makeTestImage(size: CGSize(width: 500, height: 500)).jpegData(compressionQuality: 0.9))
+
+        await presenter.send(.editProfileTapped)
+        let firstUpload = Task { await presenter.send(.profileImageDataSelected(data, fileName: "avatar.jpg")) }
+        await interactor.waitForUploadStarted()
+        await presenter.send(.profileImageDataSelected(data, fileName: "avatar.jpg"))
+        XCTAssertEqual(interactor.uploadCallCount, 1)
+
+        interactor.releaseUpload()
+        await firstUpload.value
+
+        XCTAssertEqual(interactor.uploadCallCount, 1)
+        XCTAssertEqual(presenter.viewState.profileImageUpdateState, .success)
+    }
+
     private func makeTestImage(size: CGSize) -> UIImage {
         UIGraphicsImageRenderer(size: size).image { context in
             UIColor.systemBlue.setFill()
@@ -240,10 +277,15 @@ private final class StubProfileInteractor: ProfileInteracting {
     let uploadedPath = "https://example.com/new.jpg"
     var uploadError: Error?
     var holdInitialLoad = false
+    var holdUpload = false
+    private(set) var uploadCallCount = 0
     var profileRefetchPath: String?
     private var loadStarted = false
     private var loadStartedContinuation: CheckedContinuation<Void, Never>?
     private var loadReleaseContinuation: CheckedContinuation<Void, Never>?
+    private var uploadStarted = false
+    private var uploadStartedContinuation: CheckedContinuation<Void, Never>?
+    private var uploadReleaseContinuation: CheckedContinuation<Void, Never>?
 
     func waitForLoadStarted() async {
         if loadStarted { return }
@@ -255,6 +297,18 @@ private final class StubProfileInteractor: ProfileInteracting {
     func releaseInitialLoad() {
         loadReleaseContinuation?.resume()
         loadReleaseContinuation = nil
+    }
+
+    func waitForUploadStarted() async {
+        if uploadStarted { return }
+        await withCheckedContinuation { continuation in
+            uploadStartedContinuation = continuation
+        }
+    }
+
+    func releaseUpload() {
+        uploadReleaseContinuation?.resume()
+        uploadReleaseContinuation = nil
     }
 
     func loadInitialState() async -> ProfileViewState {
@@ -293,6 +347,15 @@ private final class StubProfileInteractor: ProfileInteracting {
     }
 
     func uploadProfileImage(data: Data, fileName: String, mimeType: String) async throws -> String {
+        uploadCallCount += 1
+        uploadStarted = true
+        uploadStartedContinuation?.resume()
+        uploadStartedContinuation = nil
+        if holdUpload {
+            await withCheckedContinuation { continuation in
+                uploadReleaseContinuation = continuation
+            }
+        }
         if let uploadError {
             throw uploadError
         }

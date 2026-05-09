@@ -234,6 +234,10 @@ struct CheckoutView: View {
             return "결제 창을 통해 결제를 완료한 뒤 서버 검증을 이어서 진행합니다."
         }
 
+        if presenter.viewState.recoverablePaymentSession != nil {
+            return "완료되지 않은 결제를 이어가거나 결제 상태를 다시 확인할 수 있어요."
+        }
+
         if presenter.viewState.isValidatingPrice {
             return "주문 금액과 메뉴 상태를 먼저 확인하고 있어요."
         }

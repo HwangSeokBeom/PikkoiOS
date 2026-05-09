@@ -11,6 +11,8 @@ enum OrderAction: Equatable {
     case statusChangeConfirmed(orderCode: String, currentStatus: OrderStatus, nextStatus: OrderStatus)
     case orderAppeared(String)
     case paymentReceiptRefreshRequested(orderCode: String, force: Bool)
+    case hideOrderFromHistory(String)
+    case undoHideOrderFromHistory(String)
     case loginRequiredTapped
     case exploreStoresTapped
 }

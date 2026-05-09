@@ -168,6 +168,11 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
         } catch is ImageLoadError {
             throw NetworkError.transport
         } catch {
+            if let urlError = error as? URLError,
+               urlError.isATSBlocked {
+                logger.warning("[ImageLoader] ATS blocked insecure HTTP request. Check scoped ATS exception or use HTTPS. url=\(diagnosticURL(url))")
+                throw NetworkError.configuration(.atsBlocked)
+            }
             guard !hasLoggedFallback(for: url) else {
                 throw NetworkError.transport
             }
@@ -216,5 +221,11 @@ actor AuthorizedImageLoader: AuthorizedImageLoading {
         components.query = nil
         components.fragment = nil
         return components.url ?? url
+    }
+}
+
+private extension URLError {
+    var isATSBlocked: Bool {
+        code == .appTransportSecurityRequiresSecureConnection || errorCode == -1022
     }
 }

@@ -17,6 +17,7 @@ enum TokenHeaderFormat: Sendable {
 enum AppConfigurationError: Error, Equatable, Sendable {
     case missingBaseURL
     case invalidBaseURL
+    case atsBlocked
     case missingSeSACKey
     case invalidSeSACKey
 
@@ -26,6 +27,8 @@ enum AppConfigurationError: Error, Equatable, Sendable {
             return "PIKKO_BASE_URL is missing. Configure it in Secrets.xcconfig."
         case .invalidBaseURL:
             return "PIKKO_BASE_URL is invalid. Configure a full http/https host in Secrets.xcconfig."
+        case .atsBlocked:
+            return "ATS blocked insecure HTTP request. Check scoped ATS exception or use HTTPS."
         case .missingSeSACKey:
             return "PIKKO_SESAC_KEY is missing. Configure it in Secrets.xcconfig."
         case .invalidSeSACKey:
@@ -40,6 +43,8 @@ enum AppConfigurationError: Error, Equatable, Sendable {
             return "PIKKO_BASE_URL이 누락되었습니다. Config/AuthSecrets.xcconfig 또는 Config/LocalSecrets.xcconfig를 확인하세요."
         case .invalidBaseURL:
             return "PIKKO_BASE_URL이 올바르지 않습니다. Config/AuthSecrets.xcconfig 또는 Config/LocalSecrets.xcconfig를 확인하세요."
+        case .atsBlocked:
+            return "네트워크 설정을 확인해 주세요."
         case .missingSeSACKey:
             return "PIKKO_SESAC_KEY가 누락되었습니다. Config/AuthSecrets.xcconfig 또는 Config/LocalSecrets.xcconfig를 확인하세요."
         case .invalidSeSACKey:

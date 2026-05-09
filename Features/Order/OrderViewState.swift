@@ -13,6 +13,7 @@ struct OrderViewState: Equatable {
     var nextCursor: String?
     var errorMessage: String?
     var successMessage: String?
+    var hiddenOrderUndoCode: String?
     var emptyState: OrderEmptyState?
     var requiresAuthentication = false
     var cancellingOrderIDs: Set<String> = []
@@ -90,6 +91,7 @@ struct OrderListItemViewState: Equatable, Identifiable {
     let isCancelEnabled: Bool
     let isReviewWritable: Bool
     let reviewDisabledReasonText: String?
+    let canHideFromHistory: Bool
     var isPastOrder = false
     var canWriteReview = false
 }

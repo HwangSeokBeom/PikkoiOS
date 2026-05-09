@@ -79,6 +79,8 @@ targets:
       - path: Resources/LaunchScreen.storyboard
     postBuildScripts:
       - name: Copy GoogleService-Info.plist
+        inputFiles:
+          - "$(PROJECT_DIR)/Config/GoogleService-Info.plist"
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info.plist"
         script: |
@@ -92,6 +94,7 @@ targets:
         PRODUCT_NAME: Pikko
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Config/Pikko-Info.plist
+        INFOPLIST_PREPROCESS: NO
         CODE_SIGN_ENTITLEMENTS: Config/Pikko.entitlements
         DEVELOPMENT_TEAM: 63SB2B8YJ5
         CODE_SIGN_STYLE: Automatic

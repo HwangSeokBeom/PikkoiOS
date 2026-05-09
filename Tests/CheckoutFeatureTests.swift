@@ -122,6 +122,61 @@ final class CheckoutFeatureTests: XCTestCase {
         XCTAssertEqual(paymentRequest.appScheme, "pikko")
     }
 
+    func testPendingPaymentSessionStorePersistsRecoverableSessionAcrossReload() async {
+        let suiteName = #function + UUID().uuidString
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        userDefaults.removePersistentDomain(forName: suiteName)
+        let store = PendingPaymentSessionStore(store: UserDefaultsStore(userDefaults: userDefaults))
+        let session = PendingPaymentSession(
+            userID: "user-1",
+            orderCode: "ORDER-001",
+            orderID: "order-1",
+            storeID: "store-1",
+            storeName: "새싹 카페",
+            menuSummary: "카페라떼 외 1개",
+            totalPriceAmount: 12_200,
+            createdAt: Date(timeIntervalSince1970: 1_710_000_000),
+            state: .recoverablePending,
+            impUID: "imp_test",
+            lastUpdatedAt: Date(timeIntervalSince1970: 1_710_000_100)
+        )
+
+        await store.upsert(session)
+        let reloadedStore = PendingPaymentSessionStore(store: UserDefaultsStore(userDefaults: userDefaults))
+        let recovered = await reloadedStore.recoverableSession(userID: "user-1", storeID: "store-1", totalPriceAmount: 12_200)
+
+        XCTAssertEqual(recovered?.orderCode, "ORDER-001")
+        XCTAssertEqual(recovered?.impUID, "imp_test")
+        XCTAssertEqual(recovered?.state, .recoverablePending)
+    }
+
+    func testPendingPaymentSessionStoreRemovesCompletedSessionAfterValidation() async {
+        let suiteName = #function + UUID().uuidString
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        userDefaults.removePersistentDomain(forName: suiteName)
+        let store = PendingPaymentSessionStore(store: UserDefaultsStore(userDefaults: userDefaults))
+        let session = PendingPaymentSession(
+            userID: "user-1",
+            orderCode: "ORDER-001",
+            orderID: "order-1",
+            storeID: "store-1",
+            storeName: "새싹 카페",
+            menuSummary: "카페라떼",
+            totalPriceAmount: 4_500,
+            createdAt: Date(),
+            state: .validatingReceipt,
+            impUID: "imp_test",
+            lastUpdatedAt: Date()
+        )
+
+        await store.upsert(session)
+        await store.update(orderCode: "ORDER-001", userID: "user-1", state: .validationSucceeded, impUID: "imp_test")
+        await store.remove(orderCode: "ORDER-001", userID: "user-1")
+
+        let recovered = await store.session(orderCode: "ORDER-001", userID: "user-1")
+        XCTAssertNil(recovered)
+    }
+
     func testCheckoutInitialStateShowsDeveloperWarningWhenPortOneUserCodeIsMissing() async {
         let interactor = CheckoutInteractor(
             draft: makeDraft(),
@@ -858,6 +913,36 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
         return initialState
     }
 
+    func loadRecoverablePaymentSession() async -> PendingPaymentSession? {
+        nil
+    }
+
+    func makePendingPaymentSession(
+        createdOrder: CreatedOrder,
+        state: PaymentFlowState,
+        impUID: String?
+    ) async throws -> PendingPaymentSession {
+        PendingPaymentSession(
+            userID: "user-1",
+            orderCode: createdOrder.orderCode,
+            orderID: createdOrder.id,
+            storeID: "store-1",
+            storeName: "새싹 카페",
+            menuSummary: "카페라떼",
+            totalPriceAmount: createdOrder.totalPriceAmount,
+            createdAt: createdOrder.createdAt,
+            state: state,
+            impUID: impUID,
+            lastUpdatedAt: Date()
+        )
+    }
+
+    func savePendingPaymentSession(_ session: PendingPaymentSession) async {}
+
+    func updatePendingPaymentSession(orderCode: String, state: PaymentFlowState, impUID: String?) async {}
+
+    func removePendingPaymentSession(orderCode: String) async {}
+
     func validatePrice(input: CheckoutSubmissionInput) async throws -> CheckoutPriceValidationResult {
         await recorder.append(.validatePrice)
         if validationDelayNanos > 0 {
@@ -908,6 +993,19 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
         )
     }
 
+    func makePaymentRequest(pendingSession: PendingPaymentSession) async throws -> PaymentGatewayRequest {
+        try await makePaymentRequest(
+            createdOrder: CreatedOrder(
+                id: pendingSession.orderID ?? pendingSession.orderCode,
+                orderCode: pendingSession.orderCode,
+                totalPriceAmount: pendingSession.totalPriceAmount,
+                createdAt: pendingSession.createdAt,
+                updatedAt: pendingSession.lastUpdatedAt,
+                paymentBridgePayload: nil
+            )
+        )
+    }
+
     func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt {
         await recorder.append(.validatePayment)
         await validationRequestRecorder.set(request)
@@ -930,6 +1028,10 @@ private struct SpyCheckoutInteractor: CheckoutInteracting {
             paidAt: Date(),
             receiptURL: nil
         )
+    }
+
+    func refreshOrdersAfterAlreadyValidatedPayment(orderCode: String) async -> Bool {
+        true
     }
 
     func recordedEvents() async -> [Event] {

@@ -7,6 +7,8 @@ protocol OrderInteracting {
     func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt
     func cancelOrder(orderCode: String) async throws -> OrderDetail
     func cancelPendingOrderLocally(orderCode: String) async throws -> OrderDetail
+    func hideOrderFromHistory(orderCode: String) async throws
+    func unhideOrderFromHistory(orderCode: String) async
     func updateOrderStatus(orderCode: String, status: OrderStatus) async throws
 }
 
@@ -16,6 +18,7 @@ struct OrderInteractor: OrderInteracting {
     private let orderRepository: OrderRepository
     private let sessionStore: SessionStore
     private let localCancellationStore: LocalOrderCancellationStore
+    private let hiddenOrderHistoryStore: HiddenOrderHistoryStore
     private let notificationService: AppNotificationService
     private let orderStatusSnapshotStore: OrderStatusSnapshotStore
     private let liveActivityManager: OrderLiveActivityManaging
@@ -27,7 +30,8 @@ struct OrderInteractor: OrderInteracting {
         notificationService: AppNotificationService = NoopAppNotificationService(),
         orderStatusSnapshotStore: OrderStatusSnapshotStore = InMemoryOrderStatusSnapshotStore(),
         liveActivityManager: OrderLiveActivityManaging = NoopOrderLiveActivityManager.shared,
-        localCancellationStore: LocalOrderCancellationStore = .shared
+        localCancellationStore: LocalOrderCancellationStore = .shared,
+        hiddenOrderHistoryStore: HiddenOrderHistoryStore = .shared
     ) {
         self.initialOrderID = initialOrderID
         self.orderRepository = orderRepository
@@ -36,6 +40,7 @@ struct OrderInteractor: OrderInteracting {
         self.orderStatusSnapshotStore = orderStatusSnapshotStore
         self.liveActivityManager = liveActivityManager
         self.localCancellationStore = localCancellationStore
+        self.hiddenOrderHistoryStore = hiddenOrderHistoryStore
     }
 
     func loadInitialState() async -> OrderViewState {
@@ -58,7 +63,7 @@ struct OrderInteractor: OrderInteracting {
     func fetchOrders(cursor: String?, filter: OrderListFilter) async throws -> CursorPage<OrderSummary> {
         do {
             let page = try await orderRepository.fetchOrders(cursor: cursor, filter: filter == .all ? nil : filter.rawValue)
-            let mergedPage = await applyLocalCancellations(to: page)
+            let mergedPage = await applyLocalStores(to: page)
             if cursor == nil {
                 detectOrderStatusChanges(in: mergedPage.items)
                 liveActivityManager.sync(orders: mergedPage.items, source: "orderList")
@@ -126,15 +131,34 @@ struct OrderInteractor: OrderInteracting {
         return await localCancellationStore.apply(to: detail, userID: userID)
     }
 
-    private func applyLocalCancellations(to page: CursorPage<OrderSummary>) async -> CursorPage<OrderSummary> {
+    private func applyLocalStores(to page: CursorPage<OrderSummary>) async -> CursorPage<OrderSummary> {
         guard let userID = sessionStore.currentUserID else {
             return page
         }
-
+        let cancellationApplied = await localCancellationStore.apply(to: page.items, userID: userID)
         return CursorPage(
-            items: await localCancellationStore.apply(to: page.items, userID: userID),
+            items: await hiddenOrderHistoryStore.apply(to: cancellationApplied, userID: userID),
             nextCursor: page.nextCursor
         )
+    }
+
+    func hideOrderFromHistory(orderCode: String) async throws {
+        guard let userID = sessionStore.currentUserID else {
+            throw OrderFeatureError.authenticationRequired
+        }
+        let page = try await orderRepository.fetchOrders(cursor: nil, filter: nil)
+        guard let order = page.items.first(where: { $0.orderCode == orderCode || $0.id == orderCode }) else {
+            throw OrderFeatureError.notFound
+        }
+        guard order.status.isTerminal else {
+            throw OrderFeatureError.unavailable(message: "진행 중인 주문은 숨길 수 없어요.")
+        }
+        await hiddenOrderHistoryStore.hide(order: order, userID: userID)
+    }
+
+    func unhideOrderFromHistory(orderCode: String) async {
+        guard let userID = sessionStore.currentUserID else { return }
+        await hiddenOrderHistoryStore.unhide(orderCode: orderCode, userID: userID)
     }
 
     private func hasPaymentIdentifier(_ order: OrderSummary) -> Bool {

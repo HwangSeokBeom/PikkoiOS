@@ -97,6 +97,15 @@ final class OrderPresenter: ObservableObject {
         case .paymentReceiptRefreshRequested(let orderCode, let force):
             await refreshPaymentReceiptIfNeeded(orderCode: orderCode, force: force)
 
+        case .hideOrderFromHistory(let orderCode):
+            await hideOrderFromHistory(orderCode: orderCode)
+
+        case .undoHideOrderFromHistory(let orderCode):
+            await interactor.unhideOrderFromHistory(orderCode: orderCode)
+            _ = await loadOrders(mode: .refresh)
+            viewState.successMessage = "숨김을 취소했어요."
+            viewState.hiddenOrderUndoCode = nil
+
         case .loginRequiredTapped:
             router.routeToAuth()
 
@@ -115,6 +124,7 @@ final class OrderPresenter: ObservableObject {
         if mode != .loadMore {
             viewState.errorMessage = nil
             viewState.successMessage = nil
+            viewState.hiddenOrderUndoCode = nil
         }
 
         do {
@@ -327,9 +337,30 @@ final class OrderPresenter: ObservableObject {
             isCancelEnabled: isCancelEnabled,
             isReviewWritable: reviewEligibility.isWritable,
             reviewDisabledReasonText: reviewEligibility.disabledReasonText,
+            canHideFromHistory: currentStatus.isTerminal,
             isPastOrder: currentStatus.isTerminal,
             canWriteReview: reviewEligibility.isWritable
         )
+    }
+
+    private func hideOrderFromHistory(orderCode: String) async {
+        guard let order = allOrders.first(where: { $0.orderCode == orderCode }) else { return }
+        guard effectiveStatus(for: order).isTerminal else {
+            viewState.errorMessage = "진행 중인 주문은 숨길 수 없어요."
+            return
+        }
+
+        do {
+            try await interactor.hideOrderFromHistory(orderCode: orderCode)
+            allOrders.removeAll { $0.orderCode == orderCode }
+            applyOrders(resetErrorMessage: true, reason: "hideOrderHistory")
+            viewState.successMessage = "주문 내역에서 숨겼어요. 실행 취소할 수 있어요."
+            viewState.hiddenOrderUndoCode = orderCode
+        } catch {
+            let featureError = (error as? OrderFeatureError)
+                ?? .unavailable(message: "주문 내역을 숨기지 못했어요.")
+            viewState.errorMessage = featureError.userMessage
+        }
     }
 
     private func makeMenuItemRow(_ item: OrderItemSummary) -> OrderMenuItemViewState {

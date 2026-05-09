@@ -8,6 +8,7 @@ final class CheckoutPresenter: ObservableObject {
     private let router: CheckoutRouting
     private let cartStore: CartStore
     private let paymentReceiptCache: PaymentReceiptCache
+    private let paymentCoordinator: OrderPaymentCoordinator
     private var hasLoaded = false
     private var pendingValidationRequest: PaymentValidationRequest?
 
@@ -15,12 +16,14 @@ final class CheckoutPresenter: ObservableObject {
         interactor: CheckoutInteracting,
         router: CheckoutRouting,
         cartStore: CartStore,
-        paymentReceiptCache: PaymentReceiptCache = .shared
+        paymentReceiptCache: PaymentReceiptCache = .shared,
+        paymentCoordinator: OrderPaymentCoordinator = .shared
     ) {
         self.interactor = interactor
         self.router = router
         self.cartStore = cartStore
         self.paymentReceiptCache = paymentReceiptCache
+        self.paymentCoordinator = paymentCoordinator
     }
 
     convenience init(
@@ -42,6 +45,7 @@ final class CheckoutPresenter: ObservableObject {
             guard !hasLoaded else { return }
             hasLoaded = true
             viewState = await interactor.loadInitialState()
+            await restoreRecoverablePaymentSessionIfNeeded()
         case .pickupMemoChanged(let memo):
             viewState.pickupMemo = memo
             if !memo.isEmpty, viewState.errorMessage != nil {
@@ -63,6 +67,11 @@ final class CheckoutPresenter: ObservableObject {
                 return
             }
 
+            if let session = viewState.recoverablePaymentSession {
+                await resumePaymentSession(session)
+                return
+            }
+
             await submitOrder()
         case .orderHistoryTapped:
             guard let createdOrderID = viewState.createdOrderID else { return }
@@ -77,6 +86,10 @@ final class CheckoutPresenter: ObservableObject {
 
     private func submitOrder() async {
         guard viewState.isPrimaryEnabled, !viewState.isPrimaryLoading else { return }
+        if let session = await interactor.loadRecoverablePaymentSession() {
+            applyRecoverablePaymentSession(session)
+            return
+        }
         let previousOrderID = viewState.createdOrderID
         let previousOrderCode = viewState.createdOrderCode
 
@@ -131,6 +144,12 @@ final class CheckoutPresenter: ObservableObject {
             )
 
             let createdOrder = try await interactor.createOrder(input: input)
+            let pendingSession = try await interactor.makePendingPaymentSession(
+                createdOrder: createdOrder,
+                state: .orderCreated,
+                impUID: nil
+            )
+            await interactor.savePendingPaymentSession(pendingSession)
             if let previousOrderID, let previousOrderCode {
                 Logger.shared.warning(
                     "Checkout retry created new order retryPolicy=create_new_order previousOrderId=\(previousOrderID) previousOrderCode=\(previousOrderCode) newOrderId=\(createdOrder.id) newOrderCode=\(createdOrder.orderCode)"
@@ -168,6 +187,12 @@ final class CheckoutPresenter: ObservableObject {
             Logger.shared.debug(
                 "PortOne payment prepared orderCode=\(createdOrder.orderCode) merchantUid=\(paymentRequest.merchantUID) amount=\(paymentRequest.amount) pg=\(paymentRequest.pg) payMethod=\(paymentRequest.payMethod)"
             )
+            guard await paymentCoordinator.beginPayment(orderCode: createdOrder.orderCode) else {
+                applyRecoverablePaymentSession(pendingSession)
+                viewState.errorMessage = "이미 진행 중인 결제가 있어요. 결제 상태를 확인해 주세요."
+                return
+            }
+            await interactor.updatePendingPaymentSession(orderCode: createdOrder.orderCode, state: .openingPayment, impUID: nil)
             viewState.paymentBridgeContext = CheckoutPaymentBridgeContext(
                 orderID: createdOrder.id,
                 orderCode: createdOrder.orderCode,
@@ -210,6 +235,7 @@ final class CheckoutPresenter: ObservableObject {
         viewState.createdOrderID = nil
         viewState.createdOrderCode = nil
         viewState.paymentBridgeContext = nil
+        viewState.recoverablePaymentSession = nil
         viewState.completionState = .none
         viewState.paymentStage = .idle
         applyValidationMessages()
@@ -284,6 +310,8 @@ final class CheckoutPresenter: ObservableObject {
             viewState.isPrimaryEnabled = !viewState.isEmpty
             viewState.errorMessage = viewState.paymentConfigurationDiagnosticMessage
                 ?? "PORTONE_USER_CODE 설정이 필요해요. Config/Secrets.xcconfig에 실제 PortOne 가맹점 식별코드를 넣고 Clean Build 해 주세요. 장바구니는 유지되며 설정 전에는 주문을 생성하지 않아요."
+        case .alreadyValidated:
+            viewState.errorMessage = "이미 확인된 결제예요. 주문 내역을 새로고침해 주세요."
         }
     }
 
@@ -301,12 +329,22 @@ final class CheckoutPresenter: ObservableObject {
         switch result {
         case .cancelled:
             Logger.shared.debug("PortOne payment canceled orderCode=\(viewState.createdOrderCode ?? "nil")")
+            if let orderCode = viewState.createdOrderCode {
+                await paymentCoordinator.endPayment(orderCode: orderCode)
+                await interactor.updatePendingPaymentSession(orderCode: orderCode, state: .recoverablePending, impUID: nil)
+                await restoreRecoverablePaymentSessionIfNeeded()
+            }
             configureRetryablePaymentState(
                 stage: .paymentCanceled,
                 message: "결제가 취소되었습니다. 장바구니는 유지됩니다."
             )
         case .failed(let message):
             Logger.shared.debug("PortOne payment failed orderCode=\(viewState.createdOrderCode ?? "nil")")
+            if let orderCode = viewState.createdOrderCode {
+                await paymentCoordinator.endPayment(orderCode: orderCode)
+                await interactor.updatePendingPaymentSession(orderCode: orderCode, state: .validationFailed, impUID: nil)
+                await restoreRecoverablePaymentSessionIfNeeded()
+            }
             configureRetryablePaymentState(
                 stage: .paymentFailed,
                 message: message.isEmpty
@@ -315,6 +353,11 @@ final class CheckoutPresenter: ObservableObject {
             )
         case .missingImpUID:
             Logger.shared.debug("PortOne payment callback missing imp_uid orderCode=\(viewState.createdOrderCode ?? "nil")")
+            if let orderCode = viewState.createdOrderCode {
+                await paymentCoordinator.endPayment(orderCode: orderCode)
+                await interactor.updatePendingPaymentSession(orderCode: orderCode, state: .recoverablePending, impUID: nil)
+                await restoreRecoverablePaymentSessionIfNeeded()
+            }
             configureRetryablePaymentState(
                 stage: .paymentFailed,
                 message: "결제 완료 정보를 확인하지 못했어요. 장바구니는 유지되며 다시 결제할 수 있어요."
@@ -331,6 +374,10 @@ final class CheckoutPresenter: ObservableObject {
                 success: true,
                 errorMessage: nil
             )
+            if let orderCode = validationRequest.orderCode {
+                await paymentCoordinator.endPayment(orderCode: orderCode)
+                await interactor.updatePendingPaymentSession(orderCode: orderCode, state: .paymentReturned, impUID: impUID)
+            }
             viewState.paymentBridgeContext = nil
             viewState.errorMessage = nil
             viewState.successMessage = nil
@@ -374,6 +421,78 @@ final class CheckoutPresenter: ObservableObject {
         viewState.successMessage = nil
     }
 
+    private func restoreRecoverablePaymentSessionIfNeeded() async {
+        guard viewState.recoverablePaymentSession == nil,
+              let session = await interactor.loadRecoverablePaymentSession() else {
+            return
+        }
+        applyRecoverablePaymentSession(session)
+    }
+
+    private func applyRecoverablePaymentSession(_ session: PendingPaymentSession) {
+        viewState.createdOrderID = session.orderID
+        viewState.createdOrderCode = session.orderCode
+        viewState.totalPriceText = formatWon(session.totalPriceAmount)
+        viewState.recoverablePaymentSession = session
+        viewState.paymentStage = .recoverablePending
+        viewState.completionState = .none
+        viewState.paymentBridgeContext = nil
+        viewState.isPrimaryEnabled = true
+        viewState.isPrimaryLoading = false
+        viewState.isPaymentInProgress = false
+        viewState.isVerifyingPayment = false
+        viewState.canRouteToOrderHistoryFromPrimary = false
+        viewState.primaryActionTitle = session.hasReturnedReceipt ? "결제 상태 확인" : "결제 이어하기"
+        viewState.successMessage = nil
+        viewState.errorMessage = "완료되지 않은 결제가 있어요. 중복 주문을 만들지 않고 이어서 확인할 수 있어요."
+    }
+
+    private func resumePaymentSession(_ session: PendingPaymentSession) async {
+        viewState.errorMessage = nil
+        viewState.successMessage = nil
+        if let impUID = session.impUID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !impUID.isEmpty {
+            await validatePaymentWithServer(
+                PaymentValidationRequest(
+                    orderID: session.orderID,
+                    orderCode: session.orderCode,
+                    merchantUID: session.orderCode,
+                    impUID: impUID,
+                    success: true,
+                    errorMessage: nil
+                )
+            )
+            return
+        }
+
+        do {
+            guard await paymentCoordinator.beginPayment(orderCode: session.orderCode) else {
+                viewState.errorMessage = "이미 진행 중인 결제가 있어요. 결제 상태를 확인해 주세요."
+                return
+            }
+            let paymentRequest = try await interactor.makePaymentRequest(pendingSession: session)
+            await interactor.updatePendingPaymentSession(orderCode: session.orderCode, state: .openingPayment, impUID: nil)
+            viewState.paymentBridgeContext = CheckoutPaymentBridgeContext(
+                orderID: session.orderID ?? session.orderCode,
+                orderCode: session.orderCode,
+                paymentRequest: paymentRequest
+            )
+            viewState.recoverablePaymentSession = nil
+            setLoadingState(
+                isValidatingPrice: false,
+                isSubmittingOrder: false,
+                isPaymentInProgress: true,
+                isVerifyingPayment: false,
+                title: "결제 진행 중...",
+                stage: .presentingPayment
+            )
+        } catch let error as CheckoutFeatureError {
+            apply(featureError: error)
+        } catch {
+            viewState.errorMessage = "결제를 다시 여는 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
+        }
+    }
+
     private func retryPaymentValidation() async {
         guard let validationRequest = pendingValidationRequest else {
             configureRetryablePaymentState(
@@ -388,6 +507,9 @@ final class CheckoutPresenter: ObservableObject {
 
     private func validatePaymentWithServer(_ validationRequest: PaymentValidationRequest) async {
         pendingValidationRequest = validationRequest
+        if let orderCode = validationRequest.orderCode {
+            await interactor.updatePendingPaymentSession(orderCode: orderCode, state: .validatingReceipt, impUID: validationRequest.impUID)
+        }
         Logger.shared.debug(
             "[PaymentValidation] request method=POST path=/v1/payments/validation orderCode=\(validationRequest.orderCode ?? "nil") merchantUid=\(validationRequest.merchantUID ?? "nil") impUid=\(validationRequest.impUID) body={\"imp_uid\":\"<present:\(!validationRequest.impUID.isEmpty)>\"}"
         )
@@ -401,12 +523,16 @@ final class CheckoutPresenter: ObservableObject {
         )
 
         do {
-            let receipt = try await interactor.validatePayment(validationRequest)
+            let receipt = try await paymentCoordinator.validation(request: validationRequest) {
+                try await self.interactor.validatePayment(validationRequest)
+            }
             var receiptConfirmsPayment = true
             if let orderCode = receipt.orderCode ?? validationRequest.orderCode {
                 await paymentReceiptCache.markVerified(orderCode: orderCode)
+                await interactor.updatePendingPaymentSession(orderCode: orderCode, state: .validationSucceeded, impUID: validationRequest.impUID)
                 Logger.shared.debug("[PaymentValidation] cache verified orderCode=\(orderCode)")
                 receiptConfirmsPayment = await refreshPaymentReceiptAfterValidation(orderCode: orderCode)
+                await interactor.removePendingPaymentSession(orderCode: orderCode)
             }
             cartStore.clear()
             pendingValidationRequest = nil
@@ -428,6 +554,10 @@ final class CheckoutPresenter: ObservableObject {
                 "[PaymentValidation] success orderCode=\(viewState.createdOrderCode ?? "nil") response=paymentIDExists:\(receipt.paymentID != nil), orderIDExists:\(receipt.orderID != nil)"
             )
         } catch let error as CheckoutFeatureError {
+            if error == .alreadyValidated {
+                await handleAlreadyValidatedPayment(validationRequest)
+                return
+            }
             applyFailedValidationState(for: error, validationRequest: validationRequest)
         } catch {
             applyFailedValidationState(
@@ -465,6 +595,41 @@ final class CheckoutPresenter: ObservableObject {
         }
     }
 
+    private func handleAlreadyValidatedPayment(_ validationRequest: PaymentValidationRequest) async {
+        guard let orderCode = validationRequest.orderCode else {
+            applyFailedValidationState(
+                message: "이미 확인된 결제예요. 주문 내역을 새로고침해 주세요.",
+                validationRequest: validationRequest
+            )
+            return
+        }
+        await paymentReceiptCache.markVerified(orderCode: orderCode)
+        let receiptConfirmsPayment = await refreshPaymentReceiptAfterValidation(orderCode: orderCode)
+        let orderListConfirmsPayment = receiptConfirmsPayment
+            ? true
+            : await interactor.refreshOrdersAfterAlreadyValidatedPayment(orderCode: orderCode)
+        if orderListConfirmsPayment {
+            await interactor.removePendingPaymentSession(orderCode: orderCode)
+            cartStore.clear()
+            pendingValidationRequest = nil
+            viewState.isVerifyingPayment = false
+            viewState.isPrimaryLoading = false
+            viewState.isPrimaryEnabled = false
+            viewState.completionState = .paymentValidated
+            viewState.paymentStage = .paymentCompleted
+            viewState.primaryActionTitle = "결제 확인 완료"
+            viewState.errorMessage = nil
+            viewState.successMessage = "이미 확인된 결제예요. 주문 내역에 반영했습니다."
+            postOrderRefreshRequested()
+        } else {
+            await interactor.updatePendingPaymentSession(orderCode: orderCode, state: .recoverablePending, impUID: validationRequest.impUID)
+            applyFailedValidationState(
+                message: "이미 처리된 결제예요. 주문 내역을 새로고침해 주세요.",
+                validationRequest: validationRequest
+            )
+        }
+    }
+
     private func paymentReceiptStatusCode(from error: Error) -> String {
         if case .notFound = error as? CheckoutFeatureError {
             return "404"
@@ -486,6 +651,8 @@ final class CheckoutPresenter: ObservableObject {
                 return "로그인 후 결제를 확인할 수 있어요."
             case .configurationRequired:
                 return "앱 설정을 확인해 주세요."
+            case .alreadyValidated:
+                return "이미 확인된 결제예요."
             }
         }
         if let localizedError = error as? LocalizedError,
@@ -505,6 +672,10 @@ final class CheckoutPresenter: ObservableObject {
             router.routeToAuth()
         case .configurationRequired:
             break
+        case .alreadyValidated:
+            Logger.shared.debug(
+                "[PaymentValidation] alreadyValidated orderCode=\(validationRequest.orderCode ?? "nil") body={\"imp_uid\":\"<present:\(!validationRequest.impUID.isEmpty)>\"}"
+            )
         case .validation(let featureMessage),
              .businessAuthorization(let featureMessage),
              .notFound(let featureMessage),
@@ -534,6 +705,11 @@ final class CheckoutPresenter: ObservableObject {
                 "[PaymentValidation] failed orderCode=\(validationRequest.orderCode ?? "nil") statusCode=unknown message=\(debugError.localizedDescription) body={\"imp_uid\":\"<present:\(!validationRequest.impUID.isEmpty)>\"}"
             )
         }
+        if let orderCode = validationRequest?.orderCode {
+            Task {
+                await interactor.updatePendingPaymentSession(orderCode: orderCode, state: .validationFailed, impUID: validationRequest?.impUID)
+            }
+        }
         viewState.paymentBridgeContext = nil
         viewState.isValidatingPrice = false
         viewState.isSubmittingOrder = false
@@ -555,6 +731,8 @@ final class CheckoutPresenter: ObservableObject {
             return "결제 확인 중 세션이 만료되었어요. 결제가 실제로 완료되었을 수 있으니 다시 로그인한 뒤 주문 내역을 확인해 주세요."
         case .configurationRequired:
             return "앱 결제 설정 문제로 결제 확인에 실패했습니다. 결제가 실제로 완료되었을 수 있으니 잠시 후 주문 내역을 확인하거나 고객센터에 문의해주세요."
+        case .alreadyValidated:
+            return "이미 확인된 결제예요. 주문 내역을 새로고침해 주세요."
         case .validation,
              .businessAuthorization,
              .notFound,
@@ -591,6 +769,8 @@ final class CheckoutPresenter: ObservableObject {
             return "authenticationRequired"
         case .configurationRequired:
             return "configurationRequired"
+        case .alreadyValidated:
+            return "alreadyValidated"
         }
     }
 

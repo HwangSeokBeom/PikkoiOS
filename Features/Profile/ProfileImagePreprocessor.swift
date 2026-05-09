@@ -81,6 +81,15 @@ struct ProfileImagePreprocessor {
     static let targetBytes: Int = 900 * 1024
     private let preprocessor = ImageUploadPreprocessor(maxInitialPixel: 1_024)
 
+    static func diagnosticMetadata(data: Data, filename: String) -> (contentType: String, pixelWidth: Int, pixelHeight: Int) {
+        let metadata = sourceMetadata(data: data, filename: filename)
+        return (
+            metadata.mimeType == "unknown" ? metadata.uti : metadata.mimeType,
+            Int(metadata.size.width),
+            Int(metadata.size.height)
+        )
+    }
+
     func processForProfileUpload(data: Data, originalFileName: String) async throws -> ProfileImagePreprocessResult {
         try await Task.detached(priority: .userInitiated) {
             try process(data: data, originalFileName: originalFileName)
@@ -98,6 +107,26 @@ struct ProfileImagePreprocessor {
 
         do {
             let sourceMetadata = Self.sourceMetadata(data: data, filename: originalFileName)
+            if isPNG(uti: sourceMetadata.uti),
+               data.count <= Self.maxBytes {
+                return ProcessedProfileImage(
+                    data: data,
+                    mimeType: "image/png",
+                    fileExtension: "png",
+                    filename: "profile.png",
+                    pixelSize: sourceMetadata.size,
+                    originalPixelSize: sourceMetadata.size,
+                    sourceFormat: sourceMetadata.format,
+                    originalUTI: sourceMetadata.uti,
+                    originalMimeType: sourceMetadata.mimeType,
+                    orientation: sourceMetadata.orientation,
+                    byteSize: data.count,
+                    originalBytes: data.count,
+                    compressionQuality: 1,
+                    didDownsample: false
+                )
+            }
+
             let output = try preprocessor.process(
                 ImageUploadPreprocessInput(
                     data: data,
@@ -129,6 +158,13 @@ struct ProfileImagePreprocessor {
         } catch {
             throw ProfileImagePreprocessorError.exceedsLimit
         }
+    }
+
+    private func isPNG(uti: String) -> Bool {
+        guard let type = UTType(uti) else {
+            return false
+        }
+        return type.conforms(to: .png)
     }
 
     private func mimeType(from filename: String) -> String {

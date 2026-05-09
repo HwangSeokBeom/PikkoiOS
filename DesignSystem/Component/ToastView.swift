@@ -9,6 +9,8 @@ struct ToastView: View {
 
     let message: String
     var tone: Tone = .neutral
+    var actionTitle: String?
+    var action: (() -> Void)?
 
     var body: some View {
         HStack(spacing: PikkoSpacing.xs) {
@@ -16,6 +18,14 @@ struct ToastView: View {
                 .font(.system(size: 14, weight: .semibold))
             Text(message)
                 .font(PikkoTypography.captionStrong)
+            if let actionTitle, let action {
+                Button(action: action) {
+                    Text(actionTitle)
+                        .font(PikkoTypography.captionStrong)
+                        .underline()
+                }
+                .buttonStyle(.plain)
+            }
         }
         .foregroundStyle(foregroundColor)
         .padding(.horizontal, PikkoSpacing.md)

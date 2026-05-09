@@ -116,26 +116,20 @@
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<false/>
-#if DEBUG
-		<key>NSAllowsArbitraryLoadsForMedia</key>
-		<true/>
 		<key>NSExceptionDomains</key>
 		<dict>
 			<key>pickup.sesac.kr</key>
 			<dict>
 				<key>NSExceptionAllowsInsecureHTTPLoads</key>
 				<true/>
+				<key>NSExceptionRequiresForwardSecrecy</key>
+				<false/>
 				<key>NSExceptionMinimumTLSVersion</key>
 				<string>TLSv1.2</string>
 				<key>NSIncludesSubdomains</key>
 				<true/>
-				<key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
 			</dict>
 		</dict>
-#endif
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>현재 위치 주변의 픽업 가능한 매장을 보여주기 위해 위치 정보를 사용합니다.</string>

@@ -10,6 +10,29 @@ final class VideoFeatureTests: XCTestCase {
         XCTAssertEqual(VideoPlaybackTiming.safeSeconds(CMTime(seconds: 12.5, preferredTimescale: 600)), 12.5)
     }
 
+    func testVideoPlaybackPositionStorePersistsResumePointAcrossReload() {
+        let suiteName = #function + UUID().uuidString
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        userDefaults.removePersistentDomain(forName: suiteName)
+        let store = VideoPlaybackPositionStore(store: UserDefaultsStore(userDefaults: userDefaults))
+
+        store.save(videoID: "video-1", position: 42, duration: 120)
+        let reloadedStore = VideoPlaybackPositionStore(store: UserDefaultsStore(userDefaults: userDefaults))
+
+        XCTAssertEqual(reloadedStore.position(videoID: "video-1", duration: 120), 42)
+    }
+
+    func testVideoPlaybackPositionStoreDoesNotSaveNearEndAsResumePoint() {
+        let suiteName = #function + UUID().uuidString
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        userDefaults.removePersistentDomain(forName: suiteName)
+        let store = VideoPlaybackPositionStore(store: UserDefaultsStore(userDefaults: userDefaults))
+
+        store.save(videoID: "video-1", position: 116, duration: 120)
+
+        XCTAssertNil(store.position(videoID: "video-1", duration: 120))
+    }
+
     func testVideoResponseDTODecodesSwaggerSnakeCaseFields() throws {
         let dto = try NetworkCoding.makeJSONDecoder().decode(
             VideoResponseDTO.self,

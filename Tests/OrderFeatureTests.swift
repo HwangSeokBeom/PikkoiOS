@@ -854,6 +854,40 @@ final class OrderFeatureTests: XCTestCase {
         XCTAssertEqual(pendingAfterConflict.status, .pending)
     }
 
+    func testHiddenOrderHistoryStoreFiltersCompletedOrdersButKeepsActiveOrdersVisible() async {
+        let suiteName = #function + UUID().uuidString
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        userDefaults.removePersistentDomain(forName: suiteName)
+        let store = HiddenOrderHistoryStore(store: UserDefaultsStore(userDefaults: userDefaults))
+        let userID = "user-1"
+        let completedOrder = makeOrder(id: "completed", status: .completed)
+        let activeOrder = makeOrder(id: "active", status: .preparing)
+
+        await store.hide(order: completedOrder, userID: userID)
+        await store.hide(order: activeOrder, userID: userID)
+        let filtered = await store.apply(to: [completedOrder, activeOrder], userID: userID)
+
+        XCTAssertEqual(filtered.map { $0.orderCode }, [activeOrder.orderCode])
+    }
+
+    func testHiddenOrderHistoryStoreUndoRestoresHiddenCompletedOrder() async {
+        let suiteName = #function + UUID().uuidString
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        userDefaults.removePersistentDomain(forName: suiteName)
+        let store = HiddenOrderHistoryStore(store: UserDefaultsStore(userDefaults: userDefaults))
+        let userID = "user-1"
+        let completedOrder = makeOrder(id: "completed", status: .completed)
+
+        await store.hide(order: completedOrder, userID: userID)
+        let hiddenBeforeUndo = await store.isHidden(orderCode: completedOrder.orderCode, userID: userID)
+        XCTAssertTrue(hiddenBeforeUndo)
+
+        await store.unhide(orderCode: completedOrder.orderCode, userID: userID)
+
+        let hiddenAfterUndo = await store.isHidden(orderCode: completedOrder.orderCode, userID: userID)
+        XCTAssertFalse(hiddenAfterUndo)
+    }
+
     private func makeInitialState() -> OrderViewState {
         var state = OrderViewState()
         state.isInitialLoading = true
@@ -1253,6 +1287,10 @@ private struct SpyOrderInteractor: OrderInteracting {
             throw error
         }
     }
+
+    func hideOrderFromHistory(orderCode: String) async throws {}
+
+    func unhideOrderFromHistory(orderCode: String) async {}
 
     func updateOrderStatus(orderCode: String, status: OrderStatus) async throws {
         await statusUpdateRecorder.append(orderCode: orderCode, nextStatus: status.apiValue)

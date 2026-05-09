@@ -138,10 +138,11 @@ final class ProfilePresenter: ObservableObject {
 #if DEBUG
                 Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] originalUTI=\(processed.originalUTI) originalMime=\(processed.originalMimeType) originalByteSize=\(processed.originalBytes) originalPixelSize=\(Int(processed.originalPixelSize.width))x\(Int(processed.originalPixelSize.height)) orientation=\(processed.orientation)")
                 Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] outputMime=\(processed.mimeType) outputExtension=\(processed.fileExtension) outputByteSize=\(processed.data.count) outputPixelSize=\(Int(processed.pixelSize.width))x\(Int(processed.pixelSize.height)) compressionQuality=\(String(format: "%.2f", processed.compressionQuality)) downsampled=\(processed.didDownsample)")
+                Logger(category: "ProfileImage").debug("[ProfileImage] normalized outputType=\(profileImageOutputType(mimeType: processed.mimeType)) outputBytes=\(processed.data.count) maxBytes=\(ProfileImagePreprocessor.maxBytes) compression=\(String(format: "%.2f", processed.compressionQuality))")
 #endif
             } catch {
 #if DEBUG
-                Logger(category: "ProfileImage").warning("[ProfileImage] upload failed status=none message=\(error.localizedDescription)")
+                Logger(category: "ProfileImage").warning("[ProfileImage] upload failed reason=\(redactedProfileImageFailureReason(from: error)) status=none isATS=\(isATSBlocked(error)) isValidation=\(isProfileImageValidationFailure(error))")
 #endif
                 throw error
             }
@@ -170,6 +171,7 @@ final class ProfilePresenter: ObservableObject {
 #if DEBUG
             Logger(category: "ProfileImageUpdate").debug("[ProfileImageUpdate] uploadStatus=200 responseImageURL=\(uploadedPath)")
             Logger(category: "ProfileImageUpload").info("[ProfileImageUpload] success requestID=\(requestID) imageURLChanged=\(effectiveUploadedPath != oldProfileImagePath)")
+            Logger(category: "ProfileImage").debug("[ProfileImage] upload success profileImage=\(effectiveUploadedPath)")
 #endif
             profileStateGeneration += 1
             await invalidateProfileImageCache(oldPath: oldProfileImagePath, newPath: effectiveUploadedPath)
@@ -219,7 +221,7 @@ final class ProfilePresenter: ObservableObject {
             viewState.editorLocalProfileImageData = nil
 #if DEBUG
             Logger(category: "ProfileImageUpload").warning("[ProfileImageUpload] failed requestID=\(requestID) status=\(statusCodeDescription(from: error)) reason=\(error.localizedDescription)")
-            Logger(category: "ProfileImage").warning("[ProfileImage] upload failed status=\(statusCodeDescription(from: error)) message=\(error.localizedDescription)")
+            Logger(category: "ProfileImage").warning("[ProfileImage] upload failed reason=\(redactedProfileImageFailureReason(from: error)) status=\(statusCodeDescription(from: error)) isATS=\(isATSBlocked(error)) isValidation=\(isProfileImageValidationFailure(error))")
 #endif
         }
 
@@ -418,8 +420,51 @@ final class ProfilePresenter: ObservableObject {
             return "429"
         case .server:
             return "5xx"
+        case .configuration(.atsBlocked):
+            return "ATS"
         case .abnormalRequest, .businessAuthorization, .configuration, .transport, .decoding:
             return "unknown"
+        }
+    }
+
+    private func profileImageOutputType(mimeType: String) -> String {
+        switch mimeType.lowercased() {
+        case "image/png":
+            return "png"
+        default:
+            return "jpeg"
+        }
+    }
+
+    private func redactedProfileImageFailureReason(from error: Error) -> String {
+        if isATSBlocked(error) {
+            return "atsBlocked"
+        }
+        if isProfileImageValidationFailure(error) {
+            return "validation"
+        }
+        if error is NetworkError {
+            return "network"
+        }
+        return "processing"
+    }
+
+    private func isATSBlocked(_ error: Error) -> Bool {
+        (error as? NetworkError) == .configuration(.atsBlocked)
+    }
+
+    private func isProfileImageValidationFailure(_ error: Error) -> Bool {
+        if error is ProfileImagePreprocessorError {
+            return true
+        }
+        guard let networkError = error as? NetworkError else {
+            return false
+        }
+        switch networkError {
+        case .invalidRequest, .abnormalRequest:
+            return true
+        default:
+            return false
         }
     }
 }

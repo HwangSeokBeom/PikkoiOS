@@ -19,12 +19,13 @@ enum CheckoutPaymentStage: Equatable {
     case paymentCanceled
     case paymentFailed
     case paymentValidationFailed
+    case recoverablePending
 
     var blocksPrimaryAction: Bool {
         switch self {
         case .validatingPrice, .creatingOrder, .paymentPrepared, .presentingPayment, .paymentCallbackReceived, .validatingPayment, .paymentCompleted:
             return true
-        case .idle, .paymentCanceled, .paymentFailed, .paymentValidationFailed:
+        case .idle, .paymentCanceled, .paymentFailed, .paymentValidationFailed, .recoverablePending:
             return false
         }
     }
@@ -33,7 +34,7 @@ enum CheckoutPaymentStage: Equatable {
         switch self {
         case .paymentPrepared, .presentingPayment, .paymentCallbackReceived, .validatingPayment, .paymentCompleted:
             return true
-        case .idle, .validatingPrice, .creatingOrder, .paymentCanceled, .paymentFailed, .paymentValidationFailed:
+        case .idle, .validatingPrice, .creatingOrder, .paymentCanceled, .paymentFailed, .paymentValidationFailed, .recoverablePending:
             return false
         }
     }
@@ -85,6 +86,7 @@ struct CheckoutViewState: Equatable {
     var createdOrderCode: String?
     var completionState: CheckoutCompletionState = .none
     var paymentBridgeContext: CheckoutPaymentBridgeContext?
+    var recoverablePaymentSession: PendingPaymentSession?
     var errorMessage: String?
     var successMessage: String?
     var paymentWarningMessage: String?
@@ -121,6 +123,7 @@ struct CheckoutViewState: Equatable {
         createdOrderCode: String? = nil,
         completionState: CheckoutCompletionState = .none,
         paymentBridgeContext: CheckoutPaymentBridgeContext? = nil,
+        recoverablePaymentSession: PendingPaymentSession? = nil,
         errorMessage: String? = nil,
         successMessage: String? = nil,
         paymentWarningMessage: String? = nil,
@@ -152,6 +155,7 @@ struct CheckoutViewState: Equatable {
         self.createdOrderCode = createdOrderCode
         self.completionState = completionState
         self.paymentBridgeContext = paymentBridgeContext
+        self.recoverablePaymentSession = recoverablePaymentSession
         self.errorMessage = errorMessage
         self.successMessage = successMessage
         self.paymentWarningMessage = paymentWarningMessage

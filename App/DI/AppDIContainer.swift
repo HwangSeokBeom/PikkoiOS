@@ -58,6 +58,7 @@ final class AppDIContainer {
         cartRepository: CartRepository = InMemoryCartRepository()
     ) {
         let resolvedConfiguration = appConfiguration ?? AppConfiguration(environment: environment)
+        Self.logStartupNetworkConfiguration(resolvedConfiguration)
         let resolvedUserDefaultsStore = userDefaultsStore ?? UserDefaultsStore()
         let resolvedNotificationRepository = UserDefaultsAppNotificationRepository(store: resolvedUserDefaultsStore)
         let resolvedPendingNotificationRouteStore = PendingNotificationRouteStore()
@@ -235,4 +236,30 @@ final class AppDIContainer {
     func makeFeatureBuilderFactory(appState: AppState) -> FeatureBuilderFactory {
         FeatureBuilderFactory(container: self, appState: appState)
     }
+
+    private static func logStartupNetworkConfiguration(_ configuration: AppConfiguration) {
+#if DEBUG
+        let baseURL = configuration.baseURL
+        Logger(category: "NetworkConfig").debug(
+            "[NetworkConfig] apiBaseURL scheme=\(baseURL?.scheme ?? "nil") host=\(baseURL?.host ?? "nil") port=\(baseURL?.port.map(String.init) ?? "nil") atsExceptionExpected=\(atsExceptionExpected(for: baseURL))"
+        )
+#endif
+    }
+
+#if DEBUG
+    private static func atsExceptionExpected(for baseURL: URL?) -> Bool {
+        guard baseURL?.host?.caseInsensitiveCompare("pickup.sesac.kr") == .orderedSame else {
+            return false
+        }
+
+        guard let ats = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any],
+              let domains = ats["NSExceptionDomains"] as? [String: Any],
+              let pickup = domains["pickup.sesac.kr"] as? [String: Any],
+              pickup["NSExceptionAllowsInsecureHTTPLoads"] as? Bool == true else {
+            return false
+        }
+
+        return true
+    }
+#endif
 }

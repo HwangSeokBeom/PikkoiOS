@@ -44,9 +44,11 @@ final class VideoPlayerViewModel: ObservableObject {
     private var subtitleGeneration = 0
     private var subtitleCues: [VideoSubtitleCue] = []
     private let subtitlePreferenceStore = VideoSubtitlePreferenceStore()
+    private let playbackPositionStore = VideoPlaybackPositionStore()
     private var didTearDown = false
     private var isDetachedFromView = false
     private var lastKnownDuration: Double?
+    private var lastPlaybackPositionSaveAt: Date?
 
     init(
         video: Video,
@@ -139,6 +141,7 @@ final class VideoPlayerViewModel: ObservableObject {
 
     func pause() {
         player?.pause()
+        savePlaybackPosition(reason: "pause")
         if case .playing = viewState.playbackState {
             setPlaybackState(.paused)
         }
@@ -151,6 +154,7 @@ final class VideoPlayerViewModel: ObservableObject {
         }
         didTearDown = true
         isDetachedFromView = true
+        savePlaybackPosition(reason: "viewDisappear")
         cancelPendingPlayback(reason: "viewDisappear")
         cancelSubtitleLoading(reason: "viewDisappear")
         removeCurrentItemObserver()
@@ -430,6 +434,7 @@ final class VideoPlayerViewModel: ObservableObject {
 
     func handlePlaybackEnded() {
         setPlaybackState(.ready)
+        playbackPositionStore.clear(videoID: viewState.video.videoId)
         nowPlayingManager.clear(reason: "ended")
     }
 
@@ -512,6 +517,9 @@ final class VideoPlayerViewModel: ObservableObject {
                 viewState.detailReason = "selectedQualityUnavailable"
             }
             logStreamResponseDiagnostics(requestedVideoID: videoID, stream: stream)
+            Logger(category: "VideoStream").debug(
+                "[VideoStream] streamURLLoaded videoId=\(videoID) qualities=\(stream.qualities.map(\.quality).joined(separator: ","))"
+            )
 
 #if DEBUG
             if HLSDebugDiagnosticsOptions.isEnabled {
@@ -526,10 +534,11 @@ final class VideoPlayerViewModel: ObservableObject {
 #endif
 
             let resolvedQuality = try resolveQuality(viewState.userSelectedQuality, in: stream)
+            let resumeSeconds = playbackPositionStore.position(videoID: videoID, duration: viewState.video.duration)
             await replacePlayerItem(
                 resolvedQuality: resolvedQuality,
                 reason: reason,
-                seekTime: .zero,
+                seekTime: resumeSeconds.map { CMTime(seconds: $0, preferredTimescale: 600) } ?? .zero,
                 shouldResume: shouldAutoplay,
                 failureMessage: userFacingPlaybackFailureMessage(forExplicitQuality: viewState.userSelectedQuality != "auto")
             )
@@ -632,55 +641,18 @@ final class VideoPlayerViewModel: ObservableObject {
 
         removeCurrentItemObserver()
 
-        let item: AVPlayerItem
-        let playbackCandidate: PlaybackCandidate
-        do {
-            let result = try await makeHLSPlayerItem(resolvedQuality: resolvedQuality)
-            item = result.item
-            playbackCandidate = result.candidate
-        } catch {
-            guard generation == playbackGeneration else {
-                logger.debug(
-                    "[VideoPlayer] context=\(context.rawValue) ignore stale item build failure generation=\(generation) current=\(playbackGeneration) quality=\(resolvedQuality.identifier)"
-                )
-                return
-            }
-
-            if let probeFailure = error as? HLSProbeFailure {
-                attemptedFallbackQualities.insert(resolvedQuality.identifier)
-                viewState.detailReason = probeFailure.detailReason
-                if probeFailure.shouldRefreshStreamOnce,
-                   await retryOnceAfterTerminalHLSAuthFailure(
-                    failedQuality: resolvedQuality.identifier,
-                    reason: probeFailure.refreshRetryReason,
-                    seekTime: seekTime,
-                    shouldResume: shouldResume,
-                    failureMessage: failureMessage
-                   ) {
-                    return
-                }
-
-                setPlaybackState(.failed(userFacingHLSProbeFailureMessage()))
-                logTerminalHLSAuthFailureIfNeeded(
-                    probeFailure: probeFailure,
-                    selectedQuality: resolvedQuality.identifier,
-                    retryExhausted: true
-                )
-                logger.error("[VideoPlayer] context=\(context.rawValue) item failed videoId=\(viewState.video.videoId) error=\(probeFailure.detailReason)")
-                return
-            }
-
-            viewState.detailReason = detailReason(for: error)
-            setPlaybackState(.failed(failureMessage ?? userFacingPlaybackFailureMessage(forExplicitQuality: viewState.userSelectedQuality != "auto")))
-            logger.error("[VideoPlayer] context=\(context.rawValue) item failed error=\(error.localizedDescription)")
-            return
-        }
+        let playbackCandidate = PlaybackCandidate(
+            quality: resolvedQuality.identifier,
+            url: resolvedQuality.url,
+            authMode: .tokenOnly
+        )
+        let item = makeHLSPlayerItem(playbackCandidate: playbackCandidate)
 
         let playbackDescriptor = VideoURLLogDescriptor(url: playbackCandidate.url)
         currentAttemptQuality = playbackCandidate.quality
         currentAttemptAuthMode = playbackCandidate.authMode
         logger.debug(
-            "[VideoPlayer] context=\(context.rawValue) replace item reason=\(reason) quality=\(playbackCandidate.quality) authMode=\(playbackCandidate.authMode.rawValue) hlsHeaderMode=\(playbackCandidate.authMode.rawValue) assetHeaders=true hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false playbackURLPath=\(playbackDescriptor.path) queryExists=\(playbackDescriptor.queryExists) queryKeys=\(playbackDescriptor.queryKeys) preserveTime=\(seekTime.seconds.isFinite ? seekTime.seconds : 0) generation=\(generation)"
+            "[VideoPlayer] context=\(context.rawValue) replace item reason=\(reason) quality=\(playbackCandidate.quality) authMode=\(playbackCandidate.authMode.rawValue) hlsHeaderMode=\(playbackCandidate.authMode.rawValue) assetHeaders=false hasSeSACKeyHeader=false headerAuthorization=false headerContentType=false playbackURLPath=\(playbackDescriptor.path) queryExists=\(playbackDescriptor.queryExists) queryKeys=\(playbackDescriptor.queryKeys) preserveTime=\(seekTime.seconds.isFinite ? seekTime.seconds : 0) generation=\(generation)"
         )
 
         guard generation == playbackGeneration else {
@@ -784,7 +756,7 @@ final class VideoPlayerViewModel: ObservableObject {
             in: stream
            ) {
             logger.warning(
-                "[VideoPlayer] fallback start from=\(quality) next=\(nextQuality) reason=\(detailReason) code=\(nsError?.code ?? 0)"
+                "[VideoPlayer] fallback from=\(quality) to=\(nextQuality) reason=\(detailReason) code=\(nsError?.code ?? 0)"
             )
             do {
                 let resolvedQuality = try resolveQuality(nextQuality, in: stream)
@@ -809,11 +781,11 @@ final class VideoPlayerViewModel: ObservableObject {
         viewState.detailReason = "quality=\(quality) \(detailReason)"
         if statusCodes.contains(420) {
             logger.error(
-                "[VideoPlayer] failed reason=hlsRequiresServiceHeader videoId=\(viewState.video.videoId) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(quality) status=420 classification=hlsRequiresServiceHeader responseMessage=unavailableFromAVPlayerErrorLog hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false retryAfterRefresh=\(didRefreshAfterHLSServiceMismatch ? "exhausted" : "notAttempted")"
+                "[VideoPlayer] failed reason=hlsRequiresServiceHeader videoId=\(viewState.video.videoId) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(quality) status=420 classification=hlsRequiresServiceHeader responseMessage=unavailableFromAVPlayerErrorLog hlsAuthMode=tokenOnly hasSeSACKeyHeader=false headerAuthorization=false headerContentType=false retryAfterRefresh=\(didRefreshAfterHLSServiceMismatch ? "exhausted" : "notAttempted")"
             )
         } else if statusCodes.contains(444) {
             logger.error(
-                "[VideoPlayer] failed reason=hlsUnauthorizedEvenWithProtectedHeaders videoId=\(viewState.video.videoId) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(quality) status=444 classification=hlsUnauthorizedEvenWithProtectedHeaders responseMessage=unavailableFromAVPlayerErrorLog hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false retryAfterRefresh=\(didRefreshAfterHLSServiceMismatch ? "exhausted" : "notAttempted")"
+                "[VideoPlayer] failed reason=hlsUnauthorized videoId=\(viewState.video.videoId) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(quality) status=444 classification=hlsUnauthorized responseMessage=unavailableFromAVPlayerErrorLog hlsAuthMode=tokenOnly hasSeSACKeyHeader=false headerAuthorization=false headerContentType=false retryAfterRefresh=\(didRefreshAfterHLSServiceMismatch ? "exhausted" : "notAttempted")"
             )
         }
         setPlaybackState(.failed(terminalStreamServerFailure ? streamServerFailureMessage : (failureMessage ?? userFacingPlaybackFailureMessage(forExplicitQuality: viewState.userSelectedQuality != "auto"))))
@@ -828,7 +800,7 @@ final class VideoPlayerViewModel: ObservableObject {
     ) async -> Bool {
         guard !didRefreshAfterHLSServiceMismatch else {
             logger.warning(
-                "[VideoPlayer] HLS auth retry suppressed videoId=\(viewState.video.videoId) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(failedQuality) reason=\(reason) retryAfterRefresh=exhausted hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false"
+                "[VideoPlayer] HLS token retry suppressed videoId=\(viewState.video.videoId) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(failedQuality) reason=\(reason) retryAfterRefresh=exhausted hlsAuthMode=tokenOnly hasSeSACKeyHeader=false headerAuthorization=false headerContentType=false"
             )
             return false
         }
@@ -838,7 +810,7 @@ final class VideoPlayerViewModel: ObservableObject {
         guard !videoID.isEmpty else { return false }
 
         logger.warning(
-            "[VideoPlayer] HLS auth failure refreshing stream once videoId=\(videoID) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(failedQuality) reason=\(reason) hasSeSACKeyHeader=true headerAuthorization=true headerContentType=false"
+            "[VideoPlayer] HLS token failure refreshing stream once videoId=\(videoID) responseVideoId=\(viewState.stream?.videoId ?? "nil") selectedQuality=\(failedQuality) reason=\(reason) hlsAuthMode=tokenOnly hasSeSACKeyHeader=false headerAuthorization=false headerContentType=false"
         )
 
         do {
@@ -1070,33 +1042,20 @@ final class VideoPlayerViewModel: ObservableObject {
         }
     }
 
-    private func makeHLSPlayerItem(
-        resolvedQuality: ResolvedVideoQuality
-    ) async throws -> (item: AVPlayerItem, candidate: PlaybackCandidate) {
-        guard let stream = viewState.stream else {
-            throw VideoPlaybackSelectionError.selectedQualityUnavailable(resolvedQuality.identifier)
-        }
-        let protectedResourceHeaders = try await makeProtectedResourceHeaders()
-        let playbackCandidate = try await HLSProbeService.resolvePlaybackCandidate(
-            selectedQuality: resolvedQuality.identifier,
-            stream: stream,
-            requestedVideoID: viewState.video.videoId,
-            seSACKey: appConfiguration.seSACKey,
-            protectedResourceHeaders: protectedResourceHeaders
-        )
+    private func makeHLSPlayerItem(playbackCandidate: PlaybackCandidate) -> AVPlayerItem {
         let descriptor = VideoURLLogDescriptor(url: playbackCandidate.url)
-        let headerSnapshot = HLSHeaderSnapshot(headers: protectedResourceHeaders)
-        let assetOptions = HLSPlaybackHeaderOptions.assetOptions(headers: protectedResourceHeaders)
         logger.debug(
-            "[VideoPlayer] createAsset hlsAuthMode=\(playbackCandidate.authMode.rawValue) quality=\(playbackCandidate.quality) url=\(descriptor.redactedAbsoluteString) assetHeaders=true queryExists=\(descriptor.queryExists) queryKeys=\(descriptor.queryKeys) queryKeyCount=\(descriptor.queryKeyCount) rawQueryLength=\(descriptor.rawQueryLength) percentEncodedQueryLength=\(descriptor.percentEncodedQueryLength) hasAuthorization=\(headerSnapshot.hasAuthorization) hasSeSACKey=\(headerSnapshot.hasSeSACKey) headerContentType=\(headerSnapshot.hasContentType)"
+            "[VideoPlayer] createAsset hlsAuthMode=\(playbackCandidate.authMode.rawValue) quality=\(playbackCandidate.quality) url=\(descriptor.redactedAbsoluteString) assetHeaders=false queryExists=\(descriptor.queryExists) queryKeys=\(descriptor.queryKeys) queryKeyCount=\(descriptor.queryKeyCount) rawQueryLength=\(descriptor.rawQueryLength) percentEncodedQueryLength=\(descriptor.percentEncodedQueryLength) hasAuthorization=false hasSeSACKey=false headerContentType=false"
         )
-        logger.debug("[VideoPlayer] hlsAuthMode=\(playbackCandidate.authMode.rawValue) headerSeSACKey=\(headerSnapshot.hasSeSACKey) headerAuthorization=\(headerSnapshot.hasAuthorization) headerContentType=\(headerSnapshot.hasContentType)")
+        logger.debug("[VideoPlayer] hlsAuthMode=\(playbackCandidate.authMode.rawValue) headerSeSACKey=false headerAuthorization=false headerContentType=false")
 #if DEBUG
-        VideoStreamingDebugLogger.logSelected(
-            source: debugSelectedSource(for: playbackCandidate.quality, in: stream),
-            quality: playbackCandidate.quality,
-            url: playbackCandidate.url
-        )
+        if let stream = viewState.stream {
+            VideoStreamingDebugLogger.logSelected(
+                source: debugSelectedSource(for: playbackCandidate.quality, in: stream),
+                quality: playbackCandidate.quality,
+                url: playbackCandidate.url
+            )
+        }
 #endif
         logATSConfigurationIfNeeded(for: playbackCandidate.url)
 
@@ -1110,11 +1069,11 @@ final class VideoPlayerViewModel: ObservableObject {
         // or the server must authorize child resources from the master token session/cookie.
         // VTT subtitle responses must start with WEBVTT and use text/vtt or a compatible text content type.
         // The client cannot append token queries to AVPlayer's internal subtitle/segment requests.
-        let asset = AVURLAsset(url: playbackCandidate.url, options: assetOptions)
+        let asset = AVURLAsset(url: playbackCandidate.url)
 #if DEBUG
         VideoStreamingDebugLogger.logFinalPlayerURL(action: "create AVPlayerItem", url: playbackCandidate.url)
 #endif
-        return (AVPlayerItem(asset: asset), playbackCandidate)
+        return AVPlayerItem(asset: asset)
     }
 
     private func makeProtectedResourceHeaders() async throws -> [String: String] {
@@ -1254,7 +1213,7 @@ final class VideoPlayerViewModel: ObservableObject {
             if [401, 403, 420, 444].contains(event.errorStatusCode) {
                 let resourceKind = hlsResourceKind(from: event.uri)
                 logger.error(
-                    "[VideoPlayer] failed reason=\(resourceKind)Unauthorized status=\(event.errorStatusCode) hlsAuthMode=\(currentAttemptAuthMode?.rawValue ?? "unknown") headerAuthorization=true headerSeSACKey=true headerContentType=false"
+                    "[VideoPlayer] failed reason=\(resourceKind)Unauthorized status=\(event.errorStatusCode) hlsAuthMode=\(currentAttemptAuthMode?.rawValue ?? "unknown") headerAuthorization=false headerSeSACKey=false headerContentType=false"
                 )
             }
         }
@@ -1406,6 +1365,29 @@ final class VideoPlayerViewModel: ObservableObject {
         nowPlayingManager.updatePlaybackState(player: tick.player, duration: viewState.duration, elapsed: viewState.currentTime)
         updateActiveCaption(at: viewState.currentTime)
         logger.debug("[PlayerTimeObserver] tick handled elapsed=\(Int(viewState.currentTime)) duration=\(Int(viewState.duration ?? 0)) rate=\(tick.player.rate)")
+        savePlaybackPositionIfNeeded(now: Date(), reason: "tick")
+    }
+
+    private func savePlaybackPositionIfNeeded(now: Date, reason: String) {
+        if let lastPlaybackPositionSaveAt,
+           now.timeIntervalSince(lastPlaybackPositionSaveAt) < 5 {
+            return
+        }
+        lastPlaybackPositionSaveAt = now
+        savePlaybackPosition(reason: reason)
+    }
+
+    private func savePlaybackPosition(reason: String) {
+        guard viewState.currentTime.isFinite,
+              viewState.currentTime > 1 else {
+            return
+        }
+        playbackPositionStore.save(
+            videoID: viewState.video.videoId,
+            position: viewState.currentTime,
+            duration: viewState.duration ?? viewState.video.duration
+        )
+        logger.debug("[VideoPlayer] resumePositionSaved videoId=\(viewState.video.videoId) position=\(Int(viewState.currentTime)) reason=\(reason)")
     }
 
     private var canUpdateSharedPlaybackSideEffects: Bool {
@@ -1731,6 +1713,72 @@ private struct VideoSubtitlePreferenceStore {
             userDefaults.set(subtitleID, forKey: Key.subtitleID)
         } else {
             userDefaults.removeObject(forKey: Key.subtitleID)
+        }
+    }
+}
+
+struct VideoPlaybackPositionStore: Sendable {
+    private struct Entry: Codable, Equatable {
+        let position: Double
+        let duration: Double
+        let updatedAt: Date
+    }
+
+    private let store: any UserDefaultsStoring
+    private let key = "video.playback.positions"
+
+    init(store: any UserDefaultsStoring = UserDefaultsStore()) {
+        self.store = store
+    }
+
+    func position(videoID: String, duration: Double?) -> Double? {
+        guard let entry = entries()[videoID],
+              entry.position > 1,
+              !isNearEnd(position: entry.position, duration: duration ?? entry.duration) else {
+            return nil
+        }
+        return entry.position
+    }
+
+    func save(videoID: String, position: Double, duration: Double?) {
+        guard !videoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              position.isFinite,
+              position > 1,
+              !isNearEnd(position: position, duration: duration) else {
+            clear(videoID: videoID)
+            return
+        }
+        var nextEntries = entries()
+        nextEntries[videoID] = Entry(position: position, duration: duration ?? 0, updatedAt: Date())
+        persist(nextEntries)
+    }
+
+    func clear(videoID: String) {
+        var nextEntries = entries()
+        nextEntries[videoID] = nil
+        persist(nextEntries)
+    }
+
+    private func isNearEnd(position: Double, duration: Double?) -> Bool {
+        guard let duration, duration.isFinite, duration > 0 else {
+            return false
+        }
+        return duration - position < 10 || position / duration > 0.95
+    }
+
+    private func entries() -> [String: Entry] {
+        store.codableValue([String: Entry].self, forKey: key) ?? [:]
+    }
+
+    private func persist(_ entries: [String: Entry]) {
+        do {
+            let newest = entries
+                .sorted { $0.value.updatedAt > $1.value.updatedAt }
+                .prefix(100)
+                .reduce(into: [String: Entry]()) { $0[$1.key] = $1.value }
+            try store.setCodable(newest, forKey: key)
+        } catch {
+            Logger(category: "VideoPlayer").warning("[VideoPlayer] resumePositionPersistFailed message=\(error.localizedDescription)")
         }
     }
 }

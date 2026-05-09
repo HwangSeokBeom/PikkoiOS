@@ -985,6 +985,70 @@ final class NetworkInfrastructureTests: XCTestCase {
         let storedTokens = try await tokenStore.loadTokens()
         XCTAssertEqual(storedTokens, StoredTokens(accessToken: "access-token", refreshToken: "refresh-token"))
     }
+
+    func testATSBlockedURLErrorMapsToConfigurationFailureAndIsNotRetried() async throws {
+        let tokenStore = StubTokenStore(tokens: nil)
+        let configuration = AppConfiguration(
+            environment: .development,
+            baseURL: URL(string: "http://pickup.sesac.kr:42678")!,
+            seSACKey: "test-sesac-key"
+        )
+        let requestBuilder = RequestBuilder(configuration: configuration, tokenStore: tokenStore)
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: sessionConfiguration)
+        let apiClient = APIClient(
+            session: session,
+            requestBuilder: requestBuilder,
+            tokenRefreshCoordinator: TokenRefreshCoordinator(
+                session: session,
+                requestBuilder: requestBuilder,
+                tokenStore: tokenStore
+            )
+        )
+
+        final class RequestCounter {
+            private let lock = NSLock()
+            private(set) var count = 0
+
+            func increment() {
+                lock.lock()
+                count += 1
+                lock.unlock()
+            }
+        }
+
+        let counter = RequestCounter()
+        URLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "http://pickup.sesac.kr:42678/v1/stores")
+            counter.increment()
+            throw URLError(.appTransportSecurityRequiresSecureConnection)
+        }
+
+        let endpoint = Endpoint<TestResponseDTO>(
+            path: "/v1/stores",
+            method: .get,
+            authorizationPolicy: .none
+        )
+
+        do {
+            _ = try await apiClient.execute(endpoint)
+            XCTFail("Expected ATS blocked error")
+        } catch let error as NetworkError {
+            XCTAssertEqual(error, .configuration(.atsBlocked))
+            XCTAssertTrue(error.isConfigurationFailure)
+            XCTAssertFalse(error.isRetryableTransportFailure)
+        }
+
+        do {
+            _ = try await apiClient.execute(endpoint)
+            XCTFail("Expected throttled ATS blocked error")
+        } catch let error as NetworkError {
+            XCTAssertEqual(error, .configuration(.atsBlocked))
+        }
+
+        XCTAssertEqual(counter.count, 1)
+    }
 }
 
 extension NetworkInfrastructureTests {

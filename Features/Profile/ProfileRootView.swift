@@ -477,15 +477,20 @@ private struct ProfileEditorView: View {
             await presenter.send(.profileImageSelectionFailed("이미지를 불러오지 못했어요. 다른 사진을 선택해 주세요."))
             return
         }
+        let fileName = item.supportedContentTypes.first?.preferredFilenameExtension.map {
+            "profile-\(Int(Date().timeIntervalSince1970)).\($0)"
+        } ?? "profile-\(Int(Date().timeIntervalSince1970)).jpg"
 #if DEBUG
+        let metadata = ProfileImagePreprocessor.diagnosticMetadata(data: rawData, filename: fileName)
+        let contentType = itemProviderTypes.isEmpty ? metadata.contentType : itemProviderTypes
         Logger(category: "ProfileImagePicker").debug("[ProfileImagePicker] loaded originalBytes=\(rawData.count)")
-        Logger(category: "ProfileImage").debug("[ProfileImage] loadedData bytes=\(rawData.count)")
+        Logger(category: "ProfileImage").debug("[ProfileImage] selected asset contentType=\(contentType) originalBytes=\(rawData.count) pixelWidth=\(metadata.pixelWidth) pixelHeight=\(metadata.pixelHeight)")
 #endif
 
         await presenter.send(
             .profileImageDataSelected(
                 rawData,
-                fileName: item.supportedContentTypes.first?.preferredFilenameExtension.map { "profile-\(Int(Date().timeIntervalSince1970)).\($0)" } ?? "profile-\(Int(Date().timeIntervalSince1970)).jpg"
+                fileName: fileName
             )
         )
     }
