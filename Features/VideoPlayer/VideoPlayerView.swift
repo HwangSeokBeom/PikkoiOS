@@ -556,7 +556,7 @@ struct VideoPlayerView: View {
                             isSelected: viewModel.viewState.captionsEnabled
                                 && viewModel.viewState.selectedSubtitleID == nil
                         ) {
-                            viewModel.selectSystemSubtitles()
+                            Task { await viewModel.selectSystemSubtitles() }
                         }
                     }
 

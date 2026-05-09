@@ -5,6 +5,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
+@MainActor
 struct ProfileRootView: View {
     @StateObject private var presenter: ProfilePresenter
     @StateObject private var router: ProfileRouter
@@ -92,7 +93,7 @@ struct ProfileRootView: View {
                     Spacer(minLength: PikkoSpacing.sm)
 
                     Button {
-                        Task {
+                        Task { @MainActor in
                             await presenter.send(.editProfileTapped)
                         }
                     } label: {
@@ -125,7 +126,7 @@ struct ProfileRootView: View {
                         title: presenter.viewState.likedStoresActionTitle,
                         systemImage: "heart.fill"
                     ) {
-                        Task {
+                        Task { @MainActor in
                             await presenter.send(.likedStoresTapped)
                         }
                     }
@@ -155,7 +156,7 @@ struct ProfileRootView: View {
                         title: presenter.viewState.myPostsActionTitle,
                         systemImage: "square.text.square"
                     ) {
-                        Task {
+                        Task { @MainActor in
                             await presenter.send(.myPostsTapped)
                         }
                     }
@@ -164,7 +165,7 @@ struct ProfileRootView: View {
                         title: presenter.viewState.likedPostsActionTitle,
                         systemImage: "heart.text.square.fill"
                     ) {
-                        Task {
+                        Task { @MainActor in
                             await presenter.send(.likedPostsTapped)
                         }
                     }
@@ -173,7 +174,7 @@ struct ProfileRootView: View {
                         title: presenter.viewState.myReviewsActionTitle,
                         systemImage: "star.bubble"
                     ) {
-                        Task {
+                        Task { @MainActor in
                             await presenter.send(.myReviewsTapped)
                         }
                     }
@@ -237,7 +238,7 @@ struct ProfileRootView: View {
         .sheet(
             isPresented: profileEditorPresentedBinding,
             onDismiss: {
-                Task {
+                Task { @MainActor in
                     await presenter.send(.profileEditorDismissed)
                 }
             }
@@ -251,7 +252,7 @@ struct ProfileRootView: View {
         .alert("로그아웃", isPresented: $isLogoutConfirmationPresented) {
             Button("취소", role: .cancel) {}
             Button("로그아웃", role: .destructive) {
-                Task {
+                Task { @MainActor in
                     await presenter.send(.logoutTapped)
                 }
             }
@@ -282,7 +283,7 @@ struct ProfileRootView: View {
             get: { presenter.viewState.isEditingProfile },
             set: { isPresented in
                 if !isPresented {
-                    Task {
+                    Task { @MainActor in
                         await presenter.send(.profileEditorDismissed)
                     }
                 }
@@ -324,6 +325,7 @@ struct ProfileRootView: View {
     }
 }
 
+@MainActor
 private struct ProfileEditorView: View {
     @ObservedObject var presenter: ProfilePresenter
     let imageLoader: any AuthorizedImageLoading
@@ -375,7 +377,7 @@ private struct ProfileEditorView: View {
                             text: Binding(
                                 get: { presenter.viewState.editorNick },
                                 set: { value in
-                                    Task { await presenter.send(.editorNickChanged(value)) }
+                                    Task { @MainActor in await presenter.send(.editorNickChanged(value)) }
                                 }
                             ),
                             prompt: Text("닉네임").foregroundStyle(PikkoColor.secondaryText)
@@ -389,7 +391,7 @@ private struct ProfileEditorView: View {
                             text: Binding(
                                 get: { presenter.viewState.editorPhoneNumber },
                                 set: { value in
-                                    Task { await presenter.send(.editorPhoneNumberChanged(value)) }
+                                    Task { @MainActor in await presenter.send(.editorPhoneNumberChanged(value)) }
                                 }
                             ),
                             prompt: Text("전화번호 (선택)").foregroundStyle(PikkoColor.secondaryText)
@@ -416,7 +418,7 @@ private struct ProfileEditorView: View {
                         isLoading: presenter.viewState.isSavingProfile,
                         isEnabled: presenter.viewState.canSaveProfile
                     ) {
-                        Task {
+                        Task { @MainActor in
                             await presenter.send(.saveProfileTapped)
                         }
                     }
@@ -3690,6 +3692,7 @@ final class ReviewComposerPresenter: ObservableObject {
     }
 }
 
+@MainActor
 struct ReviewComposerRootView: View {
     @StateObject private var presenter: ReviewComposerPresenter
     @Environment(\.dismiss) private var dismiss
@@ -3734,7 +3737,7 @@ struct ReviewComposerRootView: View {
                     isLoading: presenter.viewState.isSaving,
                     isEnabled: presenter.viewState.canSubmit
                 ) {
-                    Task { await presenter.send(.submitTapped) }
+                    Task { @MainActor in await presenter.send(.submitTapped) }
                 }
             }
             .padding(PikkoSpacing.xl)
@@ -3746,7 +3749,7 @@ struct ReviewComposerRootView: View {
             await presenter.send(.onAppear)
         }
         .onChange(of: selectedPhotoItems) { _, items in
-            Task { await handleImageSelection(items) }
+            Task { @MainActor in await handleImageSelection(items) }
         }
         .onChange(of: presenter.viewState.successMessage) { _, message in
             guard message != nil else { return }
@@ -3758,7 +3761,7 @@ struct ReviewComposerRootView: View {
         HStack(spacing: PikkoSpacing.sm) {
             ForEach(1...5, id: \.self) { rating in
                 Button {
-                    Task { await presenter.send(.ratingChanged(rating)) }
+                    Task { @MainActor in await presenter.send(.ratingChanged(rating)) }
                 } label: {
                     Image(systemName: rating <= presenter.viewState.rating ? "star.fill" : "star")
                         .font(.system(size: 28, weight: .semibold))
@@ -3775,7 +3778,7 @@ struct ReviewComposerRootView: View {
             text: Binding(
                 get: { presenter.viewState.content },
                 set: { value in
-                    Task { await presenter.send(.contentChanged(value)) }
+                    Task { @MainActor in await presenter.send(.contentChanged(value)) }
                 }
             )
         )
@@ -3786,17 +3789,21 @@ struct ReviewComposerRootView: View {
     }
 
     private var imageSection: some View {
-        VStack(alignment: .leading, spacing: PikkoSpacing.md) {
+        let imageCount = presenter.viewState.imageCount
+        let isUploadingImages = presenter.viewState.isUploadingImages
+        let isSaving = presenter.viewState.isSaving
+
+        return VStack(alignment: .leading, spacing: PikkoSpacing.md) {
             PhotosPicker(
                 selection: $selectedPhotoItems,
-                maxSelectionCount: max(0, 5 - presenter.viewState.imageCount),
+                maxSelectionCount: max(0, 5 - imageCount),
                 matching: .images,
                 preferredItemEncoding: .automatic
             ) {
                 Label(
-                    presenter.viewState.imageCount == 0
+                    imageCount == 0
                         ? "사진 추가"
-                        : "사진 추가 \(presenter.viewState.imageCount)/5",
+                        : "사진 추가 \(imageCount)/5",
                     systemImage: "photo.on.rectangle.angled"
                 )
                     .font(PikkoTypography.captionStrong)
@@ -3807,9 +3814,9 @@ struct ReviewComposerRootView: View {
                     .clipShape(Capsule())
             }
             .disabled(
-                presenter.viewState.isUploadingImages
-                    || presenter.viewState.isSaving
-                    || presenter.viewState.imageCount >= 5
+                isUploadingImages
+                    || isSaving
+                    || imageCount >= 5
             )
 
             let imagePaths = presenter.viewState.existingImagePaths + presenter.viewState.uploadedImagePaths

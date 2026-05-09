@@ -460,7 +460,7 @@
 		22C339D3A85F20C9435EB216 /* ChatSocketIOClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSocketIOClient.swift; sourceTree = "<group>"; };
 		2473A25B6B9004BC3B18AFF5 /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationService.swift; sourceTree = "<group>"; };
 		25FE799C1454BB872AEC0EA1 /* CartFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartFeatureTests.swift; sourceTree = "<group>"; };
-		261C1D87B310B1D5C94C1F8A /* PikkoTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PikkoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		261C1D87B310B1D5C94C1F8A /* PikkoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PikkoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		266ADC969AA69104C18E0C3A /* VideoPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlayerView.swift; sourceTree = "<group>"; };
 		287C3379CBD64339190343A4 /* OrderLiveActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderLiveActivityAttributes.swift; sourceTree = "<group>"; };
 		295F62CD28BD3984914C78C8 /* CheckoutSuccessView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutSuccessView.swift; sourceTree = "<group>"; };
@@ -643,7 +643,7 @@
 		B038463024AE8B813EA72CCF /* CartRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartRepository.swift; sourceTree = "<group>"; };
 		B1BE21E78271741A7FB9CC9D /* NotificationListViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationListViewState.swift; sourceTree = "<group>"; };
 		B2F3841DC79AFABFC85A6B1E /* OrderDetailFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderDetailFeatureTests.swift; sourceTree = "<group>"; };
-		B37D20BB321ED4B8715B91D0 /* Secrets.xcconfig.sample */ = {isa = PBXFileReference; path = Secrets.xcconfig.sample; sourceTree = "<group>"; };
+		B37D20BB321ED4B8715B91D0 /* Secrets.xcconfig.sample */ = {isa = PBXFileReference; lastKnownFileType = text; path = Secrets.xcconfig.sample; sourceTree = "<group>"; };
 		B380CE2F4B4562FF77BB6552 /* HomeHeaderSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeHeaderSectionView.swift; sourceTree = "<group>"; };
 		B408C93B228A82BBAC236AC9 /* StoreDetailPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreDetailPresenter.swift; sourceTree = "<group>"; };
 		B48D81F252B37E52AD911F19 /* MapLauncherProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapLauncherProtocol.swift; sourceTree = "<group>"; };
@@ -708,7 +708,7 @@
 		D19CE6BCC2B84247F5B48778 /* VideoListPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoListPresenter.swift; sourceTree = "<group>"; };
 		D1E24970D21EFCB89993BF9B /* StoreDetailHeroSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreDetailHeroSectionView.swift; sourceTree = "<group>"; };
 		D2A4B23CE8DC4D2FC0DF9981 /* VideoRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRepository.swift; sourceTree = "<group>"; };
-		D387DD5610689CAC46E9E9FA /* Pikko.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Pikko.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D387DD5610689CAC46E9E9FA /* Pikko.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pikko.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D3E83FB729E7FF33FF3497AB /* InMemoryCartRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InMemoryCartRepository.swift; sourceTree = "<group>"; };
 		D4157D6009B8FB4A690FB5F0 /* CartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartView.swift; sourceTree = "<group>"; };
 		D415A546FEFD52FC5156CADC /* CommunityPostListResponseDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityPostListResponseDTO.swift; sourceTree = "<group>"; };
@@ -1876,7 +1876,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 2640;
 				TargetAttributes = {
 					59CD4DF11480D2E2AC5DAE07 = {
 						DevelopmentTeam = 63SB2B8YJ5;
@@ -1903,7 +1903,7 @@
 				1A02C8BF8473C6E03463E68C /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				2E31E0A02B64DB67521514E1 /* XCRemoteSwiftPackageReference "iamport-ios" */,
 				3100CC5B00733312146D47DE /* XCRemoteSwiftPackageReference "kakao-ios-sdk" */,
-				00F6549073D50C9CDBC13C0B /* XCRemoteSwiftPackageReference "socket.io-client-swift" */,
+				00F6549073D50C9CDBC13C0B /* XCRemoteSwiftPackageReference "socket" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 051CC8A4FB17C1F51C07C42E /* Products */;
@@ -1940,6 +1940,7 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
+				"$(PROJECT_DIR)/Config/GoogleService-Info.plist",
 			);
 			name = "Copy GoogleService-Info.plist";
 			outputFileListPaths = (
@@ -2400,6 +2401,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -2413,6 +2415,7 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
@@ -2457,12 +2460,15 @@
 			baseConfigurationReference = CB291405D6088201838633C9 /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_ENTITLEMENTS = Config/Pikko.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 63SB2B8YJ5;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/Pikko-Info.plist";
+				INFOPLIST_PREPROCESS = YES;
+				INFOPLIST_PREPROCESSOR_DEFINITIONS = "DEBUG=1";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2512,6 +2518,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -2532,6 +2539,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
@@ -2596,12 +2604,14 @@
 			baseConfigurationReference = 88C582E185520812DB708EEC /* Release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_ENTITLEMENTS = Config/Pikko.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 63SB2B8YJ5;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/Pikko-Info.plist";
+				INFOPLIST_PREPROCESS = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2656,7 +2666,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		00F6549073D50C9CDBC13C0B /* XCRemoteSwiftPackageReference "socket.io-client-swift" */ = {
+		00F6549073D50C9CDBC13C0B /* XCRemoteSwiftPackageReference "socket" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/socketio/socket.io-client-swift";
 			requirement = {
@@ -2701,7 +2711,7 @@
 /* Begin XCSwiftPackageProductDependency section */
 		388AE022EC709F1CBEACD1D2 /* SocketIO */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 00F6549073D50C9CDBC13C0B /* XCRemoteSwiftPackageReference "socket.io-client-swift" */;
+			package = 00F6549073D50C9CDBC13C0B /* XCRemoteSwiftPackageReference "socket" */;
 			productName = SocketIO;
 		};
 		4514A90697240D2F396126AD /* FirebaseMessaging */ = {

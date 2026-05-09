@@ -334,11 +334,11 @@ final class VideoPlayerViewModel: ObservableObject {
         if isEnabled {
             await loadSelectedSubtitleIfNeeded(reason: "captionsEnabled")
             if let item = player?.currentItem {
-                configureSystemSubtitleIfNeeded(for: item)
+                await configureSystemSubtitleIfNeeded(for: item, generation: playbackGeneration)
             }
         } else {
             cancelSubtitleLoading(reason: "captionsDisabled")
-            deselectSystemSubtitlesIfNeeded()
+            await deselectSystemSubtitlesIfNeeded()
         }
     }
 
@@ -352,7 +352,7 @@ final class VideoPlayerViewModel: ObservableObject {
         await loadSelectedSubtitleIfNeeded(reason: "subtitleSelected")
     }
 
-    func selectSystemSubtitles() {
+    func selectSystemSubtitles() async {
         viewState.selectedSubtitleID = nil
         viewState.captionsEnabled = true
         viewState.isSubtitleMenuPresented = false
@@ -361,7 +361,7 @@ final class VideoPlayerViewModel: ObservableObject {
         subtitlePreferenceStore.saveSubtitleID(nil)
         cancelSubtitleLoading(reason: "systemSubtitleSelected")
         if let item = player?.currentItem {
-            configureSystemSubtitleIfNeeded(for: item)
+            await configureSystemSubtitleIfNeeded(for: item, generation: playbackGeneration)
         }
     }
 
@@ -1178,7 +1178,7 @@ final class VideoPlayerViewModel: ObservableObject {
                     self.viewState.effectivePlaybackQuality = quality
                     self.viewState.detailReason = nil
                     self.updatePlaybackTiming(from: observedItem)
-                    self.configureSystemSubtitleIfNeeded(for: observedItem)
+                    await self.configureSystemSubtitleIfNeeded(for: observedItem, generation: generation)
                     self.logAccessLog(for: observedItem)
                     let seekTime = self.pendingSeekTime
                     let shouldResume = self.pendingResumeAfterReady
@@ -1564,9 +1564,19 @@ final class VideoPlayerViewModel: ObservableObject {
         }
     }
 
-    private func configureSystemSubtitleIfNeeded(for item: AVPlayerItem) {
-        guard let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible) else {
+    private func configureSystemSubtitleIfNeeded(for item: AVPlayerItem, generation: Int) async {
+        guard let group = try? await item.asset.loadMediaSelectionGroup(for: .legible) else {
+            guard generation == playbackGeneration,
+                  player?.currentItem === item else {
+                return
+            }
             viewState.hasSystemSubtitleTracks = false
+            return
+        }
+
+        guard generation == playbackGeneration,
+              player?.currentItem === item else {
+            logger.debug("[VideoSubtitle] stale system subtitle group ignored generation=\(generation) current=\(playbackGeneration)")
             return
         }
 
@@ -1585,9 +1595,12 @@ final class VideoPlayerViewModel: ObservableObject {
         item.select(option, in: group)
     }
 
-    private func deselectSystemSubtitlesIfNeeded() {
+    private func deselectSystemSubtitlesIfNeeded() async {
+        let generation = playbackGeneration
         guard let item = player?.currentItem,
-              let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible) else {
+              let group = try? await item.asset.loadMediaSelectionGroup(for: .legible),
+              generation == playbackGeneration,
+              player?.currentItem === item else {
             return
         }
         item.select(nil, in: group)

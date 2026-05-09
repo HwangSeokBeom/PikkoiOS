@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+@MainActor
 struct CommunityComposerView: View {
     @ObservedObject var presenter: CommunityComposerPresenter
     @State private var selectedAttachmentItems: [PhotosPickerItem] = []
@@ -133,7 +134,7 @@ struct CommunityComposerView: View {
                             isSelected: presenter.viewState.selectedCategoryID == option.id,
                             appearance: .subtle,
                             action: {
-                                Task { await presenter.send(.categoryTapped(option.id)) }
+                                Task { @MainActor in await presenter.send(.categoryTapped(option.id)) }
                             }
                         )
                     }
@@ -143,7 +144,10 @@ struct CommunityComposerView: View {
     }
 
     private var attachmentSection: some View {
-        VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+        let isUploadingAttachments = presenter.viewState.isUploadingAttachments
+        let isSubmitting = presenter.viewState.isSubmitting
+
+        return VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
             SectionHeader(
                 title: "첨부 파일",
                 subtitle: "이미지나 영상을 최대 5개까지 올릴 수 있어요"
@@ -154,7 +158,7 @@ struct CommunityComposerView: View {
                     get: { selectedAttachmentItems },
                     set: { newValue in
                         selectedAttachmentItems = newValue
-                        Task {
+                        Task { @MainActor in
                             await handleAttachmentSelection(newValue)
                         }
                     }
@@ -165,7 +169,7 @@ struct CommunityComposerView: View {
             ) {
                 HStack(spacing: PikkoSpacing.sm) {
                     Image(systemName: "paperclip.circle.fill")
-                    Text(presenter.viewState.isUploadingAttachments ? "업로드 중..." : "파일 선택")
+                    Text(isUploadingAttachments ? "업로드 중..." : "파일 선택")
                 }
                 .font(PikkoTypography.bodyStrong)
                 .foregroundStyle(PikkoColor.primaryPressed)
@@ -178,9 +182,9 @@ struct CommunityComposerView: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
             }
-            .disabled(presenter.viewState.isUploadingAttachments || presenter.viewState.isSubmitting)
+            .disabled(isUploadingAttachments || isSubmitting)
 
-            if presenter.viewState.isUploadingAttachments {
+            if isUploadingAttachments {
                 LoadingView(message: "첨부 파일 업로드 중")
             }
 
@@ -194,7 +198,7 @@ struct CommunityComposerView: View {
                         HStack(spacing: PikkoSpacing.xs) {
                             ForEach(presenter.viewState.attachmentPaths, id: \.self) { path in
                                 AttachmentToken(path: path) {
-                                    Task { await presenter.send(.attachmentRemoved(path)) }
+                                    Task { @MainActor in await presenter.send(.attachmentRemoved(path)) }
                                 }
                             }
                         }
@@ -219,7 +223,7 @@ struct CommunityComposerView: View {
                 text: Binding(
                     get: { presenter.viewState.draftTitle },
                     set: { value in
-                        Task { await presenter.send(.titleChanged(value)) }
+                        Task { @MainActor in await presenter.send(.titleChanged(value)) }
                     }
                 )
             )
@@ -253,7 +257,7 @@ struct CommunityComposerView: View {
                     text: Binding(
                         get: { presenter.viewState.draftBody },
                         set: { value in
-                            Task { await presenter.send(.bodyChanged(value)) }
+                            Task { @MainActor in await presenter.send(.bodyChanged(value)) }
                         }
                     )
                 )
@@ -306,7 +310,7 @@ struct CommunityComposerView: View {
                 isLoading: presenter.viewState.isSubmitting,
                 isEnabled: presenter.viewState.isSubmitEnabled,
                 action: {
-                    Task { await presenter.send(.submitTapped) }
+                    Task { @MainActor in await presenter.send(.submitTapped) }
                 }
             )
         }
