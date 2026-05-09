@@ -294,6 +294,38 @@ final class NetworkInfrastructureTests: XCTestCase {
         XCTAssertTrue(boundary.isEmpty == false)
     }
 
+    func testChatRemoteDataSourceBuildsMultipartFilesFieldForChatUploads() async throws {
+        let apiClient = RecordingAPIClient(
+            response: ChatFileResponseDTO(files: ["/data/chats/uploaded.pdf"])
+        )
+        let dataSource = ChatRemoteDataSource(apiClient: apiClient)
+
+        _ = try await dataSource.uploadFiles(
+            roomID: "room-1",
+            files: [
+                ChatUploadFile(
+                    data: Data("pdf-bytes".utf8),
+                    fileName: "sample.PDF",
+                    mimeType: "application/pdf",
+                    typeIdentifier: "com.adobe.pdf"
+                )
+            ]
+        )
+
+        XCTAssertEqual(apiClient.recordedPath, "/v1/chats/room-1/files")
+        XCTAssertEqual(apiClient.recordedMethod, .post)
+        XCTAssertEqual(apiClient.recordedAuthorizationPolicy, .accessToken)
+
+        guard case let .multipart(payload, boundary)? = apiClient.recordedBody else {
+            return XCTFail("Expected multipart request body")
+        }
+
+        let payloadString = String(decoding: payload, as: UTF8.self)
+        XCTAssertTrue(payloadString.contains("name=\"files\"; filename=\"sample.PDF\""))
+        XCTAssertTrue(payloadString.contains("Content-Type: application/pdf"))
+        XCTAssertFalse(boundary.isEmpty)
+    }
+
     func testProfileImageUploadBuildsMultipartProfileField() async throws {
         let apiClient = RecordingAPIClient(
             response: ProfileImageUploadResponseDTO(profileImage: "/data/profiles/uploaded.jpg")

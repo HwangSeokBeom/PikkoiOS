@@ -16,6 +16,7 @@ final class ChatPresenter: ObservableObject {
     private var serverRooms: [ChatRoom] = []
     private var localConversationSummaries: [ChatLocalConversationSummary] = []
     private var listEntries: [ChatListEntry] = []
+    private var visibleServerRoomCount = ChatRoomListPaginationPolicy.defaultPageSize
     private var messages: [ChatMessage] = []
     private var selectedRoom: ChatRoom?
     private var roomListRequestID = 0
@@ -24,6 +25,7 @@ final class ChatPresenter: ObservableObject {
     private var currentContext: ChatRoomContext?
     private var isNearBottom = true
     private var scrollCommandID = 0
+    private var searchTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
     private var lifecycle: ChatRoomLifecycleState = .idle
 
@@ -54,6 +56,7 @@ final class ChatPresenter: ObservableObject {
     }
 
     deinit {
+        searchTask?.cancel()
         guard hasLoaded else { return }
         Logger.shared.debugVerbose("[ChatViewModel] deinit")
     }
@@ -121,12 +124,28 @@ final class ChatPresenter: ObservableObject {
             popChatRoom(reason: "backButton")
         case .messageTextChanged(let text):
             viewState.messageText = text
+        case .searchTapped:
+            activateSearch()
+        case .searchDismissed:
+            deactivateSearch()
+        case .searchQueryChanged(let query):
+            updateSearchQuery(query)
+        case .nextSearchResultTapped:
+            selectSearchResult(offset: 1)
+        case .previousSearchResultTapped:
+            selectSearchResult(offset: -1)
+        case .searchResultTapped(let id):
+            selectSearchResult(id: id)
         case .filesSelected(let files):
             await upload(files)
+        case .fileSelectionFailed(let message):
+            viewState.errorMessage = message
         case .attachedFileRemoved(let path):
             viewState.attachedFilePaths.removeAll { $0 == path }
         case .sendMessageTapped:
             await sendMessage()
+        case .roomListReachedEnd:
+            loadNextRoomPageIfNeeded()
         case .nearBottomChanged(let nearBottom, let distance):
             guard isNearBottom != nearBottom else { return }
             isNearBottom = nearBottom
@@ -143,8 +162,17 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func loadRooms(isRefresh: Bool) async {
+        if isRefresh {
+            guard !viewState.isRefreshing else { return }
+        } else {
+            guard !viewState.isInitialLoading, !hasLoaded || serverRooms.isEmpty else { return }
+        }
         roomListRequestID += 1
         let requestID = roomListRequestID
+        visibleServerRoomCount = ChatRoomListPaginationPolicy.defaultPageSize
+#if DEBUG
+        Logger(category: "ChatRoomList").debug("[ChatRoomList] initialLoad limit=\(ChatRoomListPaginationPolicy.defaultPageSize) serverPagination=unsupported")
+#endif
         setLoading(isRefresh: isRefresh)
         defer {
             if requestID == roomListRequestID {
@@ -156,7 +184,12 @@ final class ChatPresenter: ObservableObject {
             let loadedRooms = try await interactor.loadInitialRoomList()
             let loadedLocalConversationSummaries = try await interactor.loadLocalConversationSummaries()
             guard requestID == roomListRequestID else { return }
+            let beforeCount = serverRooms.count
             serverRooms = deduplicatedRooms(loadedRooms)
+#if DEBUG
+            let dedupedCount = max(0, loadedRooms.count - serverRooms.count)
+            Logger(category: "ChatRoomList").debug("[ChatRoomList] merge before=\(beforeCount) incoming=\(loadedRooms.count) after=\(serverRooms.count) deduped=\(dedupedCount)")
+#endif
             localConversationSummaries = loadedLocalConversationSummaries
             applyRooms()
             viewState.errorMessage = nil
@@ -600,18 +633,28 @@ final class ChatPresenter: ObservableObject {
         defer { viewState.isUploadingFiles = false }
 
         do {
+            try ChatUploadValidator.validateFileCount(
+                existingCount: viewState.attachedFilePaths.count,
+                incomingCount: files.count
+            )
+#if DEBUG
+            Logger(category: "ChatUpload").debug("[ChatUpload] validate start fileCount=\(files.count) attachedCount=\(viewState.attachedFilePaths.count)")
+#endif
             let uploadedPaths = try await interactor.uploadFiles(roomID: roomID, files: files)
             guard lifecycle == .active(roomID: roomID) else {
                 logStaleUpdateIgnored(source: "upload", roomID: roomID)
                 return
             }
             viewState.attachedFilePaths.append(contentsOf: uploadedPaths)
+#if DEBUG
+            Logger(category: "ChatUpload").debug("[ChatUpload] success fileCount=\(uploadedPaths.count)")
+#endif
         } catch {
             guard lifecycle == .active(roomID: roomID) else {
                 logStaleUpdateIgnored(source: "upload", roomID: roomID)
                 return
             }
-            viewState.errorMessage = transientErrorMessage(from: error)
+            viewState.errorMessage = uploadErrorMessage(from: error)
         }
     }
 
@@ -640,13 +683,17 @@ final class ChatPresenter: ObservableObject {
         viewState.mode = .roomList
         viewState.title = "채팅"
         serverRooms = deduplicatedRooms(serverRooms)
+        let visibleServerRooms = Array(serverRooms.prefix(visibleServerRoomCount))
         listEntries = makeListEntries(
             localConversationSummaries: localConversationSummaries,
-            serverRooms: serverRooms
+            serverRooms: visibleServerRooms
         )
         viewState.rooms = listEntries.map(makeRoomRow)
+        viewState.hasMoreRooms = serverRooms.count > visibleServerRoomCount
+        viewState.nextRoomPage = viewState.hasMoreRooms ? visibleServerRoomCount / ChatRoomListPaginationPolicy.defaultPageSize + 1 : nil
         viewState.messages = []
         viewState.selectedRoomID = nil
+        resetSearchState()
         currentContext = nil
         isNearBottom = true
         activeChatRoomTracker.activeRoomId = nil
@@ -673,6 +720,7 @@ final class ChatPresenter: ObservableObject {
 #endif
         viewState.rooms = []
         viewState.messages = makeMessageRows(messages)
+        refreshSearchResultsForCurrentMessages()
         viewState.emptyTitle = viewState.messages.isEmpty ? "아직 대화가 없어요" : nil
         viewState.emptyMessage = viewState.messages.isEmpty ? "첫 메시지를 보내보세요." : nil
         viewState.primaryActionTitle = nil
@@ -699,12 +747,15 @@ final class ChatPresenter: ObservableObject {
             viewState.isRefreshing = true
         } else {
             viewState.isLoading = true
+            viewState.isInitialLoading = viewState.mode == .roomList
         }
     }
 
     private func clearLoading() {
         viewState.isLoading = false
+        viewState.isInitialLoading = false
         viewState.isRefreshing = false
+        viewState.isLoadingNextPage = false
     }
 
     private func makeRoomRow(_ entry: ChatListEntry) -> ChatRoomRowViewState {
@@ -748,6 +799,7 @@ final class ChatPresenter: ObservableObject {
             id: message.renderID,
             dateText: dateText,
             content: message.content,
+            searchMatchRanges: searchMatchRanges(for: message),
             filePaths: message.filePaths,
             timeText: message.createdAt.map { timeFormatter.string(from: $0) } ?? "",
             senderName: message.sender.nick,
@@ -758,6 +810,153 @@ final class ChatPresenter: ObservableObject {
 
     private func roomTitle(_ room: ChatRoom) -> String {
         interactor.makeContext(for: room, entryPoint: .chatList).displayTitle
+    }
+
+    private func activateSearch() {
+        guard viewState.mode == .roomDetail else { return }
+        viewState.isSearchActive = true
+        viewState.searchScope = .loadedMessagesOnly
+        viewState.searchMayHaveOlderUnloadedMessages = true
+        refreshSearchResultsForCurrentMessages()
+#if DEBUG
+        Logger(category: "ChatSearch").debug("[ChatSearch] active=true loadedMessages=\(messages.count)")
+#endif
+    }
+
+    private func deactivateSearch() {
+        searchTask?.cancel()
+        searchTask = nil
+        resetSearchState()
+        applyMessages()
+#if DEBUG
+        Logger(category: "ChatSearch").debug("[ChatSearch] active=false")
+#endif
+    }
+
+    private func updateSearchQuery(_ query: String) {
+        guard viewState.isSearchActive else { return }
+        viewState.searchQuery = query
+        viewState.isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        searchTask?.cancel()
+
+        let snapshot = messages
+        let roomID = viewState.selectedRoomID
+        searchTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 300_000_000)
+                let results = await Task.detached(priority: .userInitiated) {
+                    ChatSearchEngine.search(messages: snapshot, query: query)
+                }.value
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self,
+                          self.viewState.selectedRoomID == roomID,
+                          self.viewState.searchQuery == query else {
+                        return
+                    }
+                    self.applySearchResults(results)
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self,
+                          self.viewState.selectedRoomID == roomID,
+                          self.viewState.searchQuery == query else {
+                        return
+                    }
+                    self.viewState.isSearching = false
+                }
+            }
+        }
+#if DEBUG
+        Logger(category: "ChatSearch").debug("[ChatSearch] queryChanged length=\(query.count) debounceMs=300")
+#endif
+    }
+
+    private func refreshSearchResultsForCurrentMessages() {
+        guard viewState.isSearchActive else { return }
+        let results = ChatSearchEngine.search(messages: messages, query: viewState.searchQuery)
+        applySearchResults(results)
+    }
+
+    private func applySearchResults(_ results: [ChatSearchResult]) {
+        let previousID = viewState.selectedSearchResult?.id
+        viewState.searchResults = results.map {
+            ChatSearchResultViewState(
+                id: $0.id,
+                messageID: $0.messageID,
+                preview: $0.preview,
+                matchRanges: $0.matchRanges,
+                createdAt: $0.createdAt,
+                messageIndex: $0.messageIndex
+            )
+        }
+        if let previousID,
+           let preservedIndex = viewState.searchResults.firstIndex(where: { $0.id == previousID }) {
+            viewState.selectedSearchResultIndex = preservedIndex
+        } else {
+            viewState.selectedSearchResultIndex = viewState.searchResults.isEmpty ? nil : 0
+        }
+        viewState.isSearching = false
+#if DEBUG
+        Logger(category: "ChatSearch").debug("[ChatSearch] completed resultCount=\(results.count) loadedMessages=\(messages.count)")
+#endif
+    }
+
+    private func selectSearchResult(offset: Int) {
+        guard !viewState.searchResults.isEmpty else { return }
+        let current = viewState.selectedSearchResultIndex ?? 0
+        let next = (current + offset + viewState.searchResults.count) % viewState.searchResults.count
+        viewState.selectedSearchResultIndex = next
+        enqueueScroll(target: .message(id: viewState.searchResults[next].messageID), reason: "search", animated: true)
+    }
+
+    private func selectSearchResult(id: String) {
+        guard let index = viewState.searchResults.firstIndex(where: { $0.id == id }) else { return }
+        viewState.selectedSearchResultIndex = index
+        enqueueScroll(target: .message(id: viewState.searchResults[index].messageID), reason: "searchResult", animated: true)
+    }
+
+    private func searchMatchRanges(for message: ChatMessage) -> [NSRange] {
+        guard viewState.isSearchActive,
+              !viewState.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        if let result = viewState.searchResults.first(where: { $0.messageID == message.renderID }) {
+            return result.matchRanges
+        }
+        return ChatSearchEngine.matchRanges(in: message.content, query: viewState.searchQuery)
+    }
+
+    private func resetSearchState() {
+        searchTask?.cancel()
+        searchTask = nil
+        viewState.isSearchActive = false
+        viewState.searchQuery = ""
+        viewState.searchResults = []
+        viewState.selectedSearchResultIndex = nil
+        viewState.isSearching = false
+        viewState.searchScope = .loadedMessagesOnly
+        viewState.searchMayHaveOlderUnloadedMessages = true
+    }
+
+    private func loadNextRoomPageIfNeeded() {
+        guard viewState.mode == .roomList,
+              viewState.hasMoreRooms,
+              !viewState.isLoadingNextPage,
+              !viewState.isInitialLoading,
+              !viewState.isRefreshing else {
+            return
+        }
+        viewState.isLoadingNextPage = true
+        let before = visibleServerRoomCount
+        let limit = ChatRoomListPaginationPolicy.clampedPageSize()
+        visibleServerRoomCount = min(serverRooms.count, visibleServerRoomCount + limit)
+#if DEBUG
+        Logger(category: "ChatRoomList").debug("[ChatRoomList] loadNextPage limit=\(limit) cursor/page=local:\(before)")
+        Logger(category: "ChatRoomList").debug("[ChatRoomList] merge before=\(before) incoming=\(visibleServerRoomCount - before) after=\(visibleServerRoomCount) deduped=0")
+#endif
+        applyRooms()
+        viewState.isLoadingNextPage = false
     }
 
     private func displayParticipant(for room: ChatRoom) -> ChatParticipant? {
@@ -921,7 +1120,10 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func cancelRoomTasks(reason: String) {
-        Logger.shared.debug("[ChatViewModel] cancelled room tasks count=0 reason=\(reason)")
+        let hadSearchTask = searchTask != nil
+        searchTask?.cancel()
+        searchTask = nil
+        Logger.shared.debug("[ChatViewModel] cancelled room tasks count=\(hadSearchTask ? 1 : 0) reason=\(reason)")
     }
 
     private func normalizedRouteRoomID(from rowID: String) -> String {
@@ -1025,6 +1227,15 @@ final class ChatPresenter: ObservableObject {
         case .authenticationRequired, .unavailable:
             return nil
         }
+    }
+
+    private func uploadErrorMessage(from error: Error) -> String? {
+        if let localizedError = error as? LocalizedError,
+           let message = localizedError.errorDescription,
+           !message.isEmpty {
+            return message
+        }
+        return transientErrorMessage(from: error) ?? "파일 업로드에 실패했어요. 다시 시도해 주세요."
     }
 }
 

@@ -121,7 +121,9 @@
 
 - 프로필 탭의 `채팅` 진입점: `GET /v1/chats` 목록 조회.
 - 프로필 탭의 `유저 검색` 진입점: `GET /v1/users/search?nick=` 후 결과 선택 시 `POST /v1/chats`.
-- 채팅 상세 첨부 버튼: 이미지 선택 후 `POST /v1/chats/{room_id}/files`, 반환 file path를 `POST /v1/chats/{room_id}` body의 `files`에 포함.
+- 채팅 상세 첨부 버튼: 이미지/PDF 선택 후 multipart `files` field로 `POST /v1/chats/{room_id}/files`에 업로드하고, 반환 file path를 `POST /v1/chats/{room_id}` body의 `files`에 포함. 클라이언트는 jpg/jpeg/png/gif/pdf, 5개, 파일당 5MB 정책을 먼저 검증한다.
+- 채팅방 목록: 현재 Swagger의 `GET /v1/chats`에는 `next`/`limit` query가 없다. iOS는 `defaultPageSize=20`, `maxPageSize=50` 상수를 두고 로컬 표시 페이지와 중복 병합을 적용하지만, 서버가 목록 pagination query를 제공하기 전까지 네트워크 요청 자체를 cursor 기반으로 제한할 수 없다.
+- 채팅 검색: 서버 검색 endpoint가 없으므로 현재 열린 방의 로컬/불러온 메시지만 검색한다. UI copy는 이전 대화가 아직 불러와지지 않았을 수 있음을 표시한다.
 - TODO(Server): 현재 `POST /v1/chats` request body는 `opponent_id`만 지원한다. 같은 점주가 여러 가게를 보유한 경우 store별 채팅방을 분리할 수 없으므로, store별 문의 UX가 필요하면 `store_id` 또는 동등한 store context를 room 생성/조회 계약에 추가해야 한다. 클라이언트는 이 API가 추가되기 전까지 같은 `room_id`를 서로 다른 가게 채팅방처럼 표시하지 않는다.
 - DEBUG 전용 개발자 진단: `/common`, `/v1/log`, Push, Video 목록/스트림/좋아요, Admin Store/Menu 업로드·등록·수정 호출.
 

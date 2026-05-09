@@ -1,5 +1,6 @@
 import CoreData
 import Foundation
+import UniformTypeIdentifiers
 
 struct ChatParticipant: Equatable, Sendable, Identifiable {
     let id: String
@@ -437,6 +438,176 @@ struct ChatUploadFile: Equatable, Sendable {
     let data: Data
     let fileName: String
     let mimeType: String
+    let typeIdentifier: String?
+
+    init(data: Data, fileName: String, mimeType: String, typeIdentifier: String? = nil) {
+        self.data = data
+        self.fileName = fileName
+        self.mimeType = mimeType
+        self.typeIdentifier = typeIdentifier
+    }
+
+    func normalized(mimeType: String) -> ChatUploadFile {
+        ChatUploadFile(data: data, fileName: fileName, mimeType: mimeType, typeIdentifier: typeIdentifier)
+    }
+}
+
+enum ChatUploadPolicy {
+    static let maxFileCount = 5
+    static let maxFileSizeBytes = 5 * 1024 * 1024
+
+    static let allowedExtensions: Set<String> = ["jpg", "jpeg", "png", "gif", "pdf"]
+    static let allowedMimeTypes: Set<String> = [
+        "image/jpeg",
+        "image/jpg",
+        "image/png",
+        "image/gif",
+        "application/pdf"
+    ]
+}
+
+enum ChatRoomListPaginationPolicy {
+    static let defaultPageSize = 20
+    static let maxPageSize = 50
+
+    static func clampedPageSize(_ value: Int = defaultPageSize) -> Int {
+        min(max(value, 1), maxPageSize)
+    }
+}
+
+enum ChatUploadValidationError: Error, Equatable {
+    case tooManyFiles
+    case fileTooLarge(fileName: String)
+    case unsupportedType(fileName: String)
+    case imageStillTooLarge(fileName: String)
+}
+
+extension ChatUploadValidationError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .tooManyFiles:
+            return "최대 5개까지 업로드할 수 있어요."
+        case .fileTooLarge:
+            return "파일은 5MB 이하만 업로드할 수 있어요."
+        case .unsupportedType:
+            return "지원하지 않는 파일 형식이에요. jpg, jpeg, png, gif, pdf만 가능해요."
+        case .imageStillTooLarge:
+            return "이미지 용량을 줄였지만 5MB를 초과해요."
+        }
+    }
+}
+
+enum ChatUploadValidator {
+    static func validateFileCount(existingCount: Int = 0, incomingCount: Int) throws {
+        guard incomingCount > 0 else { return }
+        guard existingCount + incomingCount <= ChatUploadPolicy.maxFileCount else {
+            throw ChatUploadValidationError.tooManyFiles
+        }
+    }
+
+    static func prepareForUpload(_ files: [ChatUploadFile]) async throws -> [ChatUploadFile] {
+        try validateFileCount(incomingCount: files.count)
+        return try await Task.detached(priority: .userInitiated) {
+            try files.map(prepareFile)
+        }.value
+    }
+
+    static func prepareFile(_ file: ChatUploadFile) throws -> ChatUploadFile {
+        let descriptor = ChatUploadTypeDescriptor(file: file)
+        guard descriptor.isSupported else {
+            throw ChatUploadValidationError.unsupportedType(fileName: file.fileName)
+        }
+
+        guard file.data.count > ChatUploadPolicy.maxFileSizeBytes else {
+            return file.normalized(mimeType: descriptor.normalizedMimeType)
+        }
+
+        if descriptor.isCompressibleImage {
+            do {
+                let processed = try ImageUploadPreprocessor().process(
+                    ImageUploadPreprocessInput(
+                        data: file.data,
+                        filename: file.fileName,
+                        mimeType: descriptor.normalizedMimeType,
+                        purpose: .chat,
+                        targetLimitBytes: ChatUploadPolicy.maxFileSizeBytes
+                    )
+                )
+                guard processed.data.count <= ChatUploadPolicy.maxFileSizeBytes else {
+                    throw ChatUploadValidationError.imageStillTooLarge(fileName: file.fileName)
+                }
+                return ChatUploadFile(
+                    data: processed.data,
+                    fileName: processed.filename,
+                    mimeType: processed.mimeType,
+                    typeIdentifier: descriptor.typeIdentifier
+                )
+            } catch ImageUploadPreprocessorError.overLimitAfterCompression {
+                throw ChatUploadValidationError.imageStillTooLarge(fileName: file.fileName)
+            } catch {
+                throw ChatUploadValidationError.fileTooLarge(fileName: file.fileName)
+            }
+        }
+
+        throw ChatUploadValidationError.fileTooLarge(fileName: file.fileName)
+    }
+}
+
+struct ChatUploadTypeDescriptor: Equatable {
+    let normalizedExtension: String
+    let normalizedMimeType: String
+    let typeIdentifier: String?
+
+    init(file: ChatUploadFile) {
+        self.normalizedExtension = (file.fileName as NSString).pathExtension.lowercased()
+        self.normalizedMimeType = file.mimeType.lowercased()
+        self.typeIdentifier = file.typeIdentifier
+    }
+
+    var isSupported: Bool {
+        extensionIsSupported && (mimeTypeIsSupported || utiIsSupported || typeIdentifier == nil)
+    }
+
+    var isCompressibleImage: Bool {
+        normalizedExtension == "jpg"
+            || normalizedExtension == "jpeg"
+            || normalizedExtension == "png"
+            || normalizedMimeType == "image/jpeg"
+            || normalizedMimeType == "image/jpg"
+            || normalizedMimeType == "image/png"
+            || conforms(to: .jpeg)
+            || conforms(to: .png)
+    }
+
+    private var extensionIsSupported: Bool {
+        guard !normalizedExtension.isEmpty else {
+            return mimeTypeIsSupported || utiIsSupported
+        }
+        return ChatUploadPolicy.allowedExtensions.contains(normalizedExtension)
+    }
+
+    private var mimeTypeIsSupported: Bool {
+        ChatUploadPolicy.allowedMimeTypes.contains(normalizedMimeType)
+    }
+
+    private var utiIsSupported: Bool {
+        guard let typeIdentifier,
+              let type = UTType(typeIdentifier) else {
+            return false
+        }
+        return type.conforms(to: .jpeg)
+            || type.conforms(to: .png)
+            || type.conforms(to: .gif)
+            || type.conforms(to: .pdf)
+    }
+
+    private func conforms(to parent: UTType) -> Bool {
+        guard let typeIdentifier,
+              let type = UTType(typeIdentifier) else {
+            return false
+        }
+        return type.conforms(to: parent)
+    }
 }
 
 struct ChatRoom: Equatable, Sendable, Identifiable {
@@ -2186,9 +2357,15 @@ struct ChatInteractor: ChatInteracting {
         guard !files.isEmpty else { return [] }
 
         do {
-            return try await chatRepository.uploadFiles(roomID: roomID, files: files)
+            let preparedFiles = try await ChatUploadValidator.prepareForUpload(files)
+#if DEBUG
+            Logger(category: "ChatUpload").debug("[ChatUpload] prepared fileCount=\(preparedFiles.count) totalBytes=\(preparedFiles.reduce(0) { $0 + $1.data.count })")
+#endif
+            return try await chatRepository.uploadFiles(roomID: roomID, files: preparedFiles)
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as ChatUploadValidationError {
+            throw error
         } catch {
             throw map(error)
         }

@@ -66,6 +66,20 @@ struct ChatRootView: View {
                     }
                 }
             }
+            if presenter.viewState.mode == .roomDetail {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task {
+                            await presenter.send(
+                                presenter.viewState.isSearchActive ? .searchDismissed : .searchTapped
+                            )
+                        }
+                    } label: {
+                        Image(systemName: presenter.viewState.isSearchActive ? "xmark" : "magnifyingglass")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                }
+            }
         }
         .task {
             await presenter.send(.onAppear(instanceID: chatViewInstanceID, presentationKind: presentationKind))
@@ -126,6 +140,11 @@ struct ChatRootView: View {
                             ChatRoomRow(room: room, imageLoader: imageLoader)
                         }
                         .buttonStyle(.plain)
+                        .onAppear {
+                            if generalRooms.isEmpty, room.id == storeInquiryRooms.last?.id {
+                                Task { await presenter.send(.roomListReachedEnd) }
+                            }
+                        }
                     }
                 }
 
@@ -139,7 +158,18 @@ struct ChatRootView: View {
                             ChatRoomRow(room: room, imageLoader: imageLoader)
                         }
                         .buttonStyle(.plain)
+                        .onAppear {
+                            if room.id == generalRooms.last?.id {
+                                Task { await presenter.send(.roomListReachedEnd) }
+                            }
+                        }
                     }
+                }
+
+                if presenter.viewState.isLoadingNextPage {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, PikkoSpacing.md)
                 }
             }
             .padding(.horizontal, PikkoSpacing.xl)
@@ -182,6 +212,11 @@ struct ChatRootView: View {
                     if let errorMessage = presenter.viewState.errorMessage {
                         ToastView(message: errorMessage, tone: .warning)
                             .padding(.bottom, PikkoSpacing.sm)
+                    }
+
+                    if presenter.viewState.isSearchActive {
+                        searchPanel
+                            .padding(.bottom, PikkoSpacing.xs)
                     }
 
                     if presenter.viewState.isLoading && presenter.viewState.messages.isEmpty {
@@ -300,6 +335,49 @@ struct ChatRootView: View {
             .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
         }
         .buttonStyle(.plain)
+    }
+
+    private var searchPanel: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+            HStack(spacing: PikkoSpacing.sm) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(PikkoColor.secondaryText)
+
+                TextField("메시지 검색", text: searchTextBinding)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(PikkoTypography.body)
+                    .foregroundStyle(PikkoColor.primaryText)
+
+                Button {
+                    Task { await presenter.send(.previousSearchResultTapped) }
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .frame(width: 28, height: 28)
+                }
+                .disabled(!presenter.viewState.canNavigateSearchResults)
+
+                Button {
+                    Task { await presenter.send(.nextSearchResultTapped) }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .frame(width: 28, height: 28)
+                }
+                .disabled(!presenter.viewState.canNavigateSearchResults)
+            }
+
+            Text(presenter.viewState.searchStatusText)
+                .font(PikkoTypography.caption)
+                .foregroundStyle(PikkoColor.secondaryText)
+                .lineLimit(2)
+        }
+        .padding(PikkoSpacing.md)
+        .background(PikkoColor.surfaceElevated)
+        .overlay {
+            RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                .stroke(PikkoColor.divider.opacity(0.55), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
     }
 
     private func messageComposer(containerWidth: CGFloat) -> some View {
@@ -456,23 +534,36 @@ struct ChatRootView: View {
         )
     }
 
+    private var searchTextBinding: Binding<String> {
+        Binding(
+            get: { presenter.viewState.searchQuery },
+            set: { value in
+                Task { await presenter.send(.searchQueryChanged(value)) }
+            }
+        )
+    }
+
     private func handleImageSelection(_ items: [PhotosPickerItem]) async {
         guard !items.isEmpty else { return }
 
         var files: [ChatUploadFile] = []
         for (index, item) in items.enumerated() {
             guard let rawData = try? await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: rawData),
-                  let jpegData = image.jpegData(compressionQuality: 0.88),
-                  !jpegData.isEmpty else {
-                continue
+                  !rawData.isEmpty else {
+                selectedPhotoItems = []
+                await presenter.send(.fileSelectionFailed("파일 업로드에 실패했어요. 다시 시도해 주세요."))
+                return
             }
+            let preferredType = preferredUploadType(from: item.supportedContentTypes)
+            let ext = preferredType.preferredFilenameExtension ?? "jpg"
+            let mimeType = preferredType.preferredMIMEType ?? "image/jpeg"
 
             files.append(
                 ChatUploadFile(
-                    data: jpegData,
-                    fileName: "chat-\(Int(Date().timeIntervalSince1970))-\(index).jpg",
-                    mimeType: "image/jpeg"
+                    data: rawData,
+                    fileName: "chat-\(Int(Date().timeIntervalSince1970))-\(index).\(ext.lowercased())",
+                    mimeType: mimeType,
+                    typeIdentifier: preferredType.identifier
                 )
             )
         }
@@ -483,7 +574,8 @@ struct ChatRootView: View {
 
     private func handleFileImport(_ result: Result<[URL], Error>) async {
         guard case .success(let urls) = result, !urls.isEmpty else { return }
-        let files = urls.prefix(5).compactMap { url -> ChatUploadFile? in
+        var files: [ChatUploadFile] = []
+        for url in urls {
             let hasAccess = url.startAccessingSecurityScopedResource()
             defer {
                 if hasAccess {
@@ -492,15 +584,27 @@ struct ChatRootView: View {
             }
 
             guard let data = try? Data(contentsOf: url), !data.isEmpty else {
-                return nil
+                await presenter.send(.fileSelectionFailed("파일 업로드에 실패했어요. 다시 시도해 주세요."))
+                return
             }
-            return ChatUploadFile(
-                data: data,
-                fileName: url.lastPathComponent,
-                mimeType: "application/pdf"
+            let type = UTType(filenameExtension: url.pathExtension) ?? .pdf
+            files.append(
+                ChatUploadFile(
+                    data: data,
+                    fileName: url.lastPathComponent,
+                    mimeType: type.preferredMIMEType ?? "application/pdf",
+                    typeIdentifier: type.identifier
+                )
             )
         }
         await presenter.send(.filesSelected(files))
+    }
+
+    private func preferredUploadType(from types: [UTType]) -> UTType {
+        if let gif = types.first(where: { $0.conforms(to: .gif) }) { return gif }
+        if let png = types.first(where: { $0.conforms(to: .png) }) { return png }
+        if let jpeg = types.first(where: { $0.conforms(to: .jpeg) }) { return jpeg }
+        return types.first(where: { $0.conforms(to: .image) }) ?? .jpeg
     }
 
     private func executeScrollCommand(_ command: ChatScrollCommand, proxy: ScrollViewProxy) {
@@ -752,7 +856,7 @@ private struct ChatMessageBubble: View {
     private var bubble: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
             if !message.content.isEmpty {
-                Text(message.content)
+                Text(highlightedContent)
                     .font(PikkoTypography.body)
                     .foregroundStyle(message.isMine ? .white : PikkoColor.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -819,6 +923,21 @@ private struct ChatMessageBubble: View {
 
     private var bubbleColor: Color {
         message.sendStatus == .failed ? PikkoColor.error.opacity(0.78) : PikkoColor.primary
+    }
+
+    private var highlightedContent: AttributedString {
+        var attributed = AttributedString(message.content)
+        for nsRange in message.searchMatchRanges {
+            guard let range = Range(nsRange, in: message.content),
+                  let lower = AttributedString.Index(range.lowerBound, within: attributed),
+                  let upper = AttributedString.Index(range.upperBound, within: attributed) else {
+                continue
+            }
+            let attributedRange = lower..<upper
+            attributed[attributedRange].backgroundColor = message.isMine ? .white.opacity(0.28) : .yellow.opacity(0.45)
+            attributed[attributedRange].foregroundColor = message.isMine ? .white : PikkoColor.primaryText
+        }
+        return attributed
     }
 
     private func isImagePath(_ path: String) -> Bool {

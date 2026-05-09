@@ -237,6 +237,68 @@ final class ChatHardeningTests: XCTestCase {
         XCTAssertTrue(didBackfill)
     }
 
+    func testChatSearchFindsKoreanAndEnglishCaseInsensitively() {
+        let messages = [
+            makeMessage(id: "server-1", serverChatID: "server-1", content: "안녕하세요 픽코입니다", createdAt: date(1)),
+            makeMessage(id: "server-2", serverChatID: "server-2", content: "Hello Pikko", createdAt: date(2))
+        ]
+
+        XCTAssertEqual(ChatSearchEngine.search(messages: messages, query: "픽코").map(\.messageID), ["server-1"])
+        XCTAssertEqual(ChatSearchEngine.search(messages: messages, query: "pikko").map(\.messageID), ["server-2"])
+    }
+
+    func testChatSearchResultUsesClientIDForOptimisticMessageStability() {
+        let optimistic = makeMessage(
+            id: "local-1",
+            localTemporaryID: "local-1",
+            clientMessageID: "client-1",
+            serverChatID: nil,
+            content: "upload receipt",
+            status: .sending
+        )
+
+        let result = ChatSearchEngine.search(messages: [optimistic], query: "receipt")
+
+        XCTAssertEqual(result.first?.id, "client:client-1")
+        XCTAssertEqual(result.first?.messageID, "local-1")
+    }
+
+    func testChatUploadValidatorAcceptsUppercaseSupportedExtensions() throws {
+        let files = [
+            ChatUploadFile(data: Data("jpg".utf8), fileName: "a.JPG", mimeType: "image/jpeg", typeIdentifier: "public.jpeg"),
+            ChatUploadFile(data: Data("pdf".utf8), fileName: "b.PDF", mimeType: "application/pdf", typeIdentifier: "com.adobe.pdf")
+        ]
+
+        XCTAssertNoThrow(try files.forEach { _ = try ChatUploadValidator.prepareFile($0) })
+    }
+
+    func testChatUploadValidatorRejectsUnsupportedExtension() {
+        let file = ChatUploadFile(data: Data("zip".utf8), fileName: "a.zip", mimeType: "application/zip")
+
+        XCTAssertThrowsError(try ChatUploadValidator.prepareFile(file)) { error in
+            XCTAssertEqual(error as? ChatUploadValidationError, .unsupportedType(fileName: "a.zip"))
+        }
+    }
+
+    func testChatUploadValidatorRejectsMoreThanFiveFiles() {
+        XCTAssertThrowsError(try ChatUploadValidator.validateFileCount(incomingCount: 6)) { error in
+            XCTAssertEqual(error as? ChatUploadValidationError, .tooManyFiles)
+        }
+    }
+
+    func testChatUploadValidatorRejectsLargePDFWithoutCompression() {
+        let file = ChatUploadFile(
+            data: Data(repeating: 0x20, count: ChatUploadPolicy.maxFileSizeBytes + 1),
+            fileName: "large.PDF",
+            mimeType: "application/pdf",
+            typeIdentifier: "com.adobe.pdf"
+        )
+
+        XCTAssertThrowsError(try ChatUploadValidator.prepareFile(file)) { error in
+            XCTAssertEqual(error as? ChatUploadValidationError, .fileTooLarge(fileName: "large.PDF"))
+        }
+    }
+
     private func makeMessage(
         id: String = "server-1",
         localTemporaryID: String? = nil,
