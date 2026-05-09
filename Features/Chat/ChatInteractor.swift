@@ -8,14 +8,40 @@ struct ChatParticipant: Equatable, Sendable, Identifiable {
 }
 
 enum ChatSendStatus: String, Codable, Equatable, Sendable {
+    case queued
     case sending
+    case retrying
     case sent
     case failed
+    case failedAuth
+    case recoveryNeeded
+    case recovered
+
+    var isPendingDelivery: Bool {
+        switch self {
+        case .queued, .sending, .retrying, .failed, .failedAuth, .recoveryNeeded:
+            return true
+        case .sent, .recovered:
+            return false
+        }
+    }
+
+    static var pendingRawValues: [String] {
+        [
+            queued.rawValue,
+            sending.rawValue,
+            retrying.rawValue,
+            failed.rawValue,
+            failedAuth.rawValue,
+            recoveryNeeded.rawValue
+        ]
+    }
 }
 
 struct ChatMessage: Equatable, Sendable, Identifiable {
     let id: String
     let localTemporaryID: String?
+    let clientMessageID: String?
     let serverChatID: String?
     let roomID: String
     let content: String
@@ -28,6 +54,7 @@ struct ChatMessage: Equatable, Sendable, Identifiable {
     init(
         id: String,
         localTemporaryID: String? = nil,
+        clientMessageID: String? = nil,
         serverChatID: String? = nil,
         roomID: String,
         content: String,
@@ -39,6 +66,7 @@ struct ChatMessage: Equatable, Sendable, Identifiable {
     ) {
         self.id = id
         self.localTemporaryID = localTemporaryID
+        self.clientMessageID = clientMessageID
         self.serverChatID = serverChatID
         self.roomID = roomID
         self.content = content
@@ -64,12 +92,14 @@ struct ChatMessage: Equatable, Sendable, Identifiable {
     func replacingIdentity(
         id: String? = nil,
         localTemporaryID: String? = nil,
+        clientMessageID: String? = nil,
         serverChatID: String? = nil,
         sendStatus: ChatSendStatus? = nil
     ) -> ChatMessage {
         ChatMessage(
             id: id ?? self.id,
             localTemporaryID: localTemporaryID ?? self.localTemporaryID,
+            clientMessageID: clientMessageID ?? self.clientMessageID,
             serverChatID: serverChatID ?? self.serverChatID,
             roomID: roomID,
             content: content,
@@ -82,6 +112,107 @@ struct ChatMessage: Equatable, Sendable, Identifiable {
     }
 }
 
+struct ChatMessageIdentity: Equatable, Hashable, Sendable {
+    let rawValue: String
+    let strategy: String
+}
+
+enum ChatMessageIdentityResolver {
+    static func identity(for message: ChatMessage, roomScopeKey: String?) -> ChatMessageIdentity {
+        if let serverID = message.effectiveServerChatID?.trimmed.nilIfEmpty {
+            return ChatMessageIdentity(rawValue: "server:\(serverID)", strategy: "serverChatId")
+        }
+
+        if let clientID = message.clientMessageID?.trimmed.nilIfEmpty {
+            return ChatMessageIdentity(rawValue: "client:\(clientID)", strategy: "clientMessageId")
+        }
+
+        if let localID = message.effectiveLocalTemporaryID?.trimmed.nilIfEmpty {
+            return ChatMessageIdentity(rawValue: "local:\(localID)", strategy: "localTemporaryId")
+        }
+
+        let scope = roomScopeKey ?? "room:\(message.roomID)|store:-|opponent:-"
+        let senderID = message.sender.id.trimmed
+        let bodyHash = stableBodyHash(message.content)
+        if let serverCreatedAt = message.createdAt {
+            return ChatMessageIdentity(
+                rawValue: "serverTime:\(scope):\(senderID):\(Self.timestampKey(serverCreatedAt)):\(bodyHash)",
+                strategy: "roomScopeSenderServerCreatedAtBodyHash"
+            )
+        }
+
+        let roundedDate = (message.createdAt ?? message.updatedAt ?? .distantPast).timeIntervalSince1970.rounded(.toNearestOrAwayFromZero)
+        let roundedWindow = Int(roundedDate / ChatMessageMergePolicy.optimisticMatchInterval)
+        return ChatMessageIdentity(
+            rawValue: "window:\(scope):\(senderID):\(bodyHash):\(roundedWindow)",
+            strategy: "roomScopeSenderBodyHashRoundedWindow"
+        )
+    }
+
+    static func isSameMessage(
+        _ lhs: ChatMessage,
+        _ rhs: ChatMessage,
+        roomScopeKey: String?,
+        currentUserID: String?
+    ) -> Bool {
+        if let lhsServerID = lhs.effectiveServerChatID?.trimmed.nilIfEmpty,
+           let rhsServerID = rhs.effectiveServerChatID?.trimmed.nilIfEmpty {
+            return lhsServerID == rhsServerID
+        }
+        if let lhsClientID = lhs.clientMessageID?.trimmed.nilIfEmpty,
+           let rhsClientID = rhs.clientMessageID?.trimmed.nilIfEmpty {
+            return lhsClientID == rhsClientID
+        }
+        if let lhsLocalID = lhs.effectiveLocalTemporaryID?.trimmed.nilIfEmpty,
+           let rhsLocalID = rhs.effectiveLocalTemporaryID?.trimmed.nilIfEmpty {
+            return lhsLocalID == rhsLocalID
+        }
+        return fallbackMatches(lhs, rhs, roomScopeKey: roomScopeKey, currentUserID: currentUserID)
+    }
+
+    static func stableBodyHash(_ body: String) -> String {
+        let normalized = body
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .lowercased()
+        var hash: UInt64 = 1_469_598_103_934_665_603
+        for byte in normalized.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
+
+    private static func fallbackMatches(
+        _ lhs: ChatMessage,
+        _ rhs: ChatMessage,
+        roomScopeKey: String?,
+        currentUserID: String?
+    ) -> Bool {
+        guard lhs.roomID == rhs.roomID,
+              lhs.sender.id == rhs.sender.id,
+              lhs.filePaths == rhs.filePaths,
+              stableBodyHash(lhs.content) == stableBodyHash(rhs.content) else {
+            return false
+        }
+        if let currentUserID,
+           (lhs.sendStatus.isPendingDelivery || rhs.sendStatus.isPendingDelivery),
+           lhs.sender.id != currentUserID {
+            return false
+        }
+        let lhsDate = lhs.createdAt ?? lhs.updatedAt
+        let rhsDate = rhs.createdAt ?? rhs.updatedAt
+        guard let lhsDate, let rhsDate else {
+            return true
+        }
+        return abs(lhsDate.timeIntervalSince(rhsDate)) <= ChatMessageMergePolicy.optimisticMatchInterval
+    }
+
+    private static func timestampKey(_ date: Date) -> String {
+        String(format: "%.3f", date.timeIntervalSince1970)
+    }
+}
+
 enum ChatMessageMergePolicy {
     static let optimisticMatchInterval: TimeInterval = 10
 
@@ -89,10 +220,12 @@ enum ChatMessageMergePolicy {
         existing messages: [ChatMessage],
         incoming message: ChatMessage,
         currentUserID: String?,
-        source: String
+        source: String,
+        roomScopeKey: String? = nil
     ) -> [ChatMessage] {
         let countBefore = messages.count
         var result = messages
+        let incomingIdentity = ChatMessageIdentityResolver.identity(for: message, roomScopeKey: roomScopeKey)
 
         if let serverID = message.effectiveServerChatID,
            let index = result.firstIndex(where: { $0.effectiveServerChatID == serverID }) {
@@ -100,36 +233,56 @@ enum ChatMessageMergePolicy {
             if ChatDebugOptions.isMergeLoggingEnabled {
                 DebugLogDeduplicator.shared.printOnce(
                     key: "ChatMerge.skipDuplicate.\(serverID).\(source)",
-                    message: "[ChatMerge] skipDuplicate serverChatId=\(serverID) source=\(source)"
+                    message: "[ChatMerge] source=\(source) existing=server:\(serverID) incoming=\(incomingIdentity.rawValue) strategy=updateExisting"
                 )
             }
 #endif
             result[index] = mergeServerMessage(message, into: result[index])
-            let deduped = deduplicated(result, currentUserID: currentUserID)
+            let deduped = deduplicated(result, currentUserID: currentUserID, roomScopeKey: roomScopeKey)
 #if DEBUG
             if ChatDebugOptions.isMergeLoggingEnabled {
-                Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+                Logger.shared.debug("[ChatMerge] countBefore=\(countBefore) countAfter=\(deduped.count) didReplaceOptimistic=false didSkipDuplicate=true")
+            }
+#endif
+            return deduped
+        }
+
+        if let clientID = message.clientMessageID,
+           let index = result.firstIndex(where: { $0.clientMessageID == clientID }) {
+#if DEBUG
+            if ChatDebugOptions.isMergeLoggingEnabled {
+                DebugLogDeduplicator.shared.printOnce(
+                    key: "ChatMerge.client.\(clientID).\(source)",
+                    message: "[ChatMerge] source=\(source) existing=client:\(clientID) incoming=\(incomingIdentity.rawValue) strategy=\(message.effectiveServerChatID == nil ? "updateExisting" : "replaceOptimistic")"
+                )
+            }
+#endif
+            result[index] = mergePreferConfirmed(message, into: result[index])
+            let deduped = deduplicated(result, currentUserID: currentUserID, roomScopeKey: roomScopeKey)
+#if DEBUG
+            if ChatDebugOptions.isMergeLoggingEnabled {
+                Logger.shared.debug("[ChatMerge] countBefore=\(countBefore) countAfter=\(deduped.count) didReplaceOptimistic=\(message.effectiveServerChatID != nil) didSkipDuplicate=true")
             }
 #endif
             return deduped
         }
 
         if let serverID = message.effectiveServerChatID,
-           let index = result.firstIndex(where: { isOptimistic($0, matching: message, currentUserID: currentUserID) }) {
+           let index = result.firstIndex(where: { isOptimistic($0, matching: message, currentUserID: currentUserID, roomScopeKey: roomScopeKey) }) {
             let localID = result[index].effectiveLocalTemporaryID ?? message.effectiveLocalTemporaryID ?? "-"
 #if DEBUG
             if ChatDebugOptions.isMergeLoggingEnabled {
                 DebugLogDeduplicator.shared.printOnce(
                     key: "ChatMerge.replaceOptimistic.\(localID).\(serverID).\(source)",
-                    message: "[ChatMerge] replaceOptimistic localTemporaryId=\(localID) serverChatId=\(serverID) source=\(source)"
+                    message: "[ChatMerge] source=\(source) existing=local:\(localID) incoming=\(incomingIdentity.rawValue) strategy=replaceOptimistic"
                 )
             }
 #endif
             result[index] = mergeServerMessage(message, into: result[index])
-            let deduped = deduplicated(result, currentUserID: currentUserID)
+            let deduped = deduplicated(result, currentUserID: currentUserID, roomScopeKey: roomScopeKey)
 #if DEBUG
             if ChatDebugOptions.isMergeLoggingEnabled {
-                Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+                Logger.shared.debug("[ChatMerge] countBefore=\(countBefore) countAfter=\(deduped.count) didReplaceOptimistic=true didSkipDuplicate=false")
             }
 #endif
             return deduped
@@ -137,26 +290,27 @@ enum ChatMessageMergePolicy {
 
         if let localID = message.effectiveLocalTemporaryID,
            result.contains(where: { $0.effectiveLocalTemporaryID == localID }) {
-            let deduped = deduplicated(result, currentUserID: currentUserID)
+            let deduped = deduplicated(result, currentUserID: currentUserID, roomScopeKey: roomScopeKey)
 #if DEBUG
             if ChatDebugOptions.isMergeLoggingEnabled, countBefore != deduped.count {
-                Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+                Logger.shared.debug("[ChatMerge] countBefore=\(countBefore) countAfter=\(deduped.count) didReplaceOptimistic=false didSkipDuplicate=true")
             }
 #endif
             return deduped
         }
 
         result.append(message)
-        let deduped = deduplicated(result, currentUserID: currentUserID)
+        let deduped = deduplicated(result, currentUserID: currentUserID, roomScopeKey: roomScopeKey)
 #if DEBUG
-        if ChatDebugOptions.isMergeLoggingEnabled, countBefore != deduped.count {
-            Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(deduped.count)")
+        if ChatDebugOptions.isMergeLoggingEnabled {
+            Logger.shared.debug("[ChatMerge] source=\(source) existing=none incoming=\(incomingIdentity.rawValue) strategy=appendNew")
+            Logger.shared.debug("[ChatMerge] countBefore=\(countBefore) countAfter=\(deduped.count) didReplaceOptimistic=false didSkipDuplicate=\(deduped.count == countBefore)")
         }
 #endif
         return deduped
     }
 
-    static func deduplicated(_ messages: [ChatMessage], currentUserID: String?) -> [ChatMessage] {
+    static func deduplicated(_ messages: [ChatMessage], currentUserID: String?, roomScopeKey: String? = nil) -> [ChatMessage] {
         var result: [ChatMessage] = []
 
         for message in sorted(messages) {
@@ -166,11 +320,18 @@ enum ChatMessageMergePolicy {
                 } else {
                     result.removeAll { existing in
                         existing.effectiveServerChatID == nil
-                            && isOptimistic(existing, matching: message, currentUserID: currentUserID)
+                            && isOptimistic(existing, matching: message, currentUserID: currentUserID, roomScopeKey: roomScopeKey)
                     }
                     result.append(message)
                 }
                 continue
+            }
+
+            if let clientID = message.clientMessageID {
+                if let index = result.firstIndex(where: { $0.clientMessageID == clientID }) {
+                    result[index] = mergePreferConfirmed(message, into: result[index])
+                    continue
+                }
             }
 
             if let localID = message.effectiveLocalTemporaryID,
@@ -180,7 +341,7 @@ enum ChatMessageMergePolicy {
 
             if result.contains(where: { server in
                 server.effectiveServerChatID != nil
-                    && isOptimistic(message, matching: server, currentUserID: currentUserID)
+                    && isOptimistic(message, matching: server, currentUserID: currentUserID, roomScopeKey: roomScopeKey)
             }) {
                 continue
             }
@@ -195,9 +356,21 @@ enum ChatMessageMergePolicy {
         guard let serverID = serverMessage.effectiveServerChatID else {
             return serverMessage
         }
+        if let existingServerID = existing.effectiveServerChatID,
+           existingServerID == serverID,
+           isNewer(existing, than: serverMessage) {
+            return existing.replacingIdentity(
+                id: serverID,
+                localTemporaryID: existing.effectiveLocalTemporaryID ?? serverMessage.effectiveLocalTemporaryID,
+                clientMessageID: existing.clientMessageID ?? serverMessage.clientMessageID,
+                serverChatID: serverID,
+                sendStatus: .sent
+            )
+        }
         return ChatMessage(
             id: serverID,
             localTemporaryID: existing.effectiveLocalTemporaryID ?? serverMessage.effectiveLocalTemporaryID,
+            clientMessageID: serverMessage.clientMessageID ?? existing.clientMessageID,
             serverChatID: serverID,
             roomID: serverMessage.roomID,
             content: serverMessage.content,
@@ -209,23 +382,43 @@ enum ChatMessageMergePolicy {
         )
     }
 
-    private static func isOptimistic(_ optimistic: ChatMessage, matching serverMessage: ChatMessage, currentUserID: String?) -> Bool {
+    private static func isNewer(_ lhs: ChatMessage, than rhs: ChatMessage) -> Bool {
+        let lhsDate = lhs.updatedAt ?? lhs.createdAt
+        let rhsDate = rhs.updatedAt ?? rhs.createdAt
+        guard let lhsDate, let rhsDate else { return false }
+        return lhsDate > rhsDate
+    }
+
+    private static func mergePreferConfirmed(_ incoming: ChatMessage, into existing: ChatMessage) -> ChatMessage {
+        if incoming.effectiveServerChatID != nil {
+            return mergeServerMessage(incoming, into: existing)
+        }
+        if existing.effectiveServerChatID != nil {
+            return mergeServerMessage(existing, into: incoming)
+        }
+        return incoming
+    }
+
+    private static func isOptimistic(_ optimistic: ChatMessage, matching serverMessage: ChatMessage, currentUserID: String?, roomScopeKey: String?) -> Bool {
         guard optimistic.effectiveServerChatID == nil,
-              optimistic.sendStatus == .sending,
+              optimistic.sendStatus.isPendingDelivery,
               optimistic.sender.id == serverMessage.sender.id,
-              optimistic.content == serverMessage.content,
               optimistic.filePaths == serverMessage.filePaths else {
             return false
+        }
+        if let optimisticClientID = optimistic.clientMessageID,
+           let serverClientID = serverMessage.clientMessageID {
+            return optimisticClientID == serverClientID
         }
         if let currentUserID, optimistic.sender.id != currentUserID {
             return false
         }
-        let optimisticDate = optimistic.createdAt ?? optimistic.updatedAt
-        let serverDate = serverMessage.createdAt ?? serverMessage.updatedAt
-        guard let optimisticDate, let serverDate else {
-            return true
-        }
-        return abs(optimisticDate.timeIntervalSince(serverDate)) <= optimisticMatchInterval
+        return ChatMessageIdentityResolver.isSameMessage(
+            optimistic,
+            serverMessage,
+            roomScopeKey: roomScopeKey,
+            currentUserID: currentUserID
+        )
     }
 
     private static func sorted(_ messages: [ChatMessage]) -> [ChatMessage] {
@@ -368,6 +561,10 @@ struct ChatRoomScope: Equatable, Sendable {
     let storeID: String?
     let opponentID: String?
 
+    var roomScopeKey: String {
+        localCacheKey
+    }
+
     var localCacheKey: String {
         [
             "room:\(roomID)",
@@ -482,25 +679,77 @@ enum ChatRoomCreationMode: Equatable, Sendable {
 struct SendChatMessageRequestDTO: Encodable, Sendable {
     let content: String
     let files: [String]
+    let clientMessageID: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case content
+        case files
+        // Server contract: accept and echo this value in send response,
+        // socket payload, and history response for idempotent client retries.
+        case clientMessageID = "client_message_id"
+    }
 }
 
 struct ChatMessageDTO: Decodable, Sendable {
     let chatID: String
+    let clientMessageID: String?
     let roomID: String
     let content: String
     let createdAt: String?
     let updatedAt: String?
+    let deletedAt: String?
+    let hidden: Bool?
+    let messageType: String?
     let sender: UserInfoResponseDTO
     let files: [String]
 
     private enum CodingKeys: String, CodingKey {
         case chatID = "chat_id"
+        case id
+        case messageID = "message_id"
+        case messageId
+        case clientMessageID = "client_message_id"
+        case clientMessageId
         case roomID = "room_id"
+        case roomId
         case content
         case createdAt
         case updatedAt
+        case deletedAt
+        case hidden
+        case messageType
         case sender
         case files
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        chatID = try container.decodeIfPresent(String.self, forKey: .chatID)
+            ?? container.decodeIfPresent(String.self, forKey: .messageID)
+            ?? container.decodeIfPresent(String.self, forKey: .messageId)
+            ?? container.decodeIfPresent(String.self, forKey: .id)
+            ?? ""
+        clientMessageID = try container.decodeIfPresent(String.self, forKey: .clientMessageID)
+            ?? container.decodeIfPresent(String.self, forKey: .clientMessageId)
+        roomID = try container.decodeIfPresent(String.self, forKey: .roomID)
+            ?? container.decodeIfPresent(String.self, forKey: .roomId)
+            ?? ""
+        let decodedDeletedAt = try container.decodeIfPresent(String.self, forKey: .deletedAt)
+        let decodedHidden = try container.decodeIfPresent(Bool.self, forKey: .hidden)
+        deletedAt = decodedDeletedAt
+        hidden = decodedHidden
+        messageType = try container.decodeIfPresent(String.self, forKey: .messageType)
+        if decodedDeletedAt?.nilIfEmpty != nil {
+            content = "삭제된 메시지입니다."
+        } else if decodedHidden == true {
+            content = ""
+        } else {
+            content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        }
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        sender = try container.decode(UserInfoResponseDTO.self, forKey: .sender)
+        files = try container.decodeIfPresent([String].self, forKey: .files) ?? []
     }
 }
 
@@ -585,7 +834,7 @@ protocol ChatRemoteDataSourceProtocol: Sendable {
     func fetchChatRooms() async throws -> ChatRoomListResponseDTO
     func createOrFetchChatRoom(mode: ChatRoomCreationMode) async throws -> ChatRoomDTO
     func fetchMessages(roomID: String, next: String?) async throws -> ChatMessageListResponseDTO
-    func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessageDTO
+    func sendMessage(roomID: String, content: String, files: [String], clientMessageID: String) async throws -> ChatMessageDTO
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> ChatFileResponseDTO
 }
 
@@ -644,10 +893,10 @@ struct ChatRemoteDataSource: ChatRemoteDataSourceProtocol {
         return try await apiClient.execute(endpoint)
     }
 
-    func sendMessage(roomID: String, content: String, files: [String] = []) async throws -> ChatMessageDTO {
+    func sendMessage(roomID: String, content: String, files: [String] = [], clientMessageID: String) async throws -> ChatMessageDTO {
         let body = RequestBody.json(
             try NetworkCoding.makeJSONEncoder().encode(
-                SendChatMessageRequestDTO(content: content, files: files)
+                SendChatMessageRequestDTO(content: content, files: files, clientMessageID: clientMessageID)
             )
         )
         let endpoint = Endpoint<ChatMessageDTO>(
@@ -688,7 +937,7 @@ protocol ChatRepository: Sendable {
     func fetchChatRooms() async throws -> [ChatRoom]
     func createOrFetchChatRoom(mode: ChatRoomCreationMode) async throws -> ChatRoom
     func fetchMessages(roomID: String, next: String?) async throws -> [ChatMessage]
-    func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessage
+    func sendMessage(roomID: String, content: String, files: [String], clientMessageID: String) async throws -> ChatMessage
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String]
 }
 
@@ -714,9 +963,18 @@ struct DefaultChatRepository: ChatRepository {
         try await remoteDataSource.fetchMessages(roomID: roomID, next: next).data.map(mapper.mapMessage)
     }
 
-    func sendMessage(roomID: String, content: String, files: [String]) async throws -> ChatMessage {
-        let response = try await remoteDataSource.sendMessage(roomID: roomID, content: content, files: files)
-        return mapper.mapMessage(response)
+    func sendMessage(roomID: String, content: String, files: [String], clientMessageID: String) async throws -> ChatMessage {
+        let response = try await remoteDataSource.sendMessage(
+            roomID: roomID,
+            content: content,
+            files: files,
+            clientMessageID: clientMessageID
+        )
+        let message = mapper.mapMessage(response)
+        guard message.clientMessageID == nil else {
+            return message
+        }
+        return message.replacingIdentity(clientMessageID: clientMessageID)
     }
 
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String] {
@@ -766,9 +1024,11 @@ struct ChatMapper: Sendable {
     }
 
     func mapMessage(_ dto: ChatMessageDTO) -> ChatMessage {
-        ChatMessage(
-            id: dto.chatID,
-            serverChatID: dto.chatID,
+        let serverID = dto.chatID.nilIfEmpty ?? dto.clientMessageID?.nilIfEmpty ?? "serverless-\(UUID().uuidString)"
+        return ChatMessage(
+            id: serverID,
+            clientMessageID: dto.clientMessageID?.nilIfEmpty,
+            serverChatID: dto.chatID.nilIfEmpty,
             roomID: dto.roomID,
             content: dto.content,
             createdAt: dto.createdAt.flatMap(dateParser.parseISO8601),
@@ -963,11 +1223,35 @@ protocol ChatLocalDataSourceProtocol: Sendable {
     func updateSendStatus(messageID: String, status: ChatSendStatus, scope: ChatRoomScope) async throws -> [ChatMessage]
 }
 
+actor ChatSendingCoordinator {
+    private var inFlightSends: [String: Task<ChatMessage, Error>] = [:]
+
+    func send(
+        clientMessageID: String,
+        operation: @Sendable @escaping () async throws -> ChatMessage
+    ) async throws -> ChatMessage {
+        if let existingTask = inFlightSends[clientMessageID] {
+            Logger.shared.debug("[ChatSend] clientMessageId=\(clientMessageID) action=postAttachExisting")
+            return try await existingTask.value
+        }
+
+        let task = Task {
+            try await operation()
+        }
+        inFlightSends[clientMessageID] = task
+        defer {
+            inFlightSends[clientMessageID] = nil
+        }
+        return try await task.value
+    }
+}
+
 actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
     private enum Field {
         static let entity = "ChatMessageRecord"
         static let chatID = "chatID"
         static let localTemporaryID = "localTemporaryID"
+        static let clientMessageID = "clientMessageID"
         static let serverChatID = "serverChatID"
         static let roomID = "roomID"
         static let content = "content"
@@ -994,6 +1278,7 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         entity.properties = [
             Self.attribute(Field.chatID, .stringAttributeType, optional: false),
             Self.attribute(Field.localTemporaryID, .stringAttributeType, optional: true),
+            Self.attribute(Field.clientMessageID, .stringAttributeType, optional: true),
             Self.attribute(Field.serverChatID, .stringAttributeType, optional: true),
             Self.attribute(Field.roomID, .stringAttributeType, optional: false),
             Self.attribute(Field.content, .stringAttributeType, optional: false),
@@ -1102,6 +1387,7 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         let serverID = message.effectiveServerChatID
         let pending = try fetchLocalTemporaryRecord(localID: localID, scope: scope, context: context)
             ?? fetchRecord(messageID: localID, scope: scope, context: context)
+            ?? message.clientMessageID.flatMap { try? fetchClientRecord(clientMessageID: $0, scope: scope, context: context) }
         let serverRecord = try serverID.flatMap {
             try fetchServerRecord(serverChatID: $0, scope: scope, context: context)
         }
@@ -1121,6 +1407,7 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         let mergedMessage = message.replacingIdentity(
             id: serverID ?? message.id,
             localTemporaryID: localID,
+            clientMessageID: message.clientMessageID ?? (pending?.value(forKey: Field.clientMessageID) as? String),
             serverChatID: serverID,
             sendStatus: .sent
         )
@@ -1218,6 +1505,19 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         return try context.fetch(request).first
     }
 
+    private func fetchClientRecord(clientMessageID: String, scope: ChatRoomScope, context: NSManagedObjectContext) throws -> NSManagedObject? {
+        let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
+        request.predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            Field.clientMessageID,
+            clientMessageID,
+            Field.localCacheKey,
+            scope.localCacheKey
+        )
+        request.fetchLimit = 1
+        return try context.fetch(request).first
+    }
+
     private func fetchServerRecord(serverChatID: String, scope: ChatRoomScope, context: NSManagedObjectContext) throws -> NSManagedObject? {
         let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
         request.predicate = NSPredicate(
@@ -1236,7 +1536,7 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
     private func fetchMatchingPendingRecord(for message: ChatMessage, scope: ChatRoomScope, context: NSManagedObjectContext) throws -> NSManagedObject? {
         let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
         request.predicate = NSPredicate(
-            format: "%K == %@ AND %K == %@ AND %K == %@ AND %K == %@ AND %K == %@",
+            format: "%K == %@ AND %K == %@ AND %K == %@ AND %K == %@ AND %K IN %@",
             Field.roomID,
             scope.roomID,
             Field.localCacheKey,
@@ -1246,7 +1546,7 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
             Field.content,
             message.content,
             Field.sendStatus,
-            ChatSendStatus.sending.rawValue
+            ChatSendStatus.pendingRawValues
         )
         request.sortDescriptors = [
             NSSortDescriptor(key: Field.createdAt, ascending: false),
@@ -1271,8 +1571,12 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
     private func upsert(message: ChatMessage, scope: ChatRoomScope, context: NSManagedObjectContext) throws {
         let serverID = message.effectiveServerChatID
         let localID = message.effectiveLocalTemporaryID
+        let clientID = message.clientMessageID?.nilIfEmpty
         let serverRecord = try serverID.flatMap {
             try fetchServerRecord(serverChatID: $0, scope: scope, context: context)
+        }
+        let clientRecord = try clientID.flatMap {
+            try fetchClientRecord(clientMessageID: $0, scope: scope, context: context)
         }
         let localRecord = try localID.flatMap {
             try fetchLocalTemporaryRecord(localID: $0, scope: scope, context: context)
@@ -1284,11 +1588,19 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         let record: NSManagedObject
         if let serverRecord {
             record = serverRecord
+            if let clientRecord, clientRecord != serverRecord {
+                context.delete(clientRecord)
+            }
             if let localRecord, localRecord != serverRecord {
                 context.delete(localRecord)
             }
             if let pendingMatch, pendingMatch != serverRecord {
                 context.delete(pendingMatch)
+            }
+        } else if let clientRecord {
+            record = clientRecord
+            if let localRecord, localRecord != clientRecord {
+                context.delete(localRecord)
             }
         } else if let localRecord {
             record = localRecord
@@ -1305,6 +1617,7 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
             : message.replacingIdentity(
                 id: serverID,
                 localTemporaryID: localID ?? existingLocalID,
+                clientMessageID: clientID ?? (record.value(forKey: Field.clientMessageID) as? String),
                 serverChatID: serverID,
                 sendStatus: .sent
             )
@@ -1318,6 +1631,7 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
     private func apply(message: ChatMessage, scope: ChatRoomScope, to record: NSManagedObject) throws {
         record.setValue(message.id, forKey: Field.chatID)
         record.setValue(message.effectiveLocalTemporaryID, forKey: Field.localTemporaryID)
+        record.setValue(message.clientMessageID, forKey: Field.clientMessageID)
         record.setValue(message.effectiveServerChatID, forKey: Field.serverChatID)
         record.setValue(message.roomID, forKey: Field.roomID)
         record.setValue(scope.localCacheKey, forKey: Field.localCacheKey)
@@ -1349,6 +1663,7 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
             id: id,
             localTemporaryID: (record.value(forKey: Field.localTemporaryID) as? String)?.nilIfEmpty
                 ?? (id.hasPrefix("local-") ? id : nil),
+            clientMessageID: (record.value(forKey: Field.clientMessageID) as? String)?.nilIfEmpty,
             serverChatID: (record.value(forKey: Field.serverChatID) as? String)?.nilIfEmpty
                 ?? (id.hasPrefix("local-") ? nil : id),
             roomID: roomID,
@@ -1372,7 +1687,12 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
 
 @MainActor
 protocol ChatRealtimeServiceProtocol: AnyObject {
-    func connect(roomID: String, currentUserID: String?, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws
+    func connect(
+        roomID: String,
+        currentUserID: String?,
+        onMessage: @escaping @MainActor (ChatMessage) async -> Void,
+        onReconnect: @escaping @MainActor () async -> Void
+    ) async throws
     func disconnect()
 }
 
@@ -1407,14 +1727,14 @@ protocol ChatInteracting {
     func createOrFetchUserChatRoom() async throws -> ChatRoom
     func loadCachedMessages(scope: ChatRoomScope) async throws -> [ChatMessage]
     func synchronizeMessages(scope: ChatRoomScope) async throws -> [ChatMessage]
-    func startRealtime(scope: ChatRoomScope, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws
+    func startRealtime(scope: ChatRoomScope, onMessage: @escaping @MainActor (ChatMessage) async -> Void, onReconnect: @escaping @MainActor () async -> Void) async throws
     func stopRealtime()
     func makePendingMessage(roomID: String, content: String, files: [String]) throws -> ChatMessage
     func savePendingMessage(_ message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage]
     func replacePendingMessage(localID: String, with message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage]
     func markMessageFailed(messageID: String, scope: ChatRoomScope) async throws -> [ChatMessage]
     func loadMessages(roomID: String, after next: String?) async throws -> [ChatMessage]
-    func sendMessage(scope: ChatRoomScope, content: String, files: [String]) async throws -> ChatMessage
+    func sendMessage(scope: ChatRoomScope, pendingMessage: ChatMessage) async throws -> ChatMessage
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String]
     func makeContext(for room: ChatRoom, entryPoint: ChatRoomEntryPoint) -> ChatRoomContext
     func makeContext(for summary: ChatLocalConversationSummary) -> ChatRoomContext
@@ -1432,6 +1752,7 @@ struct ChatInteractor: ChatInteracting {
     private let storeRepository: StoreRepository
     private let sessionStore: SessionStore
     private let storeContextCache: any ChatRoomStoreContextCaching
+    private let sendingCoordinator: ChatSendingCoordinator
 
     init(
         target: ChatTarget? = nil,
@@ -1440,7 +1761,8 @@ struct ChatInteractor: ChatInteracting {
         realtimeService: any ChatRealtimeServiceProtocol,
         storeRepository: StoreRepository,
         sessionStore: SessionStore,
-        storeContextCache: any ChatRoomStoreContextCaching = UserDefaultsChatRoomStoreContextCache.shared
+        storeContextCache: any ChatRoomStoreContextCaching = UserDefaultsChatRoomStoreContextCache.shared,
+        sendingCoordinator: ChatSendingCoordinator = ChatSendingCoordinator()
     ) {
         self.target = target
         self.chatRepository = chatRepository
@@ -1449,6 +1771,7 @@ struct ChatInteractor: ChatInteracting {
         self.storeRepository = storeRepository
         self.sessionStore = sessionStore
         self.storeContextCache = storeContextCache
+        self.sendingCoordinator = sendingCoordinator
         self.currentUserID = sessionStore.currentUserID
     }
 
@@ -1674,9 +1997,9 @@ struct ChatInteractor: ChatInteracting {
 #endif
                 } else if let serverID = message.effectiveServerChatID,
                           let pending = existingMessages.first(where: {
-                              ChatMessageMergePolicy.deduplicated([$0, message], currentUserID: sessionStore.currentUserID).count == 1
+                              ChatMessageMergePolicy.deduplicated([$0, message], currentUserID: sessionStore.currentUserID, roomScopeKey: scope.roomScopeKey).count == 1
                                   && $0.effectiveServerChatID == nil
-                                  && $0.sendStatus == .sending
+                                  && $0.sendStatus.isPendingDelivery
                           }) {
                     let localID = pending.effectiveLocalTemporaryID ?? pending.id
 #if DEBUG
@@ -1697,7 +2020,7 @@ struct ChatInteractor: ChatInteracting {
         }
     }
 
-    func startRealtime(scope: ChatRoomScope, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
+    func startRealtime(scope: ChatRoomScope, onMessage: @escaping @MainActor (ChatMessage) async -> Void, onReconnect: @escaping @MainActor () async -> Void) async throws {
         guard sessionStore.isAuthenticated else {
             throw ChatFeatureError.authenticationRequired
         }
@@ -1726,9 +2049,9 @@ struct ChatInteractor: ChatInteracting {
 #endif
                 } else if let serverID = message.effectiveServerChatID,
                           let pending = existingMessages.first(where: {
-                              ChatMessageMergePolicy.deduplicated([$0, message], currentUserID: sessionStore.currentUserID).count == 1
+                              ChatMessageMergePolicy.deduplicated([$0, message], currentUserID: sessionStore.currentUserID, roomScopeKey: scope.roomScopeKey).count == 1
                                   && $0.effectiveServerChatID == nil
-                                  && $0.sendStatus == .sending
+                                  && $0.sendStatus.isPendingDelivery
                           }) {
                     let localID = pending.effectiveLocalTemporaryID ?? pending.id
 #if DEBUG
@@ -1752,6 +2075,9 @@ struct ChatInteractor: ChatInteracting {
                 await onMessage(message)
             }
             NotificationCenter.default.postChatRoomDidUpdate(message: message)
+        } onReconnect: {
+            Logger.shared.debug("[ChatSocket] event=reconnect roomScopeKey=\(scope.roomScopeKey)")
+            await onReconnect()
         }
     }
 
@@ -1765,9 +2091,11 @@ struct ChatInteractor: ChatInteracting {
         }
 
         let localID = "local-\(UUID().uuidString)"
+        let clientMessageID = "client-\(UUID().uuidString)"
         return ChatMessage(
             id: localID,
             localTemporaryID: localID,
+            clientMessageID: clientMessageID,
             roomID: roomID,
             content: content,
             createdAt: Date(),
@@ -1814,23 +2142,39 @@ struct ChatInteractor: ChatInteracting {
         }
     }
 
-    func sendMessage(scope: ChatRoomScope, content: String, files: [String]) async throws -> ChatMessage {
+    func sendMessage(scope: ChatRoomScope, pendingMessage: ChatMessage) async throws -> ChatMessage {
         guard sessionStore.isAuthenticated else {
             throw ChatFeatureError.authenticationRequired
         }
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !files.isEmpty else {
+        let trimmed = pendingMessage.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !pendingMessage.filePaths.isEmpty else {
             throw ChatFeatureError.unavailable(message: "메시지나 파일을 추가해 주세요.")
+        }
+        guard let clientMessageID = pendingMessage.clientMessageID?.nilIfEmpty else {
+            throw ChatFeatureError.unavailable(message: "메시지 식별자를 만들지 못했어요.")
         }
 
         do {
-            let sentMessage = try await chatRepository.sendMessage(roomID: scope.roomID, content: trimmed, files: files)
+            Logger.shared.debug("[ChatSend] clientMessageId=\(clientMessageID) action=postStart")
+            let repository = chatRepository
+            let roomID = scope.roomID
+            let files = pendingMessage.filePaths
+            let sentMessage = try await sendingCoordinator.send(clientMessageID: clientMessageID) {
+                try await repository.sendMessage(
+                    roomID: roomID,
+                    content: trimmed,
+                    files: files,
+                    clientMessageID: clientMessageID
+                )
+            }
+            Logger.shared.debug("[ChatSend] clientMessageId=\(clientMessageID) action=postSuccess")
             touchStoreConversation(scope: scope, latestActivityDate: sentMessage.createdAt ?? sentMessage.updatedAt ?? Date())
             NotificationCenter.default.postChatRoomDidUpdate(message: sentMessage)
             return sentMessage
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            Logger.shared.warning("[ChatSend] clientMessageId=\(clientMessageID) action=postFailure error=\(error.localizedDescription)")
             throw map(error)
         }
     }
@@ -2065,6 +2409,10 @@ extension NotificationCenter {
 }
 
 private extension String {
+    var trimmed: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var nilIfEmpty: String? {
         let value = trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? nil : value

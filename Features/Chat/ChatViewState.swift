@@ -37,11 +37,13 @@ struct ChatMessageRowViewState: Equatable, Identifiable {
 
     var statusText: String? {
         switch sendStatus {
-        case .sending:
+        case .queued:
+            return "대기 중"
+        case .sending, .retrying:
             return "전송 중"
-        case .failed:
+        case .failed, .failedAuth, .recoveryNeeded:
             return "전송 실패"
-        case .sent:
+        case .sent, .recovered:
             return nil
         }
     }

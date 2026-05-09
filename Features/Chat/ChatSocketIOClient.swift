@@ -24,7 +24,12 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         self.mapper = mapper
     }
 
-    func connect(roomID: String, currentUserID: String?, onMessage: @escaping @MainActor (ChatMessage) async -> Void) async throws {
+    func connect(
+        roomID: String,
+        currentUserID: String?,
+        onMessage: @escaping @MainActor (ChatMessage) async -> Void,
+        onReconnect: @escaping @MainActor () async -> Void
+    ) async throws {
         if lifecycle.roomID == roomID {
             switch lifecycle {
             case .connecting, .connected:
@@ -88,7 +93,14 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         let manager = SocketManager(socketURL: originURL, config: socketConfig)
         let socket = manager.socket(forNamespace: namespace)
 
-        registerHandlers(socket: socket, roomID: roomID, namespace: namespace, currentUserID: currentUserID, onMessage: onMessage)
+        registerHandlers(
+            socket: socket,
+            roomID: roomID,
+            namespace: namespace,
+            currentUserID: currentUserID,
+            onMessage: onMessage,
+            onReconnect: onReconnect
+        )
 
         self.manager = manager
         self.socket = socket
@@ -134,15 +146,23 @@ final class ChatSocketIOClient: ChatRealtimeServiceProtocol {
         roomID: String,
         namespace: String,
         currentUserID: String?,
-        onMessage: @escaping @MainActor (ChatMessage) async -> Void
+        onMessage: @escaping @MainActor (ChatMessage) async -> Void,
+        onReconnect: @escaping @MainActor () async -> Void
     ) {
+        var didConnectOnce = false
         socket.on(clientEvent: .connect) { _, _ in
             Task { @MainActor [weak self] in
                 guard self?.lifecycle == .connected(roomID: roomID) else {
                     Logger.shared.debug("[ChatSocket] stale event ignored type=connect roomId=\(roomID)")
                     return
                 }
-                Logger.shared.debug("[ChatSocket] connected namespace=\(namespace)")
+                if didConnectOnce {
+                    Logger.shared.debug("[ChatSocket] event=reconnect roomId=\(roomID) namespace=\(namespace)")
+                    await onReconnect()
+                } else {
+                    didConnectOnce = true
+                    Logger.shared.debug("[ChatSocket] event=connect roomId=\(roomID) namespace=\(namespace)")
+                }
             }
         }
 

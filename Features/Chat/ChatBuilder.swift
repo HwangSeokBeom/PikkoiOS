@@ -8,6 +8,7 @@ struct ChatBuilder {
     private let makeRealtimeService: @MainActor () -> any ChatRealtimeServiceProtocol
     private let storeRepository: StoreRepository
     private let sessionStore: SessionStore
+    private let sendingCoordinator: ChatSendingCoordinator
     private let notificationService: AppNotificationService
     private let activeChatRoomTracker: ActiveChatRoomTracking
     private let imageLoader: any AuthorizedImageLoading
@@ -20,6 +21,7 @@ struct ChatBuilder {
         makeRealtimeService: @escaping @MainActor () -> any ChatRealtimeServiceProtocol,
         storeRepository: StoreRepository,
         sessionStore: SessionStore,
+        sendingCoordinator: ChatSendingCoordinator = ChatSendingCoordinator(),
         notificationService: AppNotificationService = NoopAppNotificationService(),
         activeChatRoomTracker: ActiveChatRoomTracking = ActiveChatRoomTracker(),
         imageLoader: any AuthorizedImageLoading,
@@ -31,6 +33,7 @@ struct ChatBuilder {
         self.makeRealtimeService = makeRealtimeService
         self.storeRepository = storeRepository
         self.sessionStore = sessionStore
+        self.sendingCoordinator = sendingCoordinator
         self.notificationService = notificationService
         self.activeChatRoomTracker = activeChatRoomTracker
         self.imageLoader = imageLoader
@@ -45,7 +48,8 @@ struct ChatBuilder {
             localDataSource: localDataSource,
             realtimeService: LazyChatRealtimeService(factory: makeRealtimeService),
             storeRepository: storeRepository,
-            sessionStore: sessionStore
+            sessionStore: sessionStore,
+            sendingCoordinator: sendingCoordinator
         )
         let presenter = ChatPresenter(
             interactor: interactor,
@@ -69,10 +73,16 @@ private final class LazyChatRealtimeService: ChatRealtimeServiceProtocol {
     func connect(
         roomID: String,
         currentUserID: String?,
-        onMessage: @escaping @MainActor (ChatMessage) async -> Void
+        onMessage: @escaping @MainActor (ChatMessage) async -> Void,
+        onReconnect: @escaping @MainActor () async -> Void
     ) async throws {
         let service = resolvedService()
-        try await service.connect(roomID: roomID, currentUserID: currentUserID, onMessage: onMessage)
+        try await service.connect(
+            roomID: roomID,
+            currentUserID: currentUserID,
+            onMessage: onMessage,
+            onReconnect: onReconnect
+        )
     }
 
     func disconnect() {

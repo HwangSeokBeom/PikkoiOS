@@ -28,6 +28,7 @@ final class AppDIContainer {
     let communityRepository: CommunityRepository
     let chatRepository: ChatRepository
     let chatLocalDataSource: any ChatLocalDataSourceProtocol
+    let chatSendingCoordinator: ChatSendingCoordinator
     let orderRepository: OrderRepository
     let orderMapper: OrderMapper
     let paymentGateway: any PaymentGateway
@@ -137,6 +138,7 @@ final class AppDIContainer {
         )
         resolvedNotificationRouter.setChatRouteHydrator(DefaultChatRouteHydrator(chatRepository: resolvedChatRepository))
         let resolvedChatLocalDataSource = CoreDataChatLocalDataSource()
+        let resolvedChatSendingCoordinator = ChatSendingCoordinator()
         let resolvedOrderRepository = OrderRepositoryImpl(
             remoteDataSource: OrderRemoteDataSource(apiClient: resolvedAPIClient),
             checkoutMapper: checkoutMapper,
@@ -185,6 +187,7 @@ final class AppDIContainer {
         self.communityRepository = resolvedCommunityRepository
         self.chatRepository = resolvedChatRepository
         self.chatLocalDataSource = resolvedChatLocalDataSource
+        self.chatSendingCoordinator = resolvedChatSendingCoordinator
         self.orderRepository = resolvedOrderRepository
         self.orderMapper = orderMapper
         self.paymentGateway = PortOnePaymentGateway()

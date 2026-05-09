@@ -67,6 +67,7 @@
 		2C49B2D912A8535CDBEDDB86 /* PikkoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E22386EFEFFBF792C7B5F3C4 /* PikkoApp.swift */; };
 		2D7B158A643B57FC793FFDE9 /* Secrets.xcconfig.sample in Resources */ = {isa = PBXBuildFile; fileRef = B37D20BB321ED4B8715B91D0 /* Secrets.xcconfig.sample */; };
 		2D8D19DEF9D33E657DA5CC55 /* StoreSummaryDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D8F086AC8C5E9B109904C7 /* StoreSummaryDTO.swift */; };
+		2DA8E9C7954BFEC93F67E6C4 /* ChatHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7620C85C294965D79767C7B7 /* ChatHardeningTests.swift */; };
 		2E028EA8691C05A835D43A32 /* NetworkError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09E94D87CF5E2C247D4AF634 /* NetworkError.swift */; };
 		2E5CFAEB57AFAA575B475AC1 /* CheckoutPriceValidationRequestDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95E43036CF1F8F888A895859 /* CheckoutPriceValidationRequestDTO.swift */; };
 		2EEE04711A113C2BC611C1E9 /* CommunityComposerPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09891C0E83C579418C92DBB5 /* CommunityComposerPresenter.swift */; };
@@ -563,6 +564,7 @@
 		72D7D9542BE93191ECBEF107 /* StoreDetailBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreDetailBuilder.swift; sourceTree = "<group>"; };
 		73FABD30823575348C23C504 /* CommunityPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityPresenter.swift; sourceTree = "<group>"; };
 		752E0BBBEA1B38B138658291 /* CommunityContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityContent.swift; sourceTree = "<group>"; };
+		7620C85C294965D79767C7B7 /* ChatHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHardeningTests.swift; sourceTree = "<group>"; };
 		766D27CB86D6B196A031EB44 /* AuthRemoteDataSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRemoteDataSource.swift; sourceTree = "<group>"; };
 		7A409E71E9F252BFB4986F49 /* NotificationListPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationListPresenter.swift; sourceTree = "<group>"; };
 		7B41C71505215A6191ED8101 /* StoreDetailViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreDetailViewState.swift; sourceTree = "<group>"; };
@@ -1081,6 +1083,7 @@
 				7B733773BECE528ABAD16BB2 /* AppStartFlowTests.swift */,
 				1FFB5424889E20459C1B422A /* AuthFeatureTests.swift */,
 				25FE799C1454BB872AEC0EA1 /* CartFeatureTests.swift */,
+				7620C85C294965D79767C7B7 /* ChatHardeningTests.swift */,
 				A439FF4A7DDD49CF91FCD877 /* ChatScrollPolicyTests.swift */,
 				D9E18A73351C3A8E214C28A2 /* CheckoutFeatureTests.swift */,
 				96031AC71905AB5B1A57A681 /* CommunityComposerFeatureTests.swift */,
@@ -1878,7 +1881,7 @@
 					59CD4DF11480D2E2AC5DAE07 = {
 						DevelopmentTeam = 63SB2B8YJ5;
 						ProvisioningStyle = Automatic;
-						SystemCapabilities = "[\"com.apple.Push\": [\"enabled\": 1], \"com.apple.BackgroundModes\": [\"enabled\": 1]]";
+						SystemCapabilities = "[\"com.apple.BackgroundModes\": [\"enabled\": 1], \"com.apple.Push\": [\"enabled\": 1]]";
 					};
 					A2330331F0405B56D646F9C8 = {
 						DevelopmentTeam = 63SB2B8YJ5;
@@ -1960,6 +1963,7 @@
 				89C4DD9D0372D4F8A338C2B8 /* AppStartFlowTests.swift in Sources */,
 				361EB05B73457F3E7555A22F /* AuthFeatureTests.swift in Sources */,
 				B640520DA2297D89D1E23793 /* CartFeatureTests.swift in Sources */,
+				2DA8E9C7954BFEC93F67E6C4 /* ChatHardeningTests.swift in Sources */,
 				378616EE60BC16077BD93FB1 /* ChatScrollPolicyTests.swift in Sources */,
 				E3E4126B851C1606EE29CC98 /* CheckoutFeatureTests.swift in Sources */,
 				367FAD3A0303D9192F8070A2 /* CommunityComposerFeatureTests.swift in Sources */,

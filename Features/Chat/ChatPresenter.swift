@@ -423,6 +423,15 @@ final class ChatPresenter: ObservableObject {
                 self.updateRoomList(with: message)
                 self.applyMessages()
                 self.applyScrollPolicyForReceivedMessage(message)
+            } onReconnect: { [weak self] in
+                guard let self,
+                      self.viewState.selectedRoomID == scope.roomID,
+                      self.lifecycle == .active(roomID: scope.roomID) else {
+                    Logger.shared.debug("[ChatLifecycle] stale update ignored source=socketReconnect roomId=\(scope.roomID)")
+                    return
+                }
+                Logger.shared.debug("[ChatSync] reason=reconnect lastKnown=latestServerCreatedAt fetched=unknown merged=unknown roomScopeKey=\(scope.roomScopeKey)")
+                await self.synchronizeMessages(scope: scope, isRefresh: true)
             }
             guard isCurrentRoomLifecycle(roomID) else {
                 interactor.stopRealtime()
@@ -513,31 +522,34 @@ final class ChatPresenter: ObservableObject {
         do {
             let pendingMessage = try interactor.makePendingMessage(roomID: roomID, content: content, files: files)
             let localTemporaryID = pendingMessage.effectiveLocalTemporaryID ?? pendingMessage.id
+            let clientMessageID = pendingMessage.clientMessageID ?? "-"
             pendingMessageID = localTemporaryID
-            Logger.shared.debug("[ChatSend] start roomId=\(roomID) localTemporaryId=\(localTemporaryID) contentLength=\(content.count)")
             let scope = currentScope(roomID: roomID)
+            Logger.shared.debug("[ChatSend] localTemporaryId=\(localTemporaryID) clientMessageId=\(clientMessageID) roomScopeKey=\(scope.roomScopeKey) action=optimisticAppend")
+            Logger.shared.debug("[ChatSend] start roomId=\(roomID) localTemporaryId=\(localTemporaryID) clientMessageId=\(clientMessageID) contentLength=\(content.count)")
 
             if !messages.contains(where: { $0.effectiveLocalTemporaryID == localTemporaryID }) {
                 messages = ChatMessageMergePolicy.merged(
                     existing: messages,
                     incoming: pendingMessage,
                     currentUserID: interactor.currentUserID,
-                    source: "send"
+                    source: "send",
+                    roomScopeKey: scope.roomScopeKey
                 )
             }
             messages = try await interactor.savePendingMessage(pendingMessage, scope: scope)
             viewState.messageText = ""
             viewState.attachedFilePaths = []
-            Logger.shared.debug("[ChatSend] optimisticAppend localTemporaryId=\(localTemporaryID) messageCount=\(messages.count)")
+            Logger.shared.debug("[ChatSend] optimisticAppend localTemporaryId=\(localTemporaryID) clientMessageId=\(clientMessageID) messageCount=\(messages.count)")
             applyMessages()
             applyScrollAction(.optimisticAppend, localTemporaryId: localTemporaryID)
-            let message = try await interactor.sendMessage(scope: scope, content: content, files: files)
+            let message = try await interactor.sendMessage(scope: scope, pendingMessage: pendingMessage)
             guard lifecycle == .active(roomID: roomID) else {
                 logStaleUpdateIgnored(source: "sendMessage", roomID: roomID)
                 return
             }
             let serverChatID = message.effectiveServerChatID ?? message.id
-            Logger.shared.debug("[ChatSend] postSuccess localTemporaryId=\(localTemporaryID) serverChatId=\(serverChatID)")
+            Logger.shared.debug("[ChatSend] postSuccess localTemporaryId=\(localTemporaryID) clientMessageId=\(clientMessageID) serverChatId=\(serverChatID)")
             if messages.contains(where: { $0.effectiveServerChatID == serverChatID }) {
 #if DEBUG
                 if ChatDebugOptions.isMergeLoggingEnabled {
@@ -604,11 +616,13 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func merge(_ message: ChatMessage) {
+        let scopeKey = currentScope(roomID: message.roomID).roomScopeKey
         messages = ChatMessageMergePolicy.merged(
             existing: messages,
             incoming: message,
             currentUserID: interactor.currentUserID,
-            source: "socket"
+            source: "socket",
+            roomScopeKey: scopeKey
         )
     }
 
@@ -646,7 +660,12 @@ final class ChatPresenter: ObservableObject {
 
     private func applyMessages() {
         let countBefore = messages.count
-        messages = ChatMessageMergePolicy.deduplicated(messages, currentUserID: interactor.currentUserID)
+        let roomScopeKey = viewState.selectedRoomID.map { currentScope(roomID: $0).roomScopeKey }
+        messages = ChatMessageMergePolicy.deduplicated(
+            messages,
+            currentUserID: interactor.currentUserID,
+            roomScopeKey: roomScopeKey
+        )
 #if DEBUG
         if ChatDebugOptions.isMergeLoggingEnabled, countBefore != messages.count {
             Logger.shared.debug("[ChatMerge] result countBefore=\(countBefore) countAfter=\(messages.count)")

@@ -203,7 +203,11 @@ final class DefaultAppNotificationService: AppNotificationService {
                 saveIfNeeded(notification, source: event.source.rawValue, messageId: normalizedMessageId, rawPayload: payload.rawPayload)
             }
             if event.isTap {
-                markAsReadIfNeeded(id: notification.id, messageId: normalizedMessageId)
+                if notification.type == .chatMessage {
+                    Logger(category: "ChatRead").debug("[ChatRead] roomScopeKey=\(chatRoomScopeKey(roomId: notification.metadata.roomId, storeId: notification.metadata.storeId)) action=skip reason=navigationNotVisibleYet")
+                } else {
+                    markAsReadIfNeeded(id: notification.id, messageId: normalizedMessageId)
+                }
                 diagnosticsStore.recordRemoteTapRoute(notification.route.debugDescription, pendingRoute: nil)
             }
             if let validParsedRoute {
@@ -497,6 +501,10 @@ final class DefaultAppNotificationService: AppNotificationService {
         let key = "read:\(messageId?.trimmed.nilIfEmpty ?? id)"
         guard dedupeStore.accept(key: key, source: "remoteFCM", phase: .read) else { return }
         markAsRead(id: id)
+    }
+
+    private func chatRoomScopeKey(roomId: String?, storeId: String?) -> String {
+        "store:\(storeId?.trimmed.nilIfEmpty ?? "-")|room:\(roomId?.trimmed.nilIfEmpty ?? "-")"
     }
 
     private func notificationDedupeKey(rawPayload: [String: String]?, route: AppNotificationRoute?, messageId: String?) -> String {

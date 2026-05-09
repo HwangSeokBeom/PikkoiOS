@@ -468,6 +468,7 @@ struct FeatureBuilderFactory {
             },
             storeRepository: container.storeRepository,
             sessionStore: appState.sessionStore,
+            sendingCoordinator: container.chatSendingCoordinator,
             notificationService: container.appNotificationService,
             activeChatRoomTracker: container.activeChatRoomTracker,
             imageLoader: container.authorizedImageLoader,

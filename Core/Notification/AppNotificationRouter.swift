@@ -154,7 +154,7 @@ final class AppNotificationRouter: AppNotificationRouting {
     func markNavigationCompleted(route: AppNotificationRoute) {
         MainActorStateAssertions.assertMainActorForUIState("AppNotificationRouter.markNavigationCompleted")
         let pendingRoute = pendingRouteStore.pendingRoute
-        let isMatchingChat = route.chatRoomId.map { pendingRoute?.chatRoomId == $0 } ?? false
+        let isMatchingChat = pendingRoute.map { route.matchesChatRoute($0) } ?? false
         guard pendingRoute == route || isMatchingChat else { return }
         pendingRouteStore.clear()
         Logger(category: "PendingPushRoute").debug("[PendingPushRoute] clear route=\(route.logRouteName) \(route.logIdentifier) reason=navigated")
@@ -200,7 +200,7 @@ final class AppNotificationRouter: AppNotificationRouting {
         guard !isAlreadyActiveOrPending(route: route, appState: appState) else {
             Logger(category: "DeepLink").debug("[DeepLink] skipped reason=alreadyAtDestination route=\(route.debugDescription)")
             Logger(category: "PushDeepLink").debug("[PushDeepLink] navigate skipped reason=alreadyAtDestination routeKey=\(route.routeKey)")
-            let isMatchingPendingChat = route.chatRoomId.map { pendingRouteStore.pendingRoute?.chatRoomId == $0 } ?? false
+            let isMatchingPendingChat = pendingRouteStore.pendingRoute.map { route.matchesChatRoute($0) } ?? false
             if pendingRouteStore.pendingRoute == route || isMatchingPendingChat {
                 pendingRouteStore.clear()
                 Logger(category: "PendingPushRoute").debug("[PendingPushRoute] clear route=\(route.logRouteName) reason=alreadyAtDestination messageId=\(messageId ?? "unknown")")
@@ -380,10 +380,10 @@ final class AppNotificationRouter: AppNotificationRouting {
     }
 
     private func isAlreadyActiveOrPending(route: AppNotificationRoute, appState: AppState) -> Bool {
-        if let roomId = route.chatRoomId {
-            return appState.activeNotificationRoute?.chatRoomId == roomId
-                || appState.pendingNotificationRoute?.chatRoomId == roomId
-                || activeChatRoomTracker?.activeRoomId == roomId
+        if route.chatRouteScopeKey != nil {
+            return appState.activeNotificationRoute.map { route.matchesChatRoute($0) } ?? false
+                || appState.pendingNotificationRoute.map { route.matchesChatRoute($0) } ?? false
+                || (route.chatRoomId.map { activeChatRoomTracker?.activeRoomId == $0 } ?? false)
         }
 
         return appState.activeNotificationRoute == route
@@ -475,8 +475,8 @@ private extension AppNotificationRoute {
             return "order:\(orderCode)"
         case .orderList:
             return "orders"
-        case .chatRoom(let roomId, _, _):
-            return "chat:\(roomId)"
+        case .chatRoom(let roomId, let storeId, _):
+            return "chat:\(storeId?.nilIfEmpty ?? "-"):\(roomId)"
         case .storeDetail(let storeId):
             return "store:\(storeId)"
         case .videoDetail(let videoId):
@@ -496,6 +496,26 @@ private extension AppNotificationRoute {
         case .none:
             return "notice"
         }
+    }
+
+    var chatRouteScopeKey: String? {
+        guard case .chatRoom(let roomId, let storeId, _) = self else {
+            return nil
+        }
+        return "store:\(storeId?.nilIfEmpty ?? "-")|room:\(roomId)"
+    }
+
+    func matchesChatRoute(_ other: AppNotificationRoute) -> Bool {
+        guard case .chatRoom(let roomId, let storeId, _) = self,
+              case .chatRoom(let otherRoomId, let otherStoreId, _) = other,
+              roomId == otherRoomId else {
+            return false
+        }
+        guard let storeId = storeId?.nilIfEmpty,
+              let otherStoreId = otherStoreId?.nilIfEmpty else {
+            return true
+        }
+        return storeId == otherStoreId
     }
 
     var logIdentifier: String {
