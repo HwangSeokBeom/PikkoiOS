@@ -178,7 +178,10 @@ struct ImageUploadPreprocessor {
             if type.conforms(to: .gif) || type.conforms(to: .webP) {
                 return false
             }
-            return type.conforms(to: .image)
+            return type.conforms(to: .jpeg)
+                || type.conforms(to: .png)
+                || type.conforms(to: .heic)
+                || type.conforms(to: .heif)
         }
         return isProcessableImage(mimeType: mimeType, filename: filename)
     }

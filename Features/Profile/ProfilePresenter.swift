@@ -138,6 +138,7 @@ final class ProfilePresenter: ObservableObject {
 #if DEBUG
                 Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] originalUTI=\(processed.originalUTI) originalMime=\(processed.originalMimeType) originalByteSize=\(processed.originalBytes) originalPixelSize=\(Int(processed.originalPixelSize.width))x\(Int(processed.originalPixelSize.height)) orientation=\(processed.orientation)")
                 Logger(category: "ProfileImageNormalize").debug("[ProfileImageNormalize] outputMime=\(processed.mimeType) outputExtension=\(processed.fileExtension) outputByteSize=\(processed.data.count) outputPixelSize=\(Int(processed.pixelSize.width))x\(Int(processed.pixelSize.height)) compressionQuality=\(String(format: "%.2f", processed.compressionQuality)) downsampled=\(processed.didDownsample)")
+                Logger(category: "ProfileImage").debug("[ProfileImage] normalized outputType=\(profileImageOutputType(mimeType: processed.mimeType)) outputBytes=\(processed.data.count) maxBytes=\(ProfileImagePreprocessor.maxBytes) compression=\(String(format: "%.2f", processed.compressionQuality))")
                 Logger(category: "ProfileImage").debug("[ProfileImage] preprocess success outputType=\(profileImageOutputType(mimeType: processed.mimeType)) outputBytes=\(processed.data.count) compression=\(String(format: "%.2f", processed.compressionQuality)) maxPixel=\(Int(max(processed.pixelSize.width, processed.pixelSize.height)))")
 #endif
             } catch {

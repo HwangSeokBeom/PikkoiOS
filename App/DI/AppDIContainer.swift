@@ -248,7 +248,9 @@ final class AppDIContainer {
 
 #if DEBUG
     private static func atsExceptionExpected(for baseURL: URL?) -> Bool {
-        guard baseURL?.host?.caseInsensitiveCompare("pickup.sesac.kr") == .orderedSame else {
+        guard baseURL?.scheme?.caseInsensitiveCompare("http") == .orderedSame,
+              baseURL?.host?.caseInsensitiveCompare("pickup.sesac.kr") == .orderedSame,
+              baseURL?.port == 42678 else {
             return false
         }
 

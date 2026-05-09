@@ -204,9 +204,43 @@ final class AppConfigurationTests: XCTestCase {
         XCTAssertNil(configuration.portOnePgID)
         XCTAssertEqual(configuration.portOnePgIDDiagnostic.state, "placeholderOptional")
     }
+
+    func testPikkoInfoPlistContainsScopedPickupATSExceptionOnly() throws {
+        let plist = try loadRepositoryPlist(at: "Config/Pikko-Info.plist")
+
+        let ats = try XCTUnwrap(plist["NSAppTransportSecurity"] as? [String: Any])
+        XCTAssertNil(ats["NSAllowsArbitraryLoads"])
+
+        let domains = try XCTUnwrap(ats["NSExceptionDomains"] as? [String: Any])
+        XCTAssertEqual(Set(domains.keys), ["pickup.sesac.kr"])
+
+        let pickup = try XCTUnwrap(domains["pickup.sesac.kr"] as? [String: Any])
+        XCTAssertEqual(pickup["NSIncludesSubdomains"] as? Bool, true)
+        XCTAssertEqual(pickup["NSExceptionAllowsInsecureHTTPLoads"] as? Bool, true)
+        XCTAssertEqual(pickup["NSExceptionRequiresForwardSecrecy"] as? Bool, false)
+    }
+
+    func testProjectYAMLWiresPikkoTargetToCheckedInfoPlist() throws {
+        let projectYAML = try String(contentsOf: repositoryRoot().appendingPathComponent("project.yml"), encoding: .utf8)
+
+        XCTAssertTrue(projectYAML.contains("GENERATE_INFOPLIST_FILE: NO"))
+        XCTAssertTrue(projectYAML.contains("INFOPLIST_FILE: Config/Pikko-Info.plist"))
+    }
 }
 
 private extension AppConfigurationTests {
+    func loadRepositoryPlist(at relativePath: String) throws -> [String: Any] {
+        let data = try Data(contentsOf: repositoryRoot().appendingPathComponent(relativePath))
+        let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+        return try XCTUnwrap(plist as? [String: Any])
+    }
+
+    func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
     func makeBundle(infoDictionary: [String: Any]) throws -> Bundle {
         let fileManager = FileManager.default
         let bundleURL = fileManager.temporaryDirectory

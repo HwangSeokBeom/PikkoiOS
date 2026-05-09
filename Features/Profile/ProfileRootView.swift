@@ -562,7 +562,7 @@ private struct ProfilePhotoPicker: UIViewControllerRepresentable {
 #if DEBUG
             Logger(category: "ProfileImage").debug("[ProfileImage] load start itemType=\(typeIdentifier)")
 #endif
-            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { [parent] data, error in
+            Self.loadImageData(from: provider, typeIdentifier: typeIdentifier) { [parent] data, error in
                 if let error {
 #if DEBUG
                     Logger(category: "ProfileImage").warning("[ProfileImage] load failed reason=\(Self.sanitizedLoadFailureReason(from: error))")
@@ -586,6 +586,7 @@ private struct ProfilePhotoPicker: UIViewControllerRepresentable {
                 let fileName = Self.fileName(suggestedName: suggestedName, typeIdentifier: typeIdentifier)
                 let metadata = ProfileImagePreprocessor.diagnosticMetadata(data: data, filename: fileName)
 #if DEBUG
+                Logger(category: "ProfileImage").debug("[ProfileImage] selected asset contentType=\(metadata.contentType) originalBytes=\(data.count) pixelWidth=\(metadata.pixelWidth) pixelHeight=\(metadata.pixelHeight)")
                 Logger(category: "ProfileImage").debug("[ProfileImage] load success originalBytes=\(data.count) contentType=\(metadata.contentType) filename=\(fileName)")
                 if metadata.pixelWidth > 0, metadata.pixelHeight > 0 {
                     Logger(category: "ProfileImage").debug("[ProfileImage] decode success pixelWidth=\(metadata.pixelWidth) pixelHeight=\(metadata.pixelHeight) orientation=\(metadata.orientation)")
@@ -613,6 +614,25 @@ private struct ProfilePhotoPicker: UIViewControllerRepresentable {
                 ?? supported.first { $0.1.conforms(to: .heic) }?.0
                 ?? supported.first { $0.1.conforms(to: .heif) }?.0
                 ?? supported.first?.0
+        }
+
+        private static func loadImageData(
+            from provider: NSItemProvider,
+            typeIdentifier: String,
+            completion: @escaping @Sendable (Data?, Error?) -> Void
+        ) {
+            provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { fileURL, fileError in
+                if let fileURL,
+                   let data = try? Data(contentsOf: fileURL),
+                   !data.isEmpty {
+                    completion(data, nil)
+                    return
+                }
+
+                provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, dataError in
+                    completion(data, dataError ?? fileError)
+                }
+            }
         }
 
         private static func fileName(suggestedName: String, typeIdentifier: String) -> String {
