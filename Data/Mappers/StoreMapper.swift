@@ -35,7 +35,7 @@ struct StoreMapper: Sendable {
     func mapPage(_ dto: StoreSummaryListResponseDTO) -> CursorPage<StoreSummary> {
         CursorPage(
             items: dto.data.map { self.map($0) },
-            nextCursor: normalize(cursor: dto.nextCursor)
+            nextCursor: CursorPagination.normalizedCursor(dto.nextCursor)
         )
     }
 
@@ -71,16 +71,6 @@ struct StoreMapper: Sendable {
             createdAt: dto.createdAt.flatMap(dateParser.parseISO8601),
             updatedAt: dto.updatedAt.flatMap(dateParser.parseISO8601)
         )
-    }
-
-    private func normalize(cursor: String?) -> String? {
-        guard let cursor = cursor?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !cursor.isEmpty,
-              cursor != "0" else {
-            return nil
-        }
-
-        return cursor
     }
 
     private func resolveImagePath(_ path: String) -> String? {

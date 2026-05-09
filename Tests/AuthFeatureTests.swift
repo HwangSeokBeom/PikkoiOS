@@ -90,7 +90,7 @@ final class AuthFeatureTests: XCTestCase {
         let recordedCredential = await repository.recordedCredential
         XCTAssertEqual(recordedCredential?.provider, .kakao)
         let recordedDeviceToken = await repository.recordedSocialSignInDeviceToken
-        XCTAssertEqual(recordedDeviceToken, "debug-ios-simulator-device-token")
+        XCTAssertNil(recordedDeviceToken)
         XCTAssertTrue(sessionStore.isAuthenticated)
         XCTAssertEqual(sessionStore.currentUserID, "server-user")
         XCTAssertEqual(router.completeAuthenticationCount, 1)
@@ -116,14 +116,8 @@ final class AuthFeatureTests: XCTestCase {
 
         do {
             _ = try await productionInteractor.signIn(with: .kakao, deviceToken: nil)
-            XCTFail("Expected missing production device token to fail")
-        } catch let error as AuthDeviceTokenMissingError {
-            XCTAssertEqual(
-                error.errorDescription,
-                "푸시 알림 설정을 초기화하는 중입니다. 잠시 후 다시 시도해 주세요."
-            )
         } catch {
-            XCTFail("Unexpected error: \(error)")
+            XCTFail("Social sign-in should not require a login-time device token: \(error)")
         }
     }
 
@@ -522,7 +516,7 @@ final class ProfileFeatureTests: XCTestCase {
             presenter.viewState.editorProfileImagePath,
             "https://example.com/profile/uploaded.jpg"
         )
-        XCTAssertEqual(presenter.viewState.editorInfoMessage, "프로필 이미지를 업로드했어요.")
+        XCTAssertEqual(presenter.viewState.editorInfoMessage, "프로필 이미지가 변경되었어요.")
         XCTAssertNil(presenter.viewState.profileImageUploadErrorMessage)
     }
 

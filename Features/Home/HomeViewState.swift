@@ -55,51 +55,40 @@ struct HomeBannerItem: Identifiable, Equatable {
 }
 
 enum HomeNearbyStoreTab: String, CaseIterable, Equatable {
-    case nearby
-    case realtimeDistance
+    case distance
+    case orders
+    case reviews
 
     var title: String {
         switch self {
-        case .nearby:
-            return "주변 매장"
-        case .realtimeDistance:
-            return "실시간 거리"
+        case .distance:
+            return "거리순"
+        case .orders:
+            return "주문 많은순"
+        case .reviews:
+            return "리뷰 많은순"
         }
     }
 
     var systemImage: String? {
         switch self {
-        case .nearby:
+        case .distance:
             return "location.circle.fill"
-        case .realtimeDistance:
-            return "figure.walk"
-        }
-    }
-}
-
-enum HomeNearbyStoreSortOrder: Equatable {
-    case nearest
-    case farthest
-
-    mutating func toggle() {
-        self = self == .nearest ? .farthest : .nearest
-    }
-
-    var title: String {
-        switch self {
-        case .nearest:
-            return "거리순"
-        case .farthest:
-            return "먼거리순"
+        case .orders:
+            return "takeoutbag.and.cup.and.straw.fill"
+        case .reviews:
+            return "star.circle.fill"
         }
     }
 
-    var systemImage: String {
+    var storeSortOrder: StoreSortOrder {
         switch self {
-        case .nearest:
-            return "arrow.up"
-        case .farthest:
-            return "arrow.down"
+        case .distance:
+            return .distance
+        case .orders:
+            return .orders
+        case .reviews:
+            return .reviews
         }
     }
 }
@@ -118,10 +107,7 @@ struct HomeViewState {
     var bannerSectionMessage: String?
     var popularStoresSectionMessage: String?
     var nearbyStoresSectionMessage: String?
-    var selectedNearbyStoreTab: HomeNearbyStoreTab = .nearby
-    var nearbyStoreSortOrder: HomeNearbyStoreSortOrder = .nearest
-    var nearbyDistanceSortTitle: String { nearbyStoreSortOrder.title }
-    var nearbyDistanceSortSystemImage: String { nearbyStoreSortOrder.systemImage }
+    var selectedNearbyStoreTab: HomeNearbyStoreTab = .distance
     var nextCursor: String?
     var emptyState: HomeEmptyState?
     var isLoading = true

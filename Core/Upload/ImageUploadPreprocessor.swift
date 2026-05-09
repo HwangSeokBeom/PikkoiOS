@@ -96,7 +96,7 @@ struct ImageUploadPreprocessor {
         let hasAlpha = originalImage.hasAlpha
         let preferredMaxPixel = input.purpose == .profile ? min(maxInitialPixel, 1_024) : maxInitialPixel
         var pixelLimit = min(max(originalImage.size.width, originalImage.size.height), preferredMaxPixel)
-        while pixelLimit >= 480 {
+        while true {
             let candidate = resize(originalImage, maxPixel: pixelLimit) ?? originalImage
             let didDownsample = max(candidate.size.width, candidate.size.height) < max(originalImage.size.width, originalImage.size.height)
             if input.purpose != .profile,
@@ -141,6 +141,7 @@ struct ImageUploadPreprocessor {
                 }
             }
 
+            guard pixelLimit >= 480 else { break }
             pixelLimit *= 0.82
         }
 

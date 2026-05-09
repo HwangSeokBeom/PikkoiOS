@@ -89,15 +89,15 @@ final class HomePresenterTests: XCTestCase {
         XCTAssertFalse(keys.contains("videoSectionMessage"))
     }
 
-    func testNearbySortButtonKeepsNearbyTabAndTogglesSortOrder() async {
+    func testNearbyStoresPreserveServerOrderAndDeduplicateInitialPage() async {
         let interactor = StubHomeInteractor(
             loadHomeResult: .success(
                 makeHomeContent(
                     stores: [
                         makeStoreSummary(id: "far", name: "먼 가게", distanceMeters: 900),
                         makeStoreSummary(id: "near", name: "가까운 가게", distanceMeters: 120),
-                        makeStoreSummary(id: "middle", name: "중간 가게", distanceMeters: 450),
-                        makeStoreSummary(id: "unknown", name: "거리 미확인", distanceMeters: nil)
+                        makeStoreSummary(id: "far", name: "먼 가게 중복", distanceMeters: 900),
+                        makeStoreSummary(id: "middle", name: "중간 가게", distanceMeters: 450)
                     ]
                 )
             )
@@ -108,89 +108,64 @@ final class HomePresenterTests: XCTestCase {
         )
 
         await presenter.send(.onAppear)
-        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .nearby)
-        XCTAssertEqual(presenter.viewState.nearbyStoreSortOrder, .nearest)
-        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["near", "middle", "far", "unknown"])
 
-        await presenter.send(.nearbyDistanceSortTapped)
-
-        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .nearby)
-        XCTAssertEqual(presenter.viewState.nearbyStoreSortOrder, .farthest)
-        XCTAssertEqual(presenter.viewState.nearbyDistanceSortTitle, "먼거리순")
-        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["far", "middle", "near", "unknown"])
+        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .distance)
+        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["far", "near", "middle"])
     }
 
-    func testRealtimeSortButtonKeepsRealtimeTabAndTogglesSortOrder() async {
+    func testNearbyOrderTabReloadsWithDocumentedServerOrderBy() async {
+        let interactor = StubHomeInteractor(
+            loadHomeResult: .success(
+                makeHomeContent(stores: [makeStoreSummary()])
+            )
+        )
         let presenter = HomePresenter(
-            interactor: StubHomeInteractor(
-                loadHomeResult: .success(
-                    makeHomeContent(
-                        stores: [
-                            makeStoreSummary(id: "far", name: "먼 가게", distanceMeters: 900),
-                            makeStoreSummary(id: "near", name: "가까운 가게", distanceMeters: 120)
-                        ]
-                    )
-                )
-            ),
+            interactor: interactor,
             router: SpyHomeRouter()
         )
 
         await presenter.send(.onAppear)
-        await presenter.send(.nearbyStoreTabTapped(.realtimeDistance))
-        await presenter.send(.nearbyDistanceSortTapped)
+        await presenter.send(.nearbyStoreTabTapped(.orders))
+        await presenter.send(.nearbyStoreTabTapped(.reviews))
 
-        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .realtimeDistance)
-        XCTAssertEqual(presenter.viewState.nearbyStoreSortOrder, .farthest)
-        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["far", "near"])
+        XCTAssertEqual(interactor.requestedOrderByValues, [.distance, .orders, .reviews])
+        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .reviews)
     }
 
-    func testNearbyTabTapPreservesSortOrder() async {
-        let presenter = HomePresenter(
-            interactor: StubHomeInteractor(
-                loadHomeResult: .success(
-                    makeHomeContent(
-                        stores: [
-                            makeStoreSummary(id: "far", name: "먼 가게", distanceMeters: 900),
-                            makeStoreSummary(id: "near", name: "가까운 가게", distanceMeters: 120)
-                        ]
+    func testNearbyPaginationDeduplicatesStoresAndPreservesExistingOrder() async {
+        let interactor = StubHomeInteractor(
+            loadHomeResult: .success(
+                HomeContent(
+                    locationLabel: "문래역, 영등포구",
+                    popularKeywords: [],
+                    banners: [],
+                    popularStores: [],
+                    nearbyStoresPage: CursorPage(
+                        items: [
+                            makeStoreSummary(id: "store-1"),
+                            makeStoreSummary(id: "store-2")
+                        ],
+                        nextCursor: "cursor-1"
                     )
                 )
             ),
+            loadMorePage: CursorPage(
+                items: [
+                    makeStoreSummary(id: "store-2"),
+                    makeStoreSummary(id: "store-3")
+                ],
+                nextCursor: nil
+            )
+        )
+        let presenter = HomePresenter(
+            interactor: interactor,
             router: SpyHomeRouter()
         )
 
         await presenter.send(.onAppear)
-        await presenter.send(.nearbyDistanceSortTapped)
-        await presenter.send(.nearbyStoreTabTapped(.realtimeDistance))
-        await presenter.send(.nearbyStoreTabTapped(.nearby))
+        await presenter.send(.nearbyStoreAppeared("store-2"))
 
-        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .nearby)
-        XCTAssertEqual(presenter.viewState.nearbyStoreSortOrder, .farthest)
-        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["far", "near"])
-    }
-
-    func testRealtimeTabTapPreservesSortOrder() async {
-        let presenter = HomePresenter(
-            interactor: StubHomeInteractor(
-                loadHomeResult: .success(
-                    makeHomeContent(
-                        stores: [
-                            makeStoreSummary(id: "far", name: "먼 가게", distanceMeters: 900),
-                            makeStoreSummary(id: "near", name: "가까운 가게", distanceMeters: 120)
-                        ]
-                    )
-                )
-            ),
-            router: SpyHomeRouter()
-        )
-
-        await presenter.send(.onAppear)
-        await presenter.send(.nearbyDistanceSortTapped)
-        await presenter.send(.nearbyStoreTabTapped(.realtimeDistance))
-
-        XCTAssertEqual(presenter.viewState.selectedNearbyStoreTab, .realtimeDistance)
-        XCTAssertEqual(presenter.viewState.nearbyStoreSortOrder, .farthest)
-        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["far", "near"])
+        XCTAssertEqual(presenter.viewState.nearbyStores.map(\.id), ["store-1", "store-2", "store-3"])
     }
 
     func testHomePresenterSkipsHomeAPIsWhenSessionIsUnauthenticated() async {
@@ -541,27 +516,41 @@ final class StoreListPresenterTests: XCTestCase {
 private final class StubHomeInteractor: HomeInteracting {
     private(set) var loadHomeCallCount = 0
     private(set) var currentLocationRequestCallCount = 0
+    private(set) var requestedOrderByValues: [StoreSortOrder] = []
     private let loadHomeResult: Result<HomeContent, Error>
+    private let loadMorePage: CursorPage<StoreSummary>
     private let currentLocationResult: HomeLocationRequestResult
     private let notificationUnreadCountValue: Int
 
     init(
         loadHomeResult: Result<HomeContent, Error>,
+        loadMorePage: CursorPage<StoreSummary> = CursorPage(items: [], nextCursor: nil),
         currentLocationResult: HomeLocationRequestResult = .available,
         notificationUnreadCount: Int = 0
     ) {
         self.loadHomeResult = loadHomeResult
+        self.loadMorePage = loadMorePage
         self.currentLocationResult = currentLocationResult
         self.notificationUnreadCountValue = notificationUnreadCount
     }
 
     func loadHome(category: String?) async throws -> HomeContent {
+        try await loadHome(category: category, orderBy: .distance)
+    }
+
+    func loadHome(category: String?, orderBy: StoreSortOrder) async throws -> HomeContent {
         loadHomeCallCount += 1
+        requestedOrderByValues.append(orderBy)
         return try loadHomeResult.get()
     }
 
     func loadMoreNearbyStores(category: String?, nextCursor: String) async throws -> CursorPage<StoreSummary> {
-        CursorPage(items: [], nextCursor: nil)
+        try await loadMoreNearbyStores(category: category, nextCursor: nextCursor, orderBy: .distance)
+    }
+
+    func loadMoreNearbyStores(category: String?, nextCursor: String, orderBy: StoreSortOrder) async throws -> CursorPage<StoreSummary> {
+        requestedOrderByValues.append(orderBy)
+        return loadMorePage
     }
 
     func updateLikeStatus(storeID: String, isLiked: Bool) async throws -> Bool {

@@ -397,15 +397,27 @@ final class CommunityComposerFeatureTests: XCTestCase {
         }
     }
 
-    func testMediaUploadPreprocessorRejectsOversizedNonImage() {
+    func testMediaUploadPreprocessorRejectsOversizedNonCompressibleMedia() {
         let file = CommunityPostUploadFile(
             data: Data(repeating: 7, count: 12),
+            fileName: "large.mp4",
+            mimeType: "video/mp4"
+        )
+
+        XCTAssertThrowsError(try MediaUploadPreprocessor().process(file, maxBytes: 10)) { error in
+            XCTAssertEqual(error as? MediaUploadPreprocessorError, .fileTooLarge)
+        }
+    }
+
+    func testMediaUploadPreprocessorRejectsUnsupportedPostFileType() {
+        let file = CommunityPostUploadFile(
+            data: Data(repeating: 7, count: 4),
             fileName: "large.pdf",
             mimeType: "application/pdf"
         )
 
         XCTAssertThrowsError(try MediaUploadPreprocessor().process(file, maxBytes: 10)) { error in
-            XCTAssertEqual(error as? MediaUploadPreprocessorError, .fileTooLarge)
+            XCTAssertEqual(error as? MediaUploadPreprocessorError, .unsupportedType)
         }
     }
 

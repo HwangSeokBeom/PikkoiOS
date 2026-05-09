@@ -4,11 +4,8 @@ struct HomePickedStoresSectionView: View {
     let stores: [StoreCard.Model]
     let emptyMessage: String?
     let selectedTab: HomeNearbyStoreTab
-    let distanceSortTitle: String
-    let distanceSortSystemImage: String
     let imageLoader: any AuthorizedImageLoading
     let onTabTap: (HomeNearbyStoreTab) -> Void
-    let onDistanceSortTap: () -> Void
     let onLikeTap: (String) -> Void
     let onStoreTap: (String) -> Void
     let onStoreAppear: (String) -> Void
@@ -17,9 +14,7 @@ struct HomePickedStoresSectionView: View {
         VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
             SectionHeader(
                 title: "내 주변 가게",
-                actionTitle: distanceSortTitle,
-                actionSystemImage: distanceSortSystemImage,
-                action: onDistanceSortTap,
+                subtitle: "서버 정렬 기준으로 보여드려요",
                 size: .compact
             )
 

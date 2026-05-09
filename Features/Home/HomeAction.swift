@@ -17,7 +17,6 @@ enum HomeAction {
     case categoryTapped(String)
     case bannerTapped(id: String, index: Int)
     case nearbyStoreTabTapped(HomeNearbyStoreTab)
-    case nearbyDistanceSortTapped
     case popularStoreTapped(String)
     case nearbyStoreTapped(String)
     case nearbyStoreAppeared(String)

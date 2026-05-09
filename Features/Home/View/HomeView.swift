@@ -118,14 +118,9 @@ struct HomeView: View {
                                 stores: presenter.viewState.nearbyStores,
                                 emptyMessage: presenter.viewState.nearbyStoresSectionMessage,
                                 selectedTab: presenter.viewState.selectedNearbyStoreTab,
-                                distanceSortTitle: presenter.viewState.nearbyDistanceSortTitle,
-                                distanceSortSystemImage: presenter.viewState.nearbyDistanceSortSystemImage,
                                 imageLoader: imageLoader,
                                 onTabTap: { tab in
                                     Task { await presenter.send(.nearbyStoreTabTapped(tab)) }
-                                },
-                                onDistanceSortTap: {
-                                    Task { await presenter.send(.nearbyDistanceSortTapped) }
                                 },
                                 onLikeTap: { storeID in
                                     Task { await presenter.send(.likeTapped(storeID)) }

@@ -17,6 +17,7 @@ struct MediaUploadPreprocessorResult: Equatable, Sendable {
 
 enum MediaUploadPreprocessorError: Error, Equatable {
     case fileTooLarge
+    case unsupportedType
 }
 
 extension MediaUploadPreprocessorError: LocalizedError {
@@ -24,6 +25,8 @@ extension MediaUploadPreprocessorError: LocalizedError {
         switch self {
         case .fileTooLarge:
             return "파일 크기가 너무 커요. 더 작은 파일을 선택해 주세요."
+        case .unsupportedType:
+            return "지원하지 않는 파일 형식이에요. jpg, jpeg, png, gif, webp, mp4, mov, avi, mkv, wmv만 가능해요."
         }
     }
 }
@@ -36,8 +39,25 @@ struct MediaUploadPreprocessor {
         _ file: CommunityPostUploadFile,
         maxBytes: Int = CommunityUploadConfiguration.maxAttachmentBytes
     ) throws -> MediaUploadPreprocessorResult {
+        let descriptor: FileUploadDescriptor
+        do {
+            descriptor = try FileUploadValidator.descriptor(
+                fileName: file.fileName,
+                mimeType: file.mimeType,
+                typeIdentifier: nil,
+                policy: .postFiles
+            )
+        } catch FileUploadValidationError.unsupportedType {
+            throw MediaUploadPreprocessorError.unsupportedType
+        }
+
         let originalBytes = file.data.count
         guard originalBytes > maxBytes else {
+            try FileUploadValidator.validateSize(
+                byteCount: originalBytes,
+                fileName: file.fileName,
+                policy: .postFiles
+            )
             log(
                 originalBytes: originalBytes,
                 finalBytes: originalBytes,
@@ -54,7 +74,7 @@ struct MediaUploadPreprocessor {
             )
         }
 
-        guard imagePreprocessor.isProcessableImage(mimeType: file.mimeType, filename: file.fileName) else {
+        guard descriptor.isCompressibleImage else {
             logFailure(originalBytes: originalBytes, reason: "nonImageOverLimit")
             throw MediaUploadPreprocessorError.fileTooLarge
         }

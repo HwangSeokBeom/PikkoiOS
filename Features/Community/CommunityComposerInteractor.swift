@@ -258,6 +258,10 @@ struct CommunityComposerInteractor: CommunityComposerInteracting {
             return .validation(message: preprocessingError.localizedDescription)
         }
 
+        if let validationError = error as? FileUploadValidationError {
+            return .validation(message: validationError.localizedDescription)
+        }
+
         guard let networkError = error as? NetworkError else {
             return .unavailable(message: error.localizedDescription)
         }

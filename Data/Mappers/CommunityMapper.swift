@@ -15,7 +15,7 @@ struct CommunityMapper: Sendable {
     func mapPage(_ dto: CommunityPostSummaryPaginationResponseDTO) -> CursorPage<CommunityPostSummary> {
         CursorPage(
             items: dto.data.map(map),
-            nextCursor: normalize(cursor: dto.nextCursor)
+            nextCursor: CursorPagination.normalizedCursor(dto.nextCursor)
         )
     }
 
@@ -49,7 +49,7 @@ struct CommunityMapper: Sendable {
     ) -> CursorPage<CommunityComment> {
         CursorPage(
             items: dto.data.map { mapComment($0, postID: postID, parentCommentID: nil) },
-            nextCursor: normalize(cursor: dto.nextCursor)
+            nextCursor: CursorPagination.normalizedCursor(dto.nextCursor)
         )
     }
 
@@ -177,16 +177,6 @@ struct CommunityMapper: Sendable {
             createdAt: createdAt.flatMap(dateParser.parseISO8601),
             updatedAt: updatedAt.flatMap(dateParser.parseISO8601)
         )
-    }
-
-    private func normalize(cursor: String?) -> String? {
-        guard let cursor = cursor?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !cursor.isEmpty,
-              cursor != "0" else {
-            return nil
-        }
-
-        return cursor
     }
 
     private func resolvePath(_ path: String?) -> String? {

@@ -808,7 +808,11 @@ struct StoreListInteractor: StoreListInteracting {
             switch mode {
             case .search(let query):
                 return CursorPage(
-                    items: try await storeRepository.searchStores(name: query),
+                    items: CursorPagination.merged(
+                        existing: [],
+                        incoming: try await storeRepository.searchStores(name: query),
+                        id: \.storeId
+                    ),
                     nextCursor: nil
                 )
             case .liked(let category):
@@ -951,7 +955,8 @@ final class StoreListPresenter: ObservableObject {
 
         do {
             let page = try await interactor.loadInitialStores()
-            viewState.stores = page.items.map(makeStoreCardModel)
+            viewState.stores = CursorPagination.merged(existing: [], incoming: page.items, id: \.storeId)
+                .map(makeStoreCardModel)
             viewState.nextCursor = page.nextCursor
             hasLoaded = true
 
@@ -985,7 +990,9 @@ final class StoreListPresenter: ObservableObject {
 
         do {
             let nextPage = try await interactor.loadMoreStores(nextCursor: nextCursor)
-            viewState.stores.append(contentsOf: nextPage.items.map(makeStoreCardModel))
+            let existingIDs = Set(viewState.stores.map(\.id))
+            let newItems = nextPage.items.filter { !existingIDs.contains($0.storeId) }
+            viewState.stores.append(contentsOf: newItems.map(makeStoreCardModel))
             viewState.nextCursor = nextPage.nextCursor
         } catch {
             viewState.errorMessage = resolveErrorMessage(from: error)
@@ -3689,7 +3696,26 @@ struct ReviewComposerInteractor: ReviewComposerInteracting {
 
     func uploadImages(storeID: String, files: [StoreReviewUploadFile]) async throws -> [String] {
         do {
+            try FileUploadValidator.validateFileCount(
+                incomingCount: files.count,
+                policy: .reviewImages
+            )
+            for file in files {
+                _ = try FileUploadValidator.descriptor(
+                    fileName: file.fileName,
+                    mimeType: file.mimeType,
+                    typeIdentifier: nil,
+                    policy: .reviewImages
+                )
+                try FileUploadValidator.validateSize(
+                    byteCount: file.data.count,
+                    fileName: file.fileName,
+                    policy: .reviewImages
+                )
+            }
             return try await reviewRepository.uploadReviewImages(storeID: storeID, files: files)
+        } catch let error as FileUploadValidationError {
+            throw ReviewComposerFeatureError.invalidInput(error.localizedDescription)
         } catch {
             throw map(error: error, fallback: "리뷰 이미지를 업로드하지 못했어요.")
         }

@@ -438,6 +438,60 @@ final class NetworkInfrastructureTests: XCTestCase {
         XCTAssertEqual(error, .conflict(message: "이미 가입된 유저입니다."))
     }
 
+    func testHTTPStatusMapperSuppressesRawServerGatekeepingMessage() {
+        let data = #"{"message":"돌아가 여긴 자네가 올 곳이 아니야."}"#.data(using: .utf8)!
+
+        let error = HTTPStatusMapper.map(statusCode: 444, data: data)
+
+        XCTAssertEqual(error, .notFound(message: "요청한 정보를 찾을 수 없어요."))
+    }
+
+    func testCursorPaginationMergeDeduplicatesAndPreservesFirstSeenOrder() {
+        let merged = CursorPagination.merged(
+            existing: ["store-1", "store-2"],
+            incoming: ["store-2", "store-3"],
+            id: { $0 }
+        )
+
+        XCTAssertEqual(merged, ["store-1", "store-2", "store-3"])
+        XCTAssertNil(CursorPagination.normalizedCursor("0"))
+        XCTAssertNil(CursorPagination.normalizedCursor(" "))
+        XCTAssertEqual(CursorPagination.normalizedCursor(" cursor "), "cursor")
+    }
+
+    func testFileUploadValidatorAppliesEndpointPolicies() throws {
+        XCTAssertNoThrow(
+            try FileUploadValidator.validateFileCount(incomingCount: 5, policy: .postFiles)
+        )
+        XCTAssertThrowsError(
+            try FileUploadValidator.validateFileCount(incomingCount: 6, policy: .postFiles)
+        ) { error in
+            XCTAssertEqual(error as? FileUploadValidationError, .tooManyFiles(maxCount: 5))
+        }
+
+        let chatDescriptor = try FileUploadValidator.descriptor(
+            fileName: "receipt.PDF",
+            mimeType: "application/pdf",
+            typeIdentifier: "com.adobe.pdf",
+            policy: .chatFiles
+        )
+        XCTAssertTrue(chatDescriptor.isSupported)
+
+        XCTAssertThrowsError(
+            try FileUploadValidator.descriptor(
+                fileName: "receipt.PDF",
+                mimeType: "application/pdf",
+                typeIdentifier: "com.adobe.pdf",
+                policy: .reviewImages
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? FileUploadValidationError,
+                .unsupportedType(fileName: "receipt.PDF", allowedExtensions: ["jpeg", "jpg", "png"])
+            )
+        }
+    }
+
     func testAPIClientRefreshesOn401AndRetriesOriginalRequestOnce() async throws {
         let tokenStore = StubTokenStore(
             tokens: StoredTokens(accessToken: "expired-access", refreshToken: "refresh-token")

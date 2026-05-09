@@ -13,7 +13,6 @@ final class HomePresenter: ObservableObject {
     private var isPaging = false
     private var isConfigurationBlocked = false
     private var nearbyStoreSummaries: [StoreSummary] = []
-    private var realtimeDistanceStoreSummaries: [StoreSummary] = []
 
     init(
         interactor: HomeInteracting,
@@ -78,11 +77,10 @@ final class HomePresenter: ObservableObject {
             guard banner.id == bannerID else { return }
             router.routeToBanner(banner)
         case .nearbyStoreTabTapped(let tab):
+            guard viewState.selectedNearbyStoreTab != tab else { return }
             viewState.selectedNearbyStoreTab = tab
-            applyNearbyStores()
-        case .nearbyDistanceSortTapped:
-            viewState.nearbyStoreSortOrder.toggle()
-            applyNearbyStores()
+            guard !isConfigurationBlocked else { return }
+            await loadHome(isRefresh: true)
         case .popularStoreTapped(let storeID), .nearbyStoreTapped(let storeID):
             router.routeToStoreDetail(storeID: storeID)
         case .nearbyStoreAppeared(let storeID):
@@ -111,7 +109,10 @@ final class HomePresenter: ObservableObject {
         clearSectionMessages()
 
         do {
-            let content = try await interactor.loadHome(category: selectedCategoryAPIValue)
+            let content = try await interactor.loadHome(
+                category: selectedCategoryAPIValue,
+                orderBy: selectedNearbyStoreSortOrder
+            )
             apply(content: content)
             hasLoaded = true
             isConfigurationBlocked = false
@@ -148,10 +149,14 @@ final class HomePresenter: ObservableObject {
         do {
             let nextPage = try await interactor.loadMoreNearbyStores(
                 category: selectedCategoryAPIValue,
-                nextCursor: nextCursor
+                nextCursor: nextCursor,
+                orderBy: selectedNearbyStoreSortOrder
             )
-            nearbyStoreSummaries.append(contentsOf: nextPage.items)
-            realtimeDistanceStoreSummaries.append(contentsOf: nextPage.items)
+            nearbyStoreSummaries = CursorPagination.merged(
+                existing: nearbyStoreSummaries,
+                incoming: nextPage.items,
+                id: \.storeId
+            )
             applyNearbyStores()
             viewState.nextCursor = nextPage.nextCursor
         } catch {
@@ -215,8 +220,11 @@ final class HomePresenter: ObservableObject {
         viewState.popularKeywords = content.popularKeywords
         viewState.banners = content.banners.map(makeBannerItem)
         viewState.popularStores = content.popularStores.map(makeStoreCardModel)
-        nearbyStoreSummaries = content.nearbyStoresPage.items
-        realtimeDistanceStoreSummaries = content.nearbyStoresPage.items
+        nearbyStoreSummaries = CursorPagination.merged(
+            existing: [],
+            incoming: content.nearbyStoresPage.items,
+            id: \.storeId
+        )
         applyNearbyStores()
         viewState.popularKeywordsSectionMessage = nil
         viewState.bannerSectionMessage = nil
@@ -255,63 +263,12 @@ final class HomePresenter: ObservableObject {
 
     private func applyLikeStatus(_ isLiked: Bool, to storeID: String) {
         nearbyStoreSummaries = nearbyStoreSummaries.map { updatedLikeSummary($0, storeID: storeID, isLiked: isLiked) }
-        realtimeDistanceStoreSummaries = realtimeDistanceStoreSummaries.map { updatedLikeSummary($0, storeID: storeID, isLiked: isLiked) }
         viewState.popularStores = viewState.popularStores.map { updatedLikeModel($0, storeID: storeID, isLiked: isLiked) }
         viewState.nearbyStores = viewState.nearbyStores.map { updatedLikeModel($0, storeID: storeID, isLiked: isLiked) }
     }
 
     private func applyNearbyStores() {
-        let sourceStores: [StoreSummary]
-        switch viewState.selectedNearbyStoreTab {
-        case .nearby:
-            sourceStores = nearbyStoreSummaries
-        case .realtimeDistance:
-            sourceStores = realtimeDistanceStoreSummaries
-        }
-
-        let stores = sortedNearbyStores(
-            sourceStores,
-            tab: viewState.selectedNearbyStoreTab,
-            sortOrder: viewState.nearbyStoreSortOrder
-        )
-        viewState.nearbyStores = stores.map(makeStoreCardModel)
-    }
-
-    private func sortedNearbyStores(
-        _ stores: [StoreSummary],
-        tab: HomeNearbyStoreTab,
-        sortOrder: HomeNearbyStoreSortOrder
-    ) -> [StoreSummary] {
-        stores.sorted { lhs, rhs in
-            let lhsKey = nearbySortKey(for: lhs, tab: tab)
-            let rhsKey = nearbySortKey(for: rhs, tab: tab)
-
-            switch (lhsKey, rhsKey) {
-            case let (lhsKey?, rhsKey?):
-                if lhsKey == rhsKey {
-                    return lhs.name < rhs.name
-                }
-
-                return sortOrder == .nearest
-                    ? lhsKey < rhsKey
-                    : lhsKey > rhsKey
-            case (_?, nil):
-                return true
-            case (nil, _?):
-                return false
-            case (nil, nil):
-                return lhs.name < rhs.name
-            }
-        }
-    }
-
-    private func nearbySortKey(for store: StoreSummary, tab: HomeNearbyStoreTab) -> Double? {
-        switch tab {
-        case .nearby:
-            return store.distanceMeters
-        case .realtimeDistance:
-            return store.distanceMeters
-        }
+        viewState.nearbyStores = nearbyStoreSummaries.map(makeStoreCardModel)
     }
 
     private func updatedLikeModel(_ model: StoreCard.Model, storeID: String, isLiked: Bool) -> StoreCard.Model {
@@ -385,6 +342,10 @@ final class HomePresenter: ObservableObject {
 
     private var selectedCategoryAPIValue: String? {
         viewState.selectedCategory?.apiValue
+    }
+
+    private var selectedNearbyStoreSortOrder: StoreSortOrder {
+        viewState.selectedNearbyStoreTab.storeSortOrder
     }
 
     private func makeBannerItem(_ banner: Banner) -> HomeBannerItem {

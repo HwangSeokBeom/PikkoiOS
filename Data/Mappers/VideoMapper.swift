@@ -45,7 +45,7 @@ struct VideoMapper: Sendable {
 
         return CursorPage(
             items: items,
-            nextCursor: normalize(cursor: dto.nextCursor)
+            nextCursor: CursorPagination.normalizedCursor(dto.nextCursor)
         )
     }
 
@@ -130,16 +130,6 @@ struct VideoMapper: Sendable {
         }
 
         return quality
-    }
-
-    private func normalize(cursor: String?) -> String? {
-        guard let cursor = cursor?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !cursor.isEmpty,
-              cursor != "0" else {
-            return nil
-        }
-
-        return cursor
     }
 
     private func resolveAbsoluteString(_ path: String) -> String? {

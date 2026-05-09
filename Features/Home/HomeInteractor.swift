@@ -12,7 +12,8 @@ enum HomeLocationRequestResult: Equatable {
 @MainActor
 protocol HomeInteracting {
     func loadHome(category: String?) async throws -> HomeContent
-    func loadMoreNearbyStores(category: String?, nextCursor: String) async throws -> CursorPage<StoreSummary>
+    func loadHome(category: String?, orderBy: StoreSortOrder) async throws -> HomeContent
+    func loadMoreNearbyStores(category: String?, nextCursor: String, orderBy: StoreSortOrder) async throws -> CursorPage<StoreSummary>
     func updateLikeStatus(storeID: String, isLiked: Bool) async throws -> Bool
     func notificationUnreadCount() -> Int
     func requestCurrentLocationForHome() async -> HomeLocationRequestResult
@@ -42,6 +43,10 @@ struct HomeInteractor: HomeInteracting {
     }
 
     func loadHome(category: String?) async throws -> HomeContent {
+        try await loadHome(category: category, orderBy: .distance)
+    }
+
+    func loadHome(category: String?, orderBy: StoreSortOrder) async throws -> HomeContent {
         do {
             let locationContext = await resolveLocationContext(requestIfNeeded: true)
 
@@ -61,8 +66,8 @@ struct HomeInteractor: HomeInteracting {
                     latitude: locationContext.latitude,
                     maxDistance: 3000,
                     nextCursor: nil,
-                    limit: 5,
-                    orderBy: .distance
+                    limit: 10,
+                    orderBy: orderBy
                 )
             }
 
@@ -104,6 +109,10 @@ struct HomeInteractor: HomeInteracting {
     }
 
     func loadMoreNearbyStores(category: String?, nextCursor: String) async throws -> CursorPage<StoreSummary> {
+        try await loadMoreNearbyStores(category: category, nextCursor: nextCursor, orderBy: .distance)
+    }
+
+    func loadMoreNearbyStores(category: String?, nextCursor: String, orderBy: StoreSortOrder) async throws -> CursorPage<StoreSummary> {
         do {
             let locationContext = await resolveLocationContext(requestIfNeeded: false)
             return try await storeRepository.fetchNearbyStores(
@@ -112,8 +121,8 @@ struct HomeInteractor: HomeInteracting {
                 latitude: locationContext.latitude,
                 maxDistance: 3000,
                 nextCursor: nextCursor,
-                limit: 5,
-                orderBy: .distance
+                limit: 10,
+                orderBy: orderBy
             )
         } catch {
             throw map(error)

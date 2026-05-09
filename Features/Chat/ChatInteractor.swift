@@ -453,17 +453,8 @@ struct ChatUploadFile: Equatable, Sendable {
 }
 
 enum ChatUploadPolicy {
-    static let maxFileCount = 5
-    static let maxFileSizeBytes = 5 * 1024 * 1024
-
-    static let allowedExtensions: Set<String> = ["jpg", "jpeg", "png", "gif", "pdf"]
-    static let allowedMimeTypes: Set<String> = [
-        "image/jpeg",
-        "image/jpg",
-        "image/png",
-        "image/gif",
-        "application/pdf"
-    ]
+    static let maxFileCount = FileUploadEndpointPolicy.chatFiles.maxFileCount
+    static let maxFileSizeBytes = FileUploadEndpointPolicy.chatFiles.maxFileSizeBytes
 }
 
 enum ChatRoomListPaginationPolicy {
@@ -499,9 +490,16 @@ extension ChatUploadValidationError: LocalizedError {
 
 enum ChatUploadValidator {
     static func validateFileCount(existingCount: Int = 0, incomingCount: Int) throws {
-        guard incomingCount > 0 else { return }
-        guard existingCount + incomingCount <= ChatUploadPolicy.maxFileCount else {
+        do {
+            try FileUploadValidator.validateFileCount(
+                existingCount: existingCount,
+                incomingCount: incomingCount,
+                policy: .chatFiles
+            )
+        } catch FileUploadValidationError.tooManyFiles {
             throw ChatUploadValidationError.tooManyFiles
+        } catch {
+            throw error
         }
     }
 
@@ -513,9 +511,18 @@ enum ChatUploadValidator {
     }
 
     static func prepareFile(_ file: ChatUploadFile) throws -> ChatUploadFile {
-        let descriptor = ChatUploadTypeDescriptor(file: file)
-        guard descriptor.isSupported else {
+        let descriptor: FileUploadDescriptor
+        do {
+            descriptor = try FileUploadValidator.descriptor(
+                fileName: file.fileName,
+                mimeType: file.mimeType,
+                typeIdentifier: file.typeIdentifier,
+                policy: .chatFiles
+            )
+        } catch FileUploadValidationError.unsupportedType {
             throw ChatUploadValidationError.unsupportedType(fileName: file.fileName)
+        } catch {
+            throw error
         }
 
         guard file.data.count > ChatUploadPolicy.maxFileSizeBytes else {
@@ -540,7 +547,7 @@ enum ChatUploadValidator {
                     data: processed.data,
                     fileName: processed.filename,
                     mimeType: processed.mimeType,
-                    typeIdentifier: descriptor.typeIdentifier
+                    typeIdentifier: file.typeIdentifier
                 )
             } catch ImageUploadPreprocessorError.overLimitAfterCompression {
                 throw ChatUploadValidationError.imageStillTooLarge(fileName: file.fileName)
@@ -550,63 +557,6 @@ enum ChatUploadValidator {
         }
 
         throw ChatUploadValidationError.fileTooLarge(fileName: file.fileName)
-    }
-}
-
-struct ChatUploadTypeDescriptor: Equatable {
-    let normalizedExtension: String
-    let normalizedMimeType: String
-    let typeIdentifier: String?
-
-    init(file: ChatUploadFile) {
-        self.normalizedExtension = (file.fileName as NSString).pathExtension.lowercased()
-        self.normalizedMimeType = file.mimeType.lowercased()
-        self.typeIdentifier = file.typeIdentifier
-    }
-
-    var isSupported: Bool {
-        extensionIsSupported && (mimeTypeIsSupported || utiIsSupported || typeIdentifier == nil)
-    }
-
-    var isCompressibleImage: Bool {
-        normalizedExtension == "jpg"
-            || normalizedExtension == "jpeg"
-            || normalizedExtension == "png"
-            || normalizedMimeType == "image/jpeg"
-            || normalizedMimeType == "image/jpg"
-            || normalizedMimeType == "image/png"
-            || conforms(to: .jpeg)
-            || conforms(to: .png)
-    }
-
-    private var extensionIsSupported: Bool {
-        guard !normalizedExtension.isEmpty else {
-            return mimeTypeIsSupported || utiIsSupported
-        }
-        return ChatUploadPolicy.allowedExtensions.contains(normalizedExtension)
-    }
-
-    private var mimeTypeIsSupported: Bool {
-        ChatUploadPolicy.allowedMimeTypes.contains(normalizedMimeType)
-    }
-
-    private var utiIsSupported: Bool {
-        guard let typeIdentifier,
-              let type = UTType(typeIdentifier) else {
-            return false
-        }
-        return type.conforms(to: .jpeg)
-            || type.conforms(to: .png)
-            || type.conforms(to: .gif)
-            || type.conforms(to: .pdf)
-    }
-
-    private func conforms(to parent: UTType) -> Bool {
-        guard let typeIdentifier,
-              let type = UTType(typeIdentifier) else {
-            return false
-        }
-        return type.conforms(to: parent)
     }
 }
 

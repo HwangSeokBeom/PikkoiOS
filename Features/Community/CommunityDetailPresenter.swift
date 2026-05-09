@@ -349,6 +349,7 @@ final class CommunityDetailPresenter: ObservableObject {
             pendingCommentIDs.remove(localTemporaryID)
             failedCommentIDs.insert(localTemporaryID)
             submittingCommentDraftKeys.remove(draftKey)
+            viewState.commentSection.composerText = draft
             viewState.commentSection.isSubmittingComment = false
             syncAllViewState()
             applyCommentFailure(error)

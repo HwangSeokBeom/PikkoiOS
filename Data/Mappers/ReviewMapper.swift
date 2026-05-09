@@ -15,7 +15,7 @@ struct ReviewMapper: Sendable {
     func mapPage(_ dto: ReviewListResponseDTO) -> CursorPage<StoreReview> {
         CursorPage(
             items: dto.data.map(map),
-            nextCursor: normalize(cursor: dto.nextCursor)
+            nextCursor: CursorPagination.normalizedCursor(dto.nextCursor)
         )
     }
 
@@ -46,7 +46,7 @@ struct ReviewMapper: Sendable {
     func mapUserReviewPage(_ dto: UserReviewListResponseDTO) -> CursorPage<UserStoreReview> {
         CursorPage(
             items: dto.data.map(mapUserReview),
-            nextCursor: normalize(cursor: dto.nextCursor)
+            nextCursor: CursorPagination.normalizedCursor(dto.nextCursor)
         )
     }
 
@@ -101,16 +101,6 @@ struct ReviewMapper: Sendable {
             longitude: dto.geolocation?.longitude,
             latitude: dto.geolocation?.latitude
         )
-    }
-
-    private func normalize(cursor: String?) -> String? {
-        guard let cursor = cursor?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !cursor.isEmpty,
-              cursor != "0" else {
-            return nil
-        }
-
-        return cursor
     }
 
     private func resolvePath(_ path: String?) -> String? {

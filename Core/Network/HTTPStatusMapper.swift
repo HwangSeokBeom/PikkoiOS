@@ -49,7 +49,10 @@ private enum ResponseMessageParser {
             return defaultMessage(for: statusCode)
         }
 
-        return extractMessage(from: object) ?? defaultMessage(for: statusCode)
+        return sanitizedMessage(
+            extractMessage(from: object),
+            statusCode: statusCode
+        )
     }
 
     private static func extractMessage(from object: Any) -> String? {
@@ -83,17 +86,45 @@ private enum ResponseMessageParser {
     private static func defaultMessage(for statusCode: Int) -> String {
         switch statusCode {
         case 444:
-            return "The requested file was not found or is blocked."
+            return "요청한 정보를 찾을 수 없어요."
         case 404:
-            return "The requested resource was not found."
+            return "요청한 정보를 찾을 수 없어요."
         case 409:
-            return "The request conflicts with the current server state."
+            return "이미 처리된 요청이거나 현재 상태와 맞지 않아요."
         case 445:
-            return "The current user is not authorized for this business action."
+            return "이 작업을 진행할 권한이 없어요."
+        case 429:
+            return "요청이 너무 많아요. 잠시 후 다시 시도해 주세요."
         case 500...599:
-            return "The server returned an unexpected error."
+            return "서버 응답이 원활하지 않습니다. 잠시 후 다시 시도해 주세요."
         default:
-            return "The server returned an unexpected response."
+            return "요청을 처리하지 못했어요."
         }
+    }
+
+    private static func sanitizedMessage(_ message: String?, statusCode: Int) -> String {
+        guard let message = message?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !message.isEmpty else {
+            return defaultMessage(for: statusCode)
+        }
+
+        if shouldSuppressRawServerMessage(message, statusCode: statusCode) {
+            return defaultMessage(for: statusCode)
+        }
+
+        return message
+    }
+
+    private static func shouldSuppressRawServerMessage(_ message: String, statusCode: Int) -> Bool {
+        if statusCode == 444 {
+            return true
+        }
+
+        let blockedFragments = [
+            "돌아가",
+            "자네가 올 곳",
+            "여긴 자네"
+        ]
+        return blockedFragments.contains { message.contains($0) }
     }
 }
