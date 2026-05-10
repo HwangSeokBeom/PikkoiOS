@@ -73,6 +73,103 @@ final class ChatHardeningTests: XCTestCase {
         XCTAssertEqual(result.map(\.effectiveServerChatID), ["server-1"])
     }
 
+    func testSocketEchoReplacesOptimisticAttachmentWhenServerReturnsResolvedFileURL() {
+        let optimistic = makeMessage(
+            id: "local-1",
+            localTemporaryID: "local-1",
+            clientMessageID: "client-1",
+            serverChatID: nil,
+            content: "",
+            createdAt: date(10),
+            filePaths: ["/data/chats/room-1/anim.gif"],
+            status: .sending
+        )
+        let socket = makeMessage(
+            id: "server-1",
+            clientMessageID: nil,
+            serverChatID: "server-1",
+            content: "파일을 보냈어요.",
+            createdAt: date(12),
+            filePaths: ["https://api.example.com/data/chats/room-1/anim.gif"],
+            status: .sent
+        )
+
+        let result = ChatMessageMergePolicy.merged(
+            existing: [optimistic],
+            incoming: socket,
+            currentUserID: "user-1",
+            source: "socket",
+            roomScopeKey: "room:room-1|store:-|opponent:-"
+        )
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result.first?.effectiveServerChatID, "server-1")
+        XCTAssertEqual(result.first?.effectiveLocalTemporaryID, "local-1")
+        XCTAssertEqual(result.first?.filePaths, ["https://api.example.com/data/chats/room-1/anim.gif"])
+        XCTAssertEqual(result.first?.sendStatus, .sent)
+    }
+
+    func testGIFFormatDetectorKeepsAnimatedPathOutOfStaticDownsample() throws {
+        let gifData = Data("GIF89a-body".utf8)
+
+        XCTAssertNoThrow(try ChatUploadValidator.prepareFile(
+            ChatUploadFile(data: gifData, fileName: "anim.gif", mimeType: "image/gif")
+        ))
+    }
+
+    func testImageOnlyDefaultFileTextRendersAsMediaOnlyMessage() {
+        XCTAssertTrue(ChatMediaMessagePresentationPolicy.isMediaOnly(
+            content: "파일을 보냈어요.",
+            filePaths: ["https://api.example.com/data/chats/room-1/photo.jpg?token=abc"]
+        ))
+    }
+
+    func testImageOnlyServerImagePlaceholderRendersAsMediaOnlyMessage() {
+        XCTAssertTrue(ChatMediaMessagePresentationPolicy.isMediaOnly(
+            content: "이미지를 보냈어요.",
+            filePaths: ["https://api.example.com/data/chats/room-1/photo.heic?token=abc"]
+        ))
+    }
+
+    func testPDFDefaultFileTextDoesNotRenderAsMediaBubble() {
+        XCTAssertFalse(ChatMediaMessagePresentationPolicy.isMediaOnly(
+            content: "파일을 보냈어요.",
+            filePaths: ["https://api.example.com/data/chats/room-1/receipt.pdf"]
+        ))
+    }
+
+    func testImageBubbleLayoutKeepsSquareImagesSquare() {
+        let size = ChatImageBubbleLayoutPolicy.renderedSize(
+            originalPixelSize: CGSize(width: 1_000, height: 1_000),
+            availableWidth: 390
+        )
+
+        XCTAssertEqual(size.width, size.height)
+        XCTAssertEqual(size.width, 242)
+    }
+
+    func testImageBubbleLayoutPreservesPortraitAndLandscapeAspectRatios() {
+        let portrait = ChatImageBubbleLayoutPolicy.renderedSize(
+            originalPixelSize: CGSize(width: 900, height: 1_600),
+            availableWidth: 390
+        )
+        let landscape = ChatImageBubbleLayoutPolicy.renderedSize(
+            originalPixelSize: CGSize(width: 1_600, height: 900),
+            availableWidth: 390
+        )
+
+        XCTAssertEqual(portrait, CGSize(width: 225, height: 400))
+        XCTAssertEqual(landscape, CGSize(width: 242, height: 136))
+    }
+
+    func testGIFPathUsesMediaAnimatedRenderingClassification() {
+        XCTAssertTrue(ChatMediaMessagePresentationPolicy.isMediaOnly(
+            content: "",
+            filePaths: ["https://api.example.com/data/chats/room-1/anim.gif"]
+        ))
+        XCTAssertTrue(ChatMediaMessagePresentationPolicy.isGIFPath("https://api.example.com/data/chats/room-1/anim.gif?cache=1"))
+    }
+
     func testHTTPResponseAndSocketEchoInEitherOrderProduceOneMessage() {
         let http = makeMessage(id: "server-1", clientMessageID: "client-1", serverChatID: "server-1", content: "hello", createdAt: date(2))
         let socket = makeMessage(id: "server-1", clientMessageID: "client-1", serverChatID: "server-1", content: "hello", createdAt: date(2))
@@ -461,6 +558,39 @@ final class ChatHardeningTests: XCTestCase {
         XCTAssertNoThrow(try files.forEach { _ = try ChatUploadValidator.prepareFile($0) })
     }
 
+    func testChatUploadValidatorAcceptsJpgAndJpegAsImageJPEG() throws {
+        let jpg = try ChatUploadValidator.prepareFile(
+            ChatUploadFile(data: Data([0xFF, 0xD8, 0xFF, 0x00]), fileName: "a.jpg", mimeType: "image/jpg")
+        )
+        let jpeg = try ChatUploadValidator.prepareFile(
+            ChatUploadFile(data: Data([0xFF, 0xD8, 0xFF, 0x00]), fileName: "b.jpeg", mimeType: "image/jpeg")
+        )
+
+        XCTAssertEqual(jpg.mimeType, "image/jpeg")
+        XCTAssertEqual(jpeg.mimeType, "image/jpeg")
+    }
+
+    func testChatUploadValidatorAcceptsGifAndPreservesMime() throws {
+        let file = try ChatUploadValidator.prepareFile(
+            ChatUploadFile(data: Data("GIF89a-body".utf8), fileName: "anim.gif", mimeType: "image/gif")
+        )
+
+        XCTAssertEqual(file.fileName, "anim.gif")
+        XCTAssertEqual(file.mimeType, "image/gif")
+        XCTAssertEqual(file.data, Data("GIF89a-body".utf8))
+    }
+
+    func testChatUploadValidatorAcceptsPDFWithoutImagePreprocessing() throws {
+        let data = Data("%PDF-1.7 body".utf8)
+        let file = try ChatUploadValidator.prepareFile(
+            ChatUploadFile(data: data, fileName: "receipt.pdf", mimeType: "application/pdf")
+        )
+
+        XCTAssertEqual(file.fileName, "receipt.pdf")
+        XCTAssertEqual(file.mimeType, "application/pdf")
+        XCTAssertEqual(file.data, data)
+    }
+
     func testChatUploadValidatorRejectsUnsupportedExtension() {
         let file = ChatUploadFile(data: Data("zip".utf8), fileName: "a.zip", mimeType: "application/zip")
 
@@ -488,6 +618,28 @@ final class ChatHardeningTests: XCTestCase {
         }
     }
 
+    func testFileOnlyChatSendUsesRequiredContentFallback() async throws {
+        let recorder = ChatRepositorySendRecorder()
+        let interactor = makeInteractor(
+            chatRepository: StubChatRepository(sendRecorder: recorder)
+        )
+        let pendingMessage = try interactor.makePendingMessage(
+            roomID: "room-1",
+            content: "   ",
+            files: ["/data/chats/receipt.pdf"]
+        )
+
+        _ = try await interactor.sendMessage(
+            scope: ChatRoomScope(roomID: "room-1", storeID: nil, opponentID: nil),
+            pendingMessage: pendingMessage
+        )
+
+        let request = await recorder.lastRequest()
+        XCTAssertEqual(request?.roomID, "room-1")
+        XCTAssertEqual(request?.content, "파일을 보냈어요.")
+        XCTAssertEqual(request?.files, ["/data/chats/receipt.pdf"])
+    }
+
     private func makeMessage(
         id: String = "server-1",
         localTemporaryID: String? = nil,
@@ -498,6 +650,7 @@ final class ChatHardeningTests: XCTestCase {
         createdAt: Date? = Date(timeIntervalSince1970: 1),
         updatedAt: Date? = nil,
         senderID: String = "user-1",
+        filePaths: [String] = [],
         status: ChatSendStatus = .sent
     ) -> ChatMessage {
         ChatMessage(
@@ -510,7 +663,7 @@ final class ChatHardeningTests: XCTestCase {
             createdAt: createdAt,
             updatedAt: updatedAt,
             sender: ChatParticipant(id: senderID, nick: senderID, profileImagePath: nil),
-            filePaths: [],
+            filePaths: filePaths,
             sendStatus: status
         )
     }
@@ -605,6 +758,7 @@ private struct StubChatRepository: ChatRepository {
     var rooms: [ChatRoom] = []
     var messages: [ChatMessage] = []
     var callCounter: ChatRepositoryCallCounter?
+    var sendRecorder: ChatRepositorySendRecorder?
 
     func fetchChatRooms() async throws -> [ChatRoom] {
         await callCounter?.recordFetchChatRooms()
@@ -629,7 +783,13 @@ private struct StubChatRepository: ChatRepository {
         return messages
     }
     func sendMessage(roomID: String, content: String, files: [String], clientMessageID: String) async throws -> ChatMessage {
-        ChatMessage(
+        await sendRecorder?.record(
+            roomID: roomID,
+            content: content,
+            files: files,
+            clientMessageID: clientMessageID
+        )
+        return ChatMessage(
             id: "server-1",
             clientMessageID: clientMessageID,
             serverChatID: "server-1",
@@ -642,6 +802,30 @@ private struct StubChatRepository: ChatRepository {
         )
     }
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String] { [] }
+}
+
+private actor ChatRepositorySendRecorder {
+    struct Request: Equatable {
+        let roomID: String
+        let content: String
+        let files: [String]
+        let clientMessageID: String
+    }
+
+    private var request: Request?
+
+    func lastRequest() -> Request? {
+        request
+    }
+
+    func record(roomID: String, content: String, files: [String], clientMessageID: String) {
+        request = Request(
+            roomID: roomID,
+            content: content,
+            files: files,
+            clientMessageID: clientMessageID
+        )
+    }
 }
 
 private actor ChatRepositoryCallCounter {

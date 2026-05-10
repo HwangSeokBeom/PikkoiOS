@@ -58,6 +58,7 @@ final class ChatPresenter: ObservableObject {
     deinit {
         searchTask?.cancel()
         guard hasLoaded else { return }
+        Logger.shared.debug("[ChatRoute] deallocated roomId=-")
         Logger.shared.debugVerbose("[ChatViewModel] deinit")
     }
 
@@ -157,6 +158,8 @@ final class ChatPresenter: ObservableObject {
             viewState.attachedFilePaths.removeAll { $0 == path }
         case .sendMessageTapped:
             await sendMessage()
+        case .retryMessageTapped(let messageID):
+            await retryMessage(messageID: messageID)
         case .roomListReachedEnd:
             loadNextRoomPageIfNeeded()
         case .nearBottomChanged(let nearBottom, let distance):
@@ -346,6 +349,7 @@ final class ChatPresenter: ObservableObject {
         Logger.shared.debug("[ChatNavigation] pop requested reason=\(reason) top=\(topRoomID ?? "nil")")
         guard interactor.target == nil else { return }
         if case .leaving(let roomID) = lifecycle {
+            Logger.shared.debug("[ChatNavigationGuard] leave ignored reason=alreadyLeaving roomId=\(roomID)")
             Logger.shared.debug("[ChatLifecycle] leave ignored reason=alreadyLeaving roomId=\(roomID)")
             return
         }
@@ -374,6 +378,7 @@ final class ChatPresenter: ObservableObject {
         viewState.newMessageCount = 0
         applyRooms()
         transitionLifecycle(to: .idle, reason: "roomListVisible")
+        Logger.shared.debug("[ChatNavigationGuard] popOnce routeBefore=roomDetail routeAfter=roomList")
         Logger.shared.debug("[ChatNavigation] pop completed remainingTop=roomList activeRoomId=nil")
         Logger.shared.debug("[ChatNavigation] state cleared selectedRoom=false pendingDeepLink=false activeRoomId=nil")
     }
@@ -633,6 +638,57 @@ final class ChatPresenter: ObservableObject {
         }
     }
 
+    private func retryMessage(messageID: String) async {
+        guard let failedMessage = messages.first(where: {
+            $0.renderID == messageID
+                || $0.id == messageID
+                || $0.effectiveLocalTemporaryID == messageID
+                || $0.clientMessageID == messageID
+        }) else { return }
+        guard failedMessage.sendStatus == .failed || failedMessage.sendStatus == .failedAuth || failedMessage.sendStatus == .recoveryNeeded else {
+            return
+        }
+        guard lifecycle == .active(roomID: failedMessage.roomID) else {
+            logStaleUpdateIgnored(source: "retryMessage", roomID: failedMessage.roomID)
+            return
+        }
+
+        let scope = currentScope(roomID: failedMessage.roomID)
+        let localTemporaryID = failedMessage.effectiveLocalTemporaryID ?? failedMessage.id
+        Logger.shared.debug("[ChatRetry] tapped localTemporaryId=\(localTemporaryID) reason=\(failedMessage.sendStatus.rawValue)")
+        if !failedMessage.filePaths.isEmpty {
+            Logger.shared.debug("[ChatRetry] reuseUploadedFile=true fileURL=\(failedMessage.filePaths.joined(separator: ","))")
+        }
+
+        do {
+            let retryingMessages = try? await interactor.updateMessageSendStatus(
+                messageID: localTemporaryID,
+                status: .retrying,
+                scope: scope
+            )
+            if let retryingMessages, !retryingMessages.isEmpty {
+                messages = retryingMessages
+            } else {
+                messages = messages.map {
+                    $0.renderID == failedMessage.renderID ? $0.replacingIdentity(sendStatus: .retrying) : $0
+                }
+            }
+            applyMessages()
+
+            let sentMessage = try await interactor.sendMessage(scope: scope, pendingMessage: failedMessage.replacingIdentity(sendStatus: .retrying))
+            let serverChatID = sentMessage.effectiveServerChatID ?? sentMessage.id
+            Logger.shared.debug("[ChatSend] postSuccess localTemporaryId=\(localTemporaryID) clientMessageId=\(failedMessage.clientMessageID ?? "-") serverChatId=\(serverChatID)")
+            messages = try await interactor.replacePendingMessage(localID: localTemporaryID, with: sentMessage, scope: scope)
+            updateRoomList(with: sentMessage)
+            applyMessages()
+            applyScrollAction(.echoReplace(localTemporaryId: localTemporaryID), localTemporaryId: localTemporaryID)
+        } catch {
+            messages = (try? await interactor.markMessageFailed(messageID: localTemporaryID, scope: scope)) ?? messages
+            applyMessages()
+            viewState.errorMessage = transientErrorMessage(from: error)
+        }
+    }
+
     private func upload(_ files: [ChatUploadFile]) async {
         guard !viewState.isUploadingFiles,
               let roomID = viewState.selectedRoomID,
@@ -661,7 +717,7 @@ final class ChatPresenter: ObservableObject {
             }
             viewState.attachedFilePaths.append(contentsOf: uploadedPaths)
 #if DEBUG
-            Logger(category: "ChatUpload").debug("[ChatUpload] success fileCount=\(uploadedPaths.count)")
+            Logger(category: "ChatUpload").debug("[ChatUpload] success roomId=\(roomID) fileURL=\(uploadedPaths.joined(separator: ",")) contentType=serverResponse")
 #endif
         } catch {
             guard lifecycle == .active(roomID: roomID) else {
@@ -669,6 +725,9 @@ final class ChatPresenter: ObservableObject {
                 return
             }
             viewState.errorMessage = uploadErrorMessage(from: error)
+#if DEBUG
+            Logger(category: "ChatUpload").warning("[ChatUpload] failed roomId=\(roomID) reason=\(viewState.errorMessage ?? error.localizedDescription)")
+#endif
         }
     }
 
@@ -1213,11 +1272,30 @@ final class ChatPresenter: ObservableObject {
     private func transitionLifecycle(to newState: ChatRoomLifecycleState, reason: String) {
         let oldState = lifecycle
         guard oldState != newState else { return }
+        guard isValidLifecycleTransition(from: oldState, to: newState) else {
+            Logger.shared.debug("[ChatLifecycle] invalidTransition from=\(oldState.logValue) to=\(newState.logValue) ignored reason=\(reason)")
+            return
+        }
         lifecycle = newState
         if let roomID = newState.roomID ?? oldState.roomID {
             Logger.shared.debug("[ChatLifecycle] transition from=\(oldState.logValue) roomId=\(roomID) to=\(newState.logValue) reason=\(reason)")
         } else {
             Logger.shared.debug("[ChatLifecycle] transition from=\(oldState.logValue) roomId=nil to=\(newState.logValue) reason=\(reason)")
+        }
+    }
+
+    private func isValidLifecycleTransition(from oldState: ChatRoomLifecycleState, to newState: ChatRoomLifecycleState) -> Bool {
+        switch (oldState, newState) {
+        case (.idle, .entering),
+             (.entering, .entering),
+             (.entering, .active),
+             (.entering, .idle),
+             (.active, .leaving),
+             (.leaving, .idle),
+             (.idle, .idle):
+            return true
+        default:
+            return false
         }
     }
 

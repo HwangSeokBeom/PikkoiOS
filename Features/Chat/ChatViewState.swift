@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 enum ChatSearchScope: Equatable {
@@ -162,6 +163,108 @@ struct ChatMessageRowViewState: Equatable, Identifiable {
     }
 }
 
+enum ChatMediaMessagePresentationPolicy {
+    static let defaultFileOnlyContent = "파일을 보냈어요."
+    private static let fileOnlyContentPlaceholders: Set<String> = [
+        defaultFileOnlyContent,
+        "이미지를 보냈어요.",
+        "사진을 보냈어요.",
+        "image",
+        "photo"
+    ]
+
+    static func isMediaOnly(content: String, filePaths: [String]) -> Bool {
+        isEmptyOrDefaultFileContent(content)
+            && !filePaths.isEmpty
+            && filePaths.allSatisfy(isImagePath)
+    }
+
+    static func isImagePath(_ path: String) -> Bool {
+        let value = normalizedPath(path)
+        return value.hasSuffix(".jpg")
+            || value.hasSuffix(".jpeg")
+            || value.hasSuffix(".png")
+            || value.hasSuffix(".gif")
+            || value.hasSuffix(".heic")
+            || value.hasSuffix(".heif")
+            || value.hasSuffix(".webp")
+    }
+
+    static func isGIFPath(_ path: String) -> Bool {
+        normalizedPath(path).hasSuffix(".gif")
+    }
+
+    private static func isEmptyOrDefaultFileContent(_ content: String) -> Bool {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || fileOnlyContentPlaceholders.contains(trimmed.lowercased())
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        if let components = URLComponents(string: path),
+           !components.path.isEmpty {
+            return components.path.lowercased()
+        }
+        return path.components(separatedBy: "?").first?.lowercased() ?? path.lowercased()
+    }
+}
+
+enum ChatImageBubbleLayoutPolicy {
+    static let fallbackAspectRatio: CGFloat = 1
+    static let minimumWidth: CGFloat = 132
+    static let minimumHeight: CGFloat = 120
+    static let maximumHeight: CGFloat = 400
+    static let maximumAbsoluteWidth: CGFloat = 284
+    static let maximumWidthFraction: CGFloat = 0.62
+
+    static func renderedSize(
+        originalPixelSize: CGSize?,
+        aspectRatio explicitAspectRatio: CGFloat? = nil,
+        availableWidth: CGFloat
+    ) -> CGSize {
+        let aspectRatio = sanitizedAspectRatio(
+            explicitAspectRatio ?? originalPixelSize.map { $0.width / $0.height }
+        )
+        let maximumWidth = max(
+            minimumWidth,
+            min(maximumAbsoluteWidth, availableWidth * maximumWidthFraction)
+        )
+
+        var width = maximumWidth
+        var height = width / aspectRatio
+
+        if height > maximumHeight {
+            height = maximumHeight
+            width = height * aspectRatio
+        }
+
+        if width < minimumWidth {
+            let expandedHeight = minimumWidth / aspectRatio
+            if expandedHeight <= maximumHeight {
+                width = minimumWidth
+                height = expandedHeight
+            }
+        }
+
+        if height < minimumHeight {
+            let expandedWidth = min(maximumWidth, minimumHeight * aspectRatio)
+            width = expandedWidth
+            height = expandedWidth / aspectRatio
+        }
+
+        return CGSize(
+            width: max(1, width.rounded(.toNearestOrAwayFromZero)),
+            height: max(1, height.rounded(.toNearestOrAwayFromZero))
+        )
+    }
+
+    private static func sanitizedAspectRatio(_ value: CGFloat?) -> CGFloat {
+        guard let value, value.isFinite, value > 0 else {
+            return fallbackAspectRatio
+        }
+        return value
+    }
+}
+
 struct ChatMessageSearchState: Equatable {
     var isSearchActive = false
     var query = ""
@@ -311,7 +414,6 @@ struct ChatViewState: Equatable {
     var canSend: Bool {
         selectedRoomID != nil
             && !isSending
-            && !isUploadingFiles
             && (
                 !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || !attachedFilePaths.isEmpty

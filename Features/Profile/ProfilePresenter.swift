@@ -44,11 +44,13 @@ final class ProfilePresenter: ObservableObject {
         case .editorNickChanged(let nick):
             viewState.editorNick = nick
             viewState.editorErrorMessage = nil
+            syncEditorDirtyState()
         case .editorPhoneNumberChanged(let phoneNumber):
             viewState.editorPhoneNumber = phoneNumber
             viewState.editorErrorMessage = nil
+            syncEditorDirtyState()
         case .profileImageDataSelected(let data, let fileName):
-            await uploadProfileImage(data: data, fileName: fileName)
+            await stageProfileImage(data: data, fileName: fileName)
         case .profileImageSelectionFailed(let message):
             viewState.profileImageUploadErrorMessage = message
             viewState.profileImageUpdateState = .failure(message: message)
@@ -89,6 +91,7 @@ final class ProfilePresenter: ObservableObject {
         viewState.editorInfoMessage = nil
         viewState.profileImageUploadErrorMessage = nil
         viewState.editorNick = viewState.displayName
+        viewState.draftNickname = viewState.displayName
         viewState.editorPhoneNumber = viewState.phoneNumber
         editorOriginalNick = viewState.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         editorOriginalPhoneNumber = viewState.phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -97,8 +100,18 @@ final class ProfilePresenter: ObservableObject {
         viewState.editorProfileImagePath = currentProfileImagePath
         viewState.editorProfileImageCacheRevision = viewState.profileImageCacheRevision
         viewState.editorLocalProfileImageData = nil
+        viewState.stagedProfileImage = nil
+        viewState.pendingProfileImageUpload = nil
+        viewState.stagedProfileImageFile = nil
         viewState.profileImageUpdateState = .idle
+        viewState.isProfileEditorDirty = false
+        viewState.isDirty = false
+        viewState.isSaving = false
+        viewState.saveError = nil
         viewState.isEditingProfile = true
+#if DEBUG
+        Logger(category: "ProfileEdit").debug("[ProfileEdit] appear mode=edit")
+#endif
     }
 
     private func dismissEditor() {
@@ -109,24 +122,28 @@ final class ProfilePresenter: ObservableObject {
         viewState.editorErrorMessage = nil
         viewState.editorInfoMessage = nil
         viewState.editorLocalProfileImageData = nil
+        viewState.stagedProfileImage = nil
+        viewState.pendingProfileImageUpload = nil
+        viewState.stagedProfileImageFile = nil
         viewState.profileImageUpdateState = .idle
+        viewState.isProfileEditorDirty = false
+        viewState.isDirty = false
+        viewState.isSaving = false
+        viewState.saveError = nil
     }
 
-    private func uploadProfileImage(data: Data, fileName: String) async {
+    private func stageProfileImage(data: Data, fileName: String) async {
         guard sessionStore.isAuthenticated else { return }
-        guard !viewState.isUploadingProfileImage else { return }
+        guard !viewState.isSavingProfile else { return }
         guard !data.isEmpty else {
-            Logger(category: "ProfileImage").warning("[ProfileImage] upload skipped reason=processedDataEmpty")
+            Logger(category: "ProfileImage").warning("[ProfileImage] stage skipped reason=processedDataEmpty")
             return
         }
 
-        let requestID = UUID().uuidString
-        let oldProfileImagePath = viewState.editorProfileImagePath ?? viewState.profileImagePath
         viewState.editorErrorMessage = nil
         viewState.editorInfoMessage = nil
         viewState.profileImageUploadErrorMessage = nil
         viewState.profileImageUpdateState = .processingImage
-        viewState.isUploadingProfileImage = true
 
         do {
             let processed: ProfileImagePreprocessResult
@@ -158,85 +175,122 @@ final class ProfilePresenter: ObservableObject {
                 throw ProfileImagePreprocessorError.fileTooLargeAfterCompression
             }
 
-            viewState.editorLocalProfileImageData = processed.data
-            viewState.profileImageUpdateState = .uploadingImage(progress: nil)
 #if DEBUG
-            Logger(category: "ProfileImage").debug("[ProfileImage] upload start endpoint=/v1/users/profile/image fieldName=profile fileName=\(processed.fileName) mime=\(processed.mimeType) bytes=\(processed.data.count)")
+            Logger(category: "ProfileImage").debug("[ProfileImage] staged preview fileName=\(processed.fileName) mime=\(processed.mimeType) bytes=\(processed.data.count)")
 #endif
-            let uploadedPath = try await interactor.uploadProfileImage(
+            profileStateGeneration += 1
+            viewState.isEditingProfile = true
+            viewState.editorLocalProfileImageData = processed.data
+            viewState.stagedProfileImage = processed.data
+            viewState.pendingProfileImageUpload = ProfilePendingImageUpload(
                 data: processed.data,
                 fileName: processed.fileName,
                 mimeType: processed.mimeType
             )
-            let effectiveUploadedPath = uploadedPath
+            viewState.stagedProfileImageFile = viewState.pendingProfileImageUpload
+            viewState.profileImageUpdateState = .idle
+            syncEditorDirtyState()
 #if DEBUG
-            Logger(category: "ProfileImageUpdate").debug("[ProfileImageUpdate] uploadStatus=200 responseImageURL=\(uploadedPath)")
-            Logger(category: "ProfileImageUpload").info("[ProfileImageUpload] success requestID=\(requestID) imageURLChanged=\(effectiveUploadedPath != oldProfileImagePath)")
-            Logger(category: "ProfileImage").debug("[ProfileImage] upload success profileImage=\(effectiveUploadedPath)")
+            Logger(category: "ProfileEdit").debug("[ProfileEdit] stayOnEditAfterPicker selected=true routeStillEdit=\(viewState.isEditingProfile)")
 #endif
-            profileStateGeneration += 1
-            await invalidateProfileImageCache(oldPath: oldProfileImagePath, newPath: effectiveUploadedPath)
-            let oldConfirmedProfileImagePath = viewState.profileImagePath
-            sessionStore.updateProfile(
-                nick: sessionStore.currentSession?.displayName ?? viewState.displayName,
-                profileImagePath: effectiveUploadedPath
-            )
-            Logger(category: "ProfileState").debug("[ProfileState] imageURLUpdated userId=\(sessionStore.currentUserID ?? "unknown") imageURL=\(effectiveUploadedPath)")
-            Logger(category: "ProfileImage").debug("[ProfileImage] currentUser updated oldProfileImageExists=\(oldConfirmedProfileImagePath?.isEmpty == false) newProfileImageExists=\(!effectiveUploadedPath.isEmpty)")
-            Logger(category: "ProfileImage").debug("[ProfileImage] state update oldProfileImage=\(oldConfirmedProfileImagePath ?? "nil") newProfileImage=\(effectiveUploadedPath)")
-            viewState.profileImagePath = effectiveUploadedPath
-            viewState.profileImageCacheRevision += 1
-            viewState.editorProfileImagePath = effectiveUploadedPath
-            viewState.editorProfileImageCacheRevision = viewState.profileImageCacheRevision
-            viewState.editorLocalProfileImageData = nil
-            viewState.profileImageUploadErrorMessage = nil
-            viewState.editorInfoMessage = "프로필 이미지가 변경되었어요."
-            viewState.profileImageUpdateState = .success
-
-            do {
-#if DEBUG
-                Logger(category: "ProfileImage").debug("[ProfileImage] refresh profile after upload start")
-#endif
-                let confirmedProfile = try await interactor.fetchMyProfile()
-                let confirmedPath = confirmedProfile.profileImagePath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-                let ignoredAsStale = confirmedPath != nil && confirmedPath != effectiveUploadedPath
-#if DEBUG
-                Logger(category: "ProfileImageRefetch").debug("[ProfileImageRefetch] uncached=true status=success returnedProfileImage=\(confirmedPath ?? "nil") ignoredAsStale=\(ignoredAsStale)")
-                Logger(category: "ProfileImage").debug("[ProfileImage] refresh profile after upload success profileImage=\(confirmedPath ?? "nil")")
-#endif
-                viewState.displayName = confirmedProfile.nick
-                viewState.email = confirmedProfile.email
-                viewState.phoneNumber = confirmedProfile.phoneNumber ?? ""
-                sessionStore.updateProfile(
-                    nick: confirmedProfile.nick,
-                    profileImagePath: effectiveUploadedPath
-                )
-                if !ignoredAsStale {
-                    viewState.profileImagePath = effectiveUploadedPath
-                    viewState.editorProfileImagePath = effectiveUploadedPath
-                }
-            } catch {
-#if DEBUG
-                Logger(category: "ProfileImageRefetch").warning("[ProfileImageRefetch] uncached=true status=\(statusCodeDescription(from: error)) returnedProfileImage=nil ignoredAsStale=false")
-                Logger(category: "ProfileImage").warning("[ProfileImage] refresh profile after upload failed reason=profileRefreshFailedAfterUpload status=\(statusCodeDescription(from: error))")
-#endif
-            }
         } catch {
             let message = resolveProfileImageUploadMessage(from: error)
             viewState.profileImageUploadErrorMessage = message
             viewState.profileImageUpdateState = .failure(message: message)
-            viewState.editorLocalProfileImageData = nil
+            viewState.pendingProfileImageUpload = nil
+            viewState.stagedProfileImageFile = nil
 #if DEBUG
-            Logger(category: "ProfileImageUpload").warning("[ProfileImageUpload] failed requestID=\(requestID) status=\(statusCodeDescription(from: error)) reason=\(error.localizedDescription)")
+            Logger(category: "ProfileImageUpload").warning("[ProfileImageUpload] failed stage=preprocess status=\(statusCodeDescription(from: error)) reason=\(error.localizedDescription)")
             Logger(category: "ProfileImage").warning("[ProfileImage] upload failed reason=\(profileImageFailureClassification(from: error)) status=\(statusCodeDescription(from: error)) isATS=\(isATSBlocked(error)) isValidation=\(isProfileImageValidationFailure(error))")
 #endif
         }
+    }
 
-        viewState.isUploadingProfileImage = false
+    private func uploadStagedProfileImageIfNeeded() async throws -> String? {
+        guard let pendingUpload = viewState.pendingProfileImageUpload else {
+            return nil
+        }
+
+        let requestID = UUID().uuidString
+        let oldProfileImagePath = viewState.editorProfileImagePath ?? viewState.profileImagePath
+        viewState.profileImageUpdateState = .uploadingImage(progress: nil)
+        viewState.isUploadingProfileImage = true
+        defer { viewState.isUploadingProfileImage = false }
+
+        #if DEBUG
+        Logger(category: "ProfileImage").debug("[ProfileImage] upload start endpoint=/v1/users/profile/image fieldName=profile fileName=\(pendingUpload.fileName) mime=\(pendingUpload.mimeType) bytes=\(pendingUpload.data.count)")
+        #endif
+
+        let uploadedPath = try await interactor.uploadProfileImage(
+            data: pendingUpload.data,
+            fileName: pendingUpload.fileName,
+            mimeType: pendingUpload.mimeType
+        )
+
+        #if DEBUG
+        Logger(category: "ProfileImageUpdate").debug("[ProfileImageUpdate] uploadStatus=200 responseImageURL=\(uploadedPath)")
+        Logger(category: "ProfileImageUpload").info("[ProfileImageUpload] success requestID=\(requestID) imageURLChanged=\(uploadedPath != oldProfileImagePath)")
+        Logger(category: "ProfileImage").debug("[ProfileImage] upload success profileImage=\(uploadedPath)")
+        #endif
+        return uploadedPath
+    }
+
+    private func confirmProfileImageUpload(newPath: String, oldPath: String?) async {
+        profileStateGeneration += 1
+        await invalidateProfileImageCache(oldPath: oldPath, newPath: newPath)
+        let oldConfirmedProfileImagePath = viewState.profileImagePath
+        sessionStore.updateProfile(
+            nick: sessionStore.currentSession?.displayName ?? viewState.displayName,
+            profileImagePath: newPath
+        )
+        Logger(category: "ProfileState").debug("[ProfileState] imageURLUpdated userId=\(sessionStore.currentUserID ?? "unknown") imageURL=\(newPath)")
+        Logger(category: "ProfileImage").debug("[ProfileImage] currentUser updated oldProfileImageExists=\(oldConfirmedProfileImagePath?.isEmpty == false) newProfileImageExists=\(!newPath.isEmpty)")
+        Logger(category: "ProfileImage").debug("[ProfileImage] state update oldProfileImage=\(oldConfirmedProfileImagePath ?? "nil") newProfileImage=\(newPath)")
+        viewState.profileImagePath = newPath
+        viewState.profileImageCacheRevision += 1
+        viewState.editorProfileImagePath = newPath
+        viewState.editorProfileImageCacheRevision = viewState.profileImageCacheRevision
+        viewState.editorLocalProfileImageData = nil
+        viewState.pendingProfileImageUpload = nil
+        viewState.profileImageUploadErrorMessage = nil
+        viewState.profileImageUpdateState = .success
+
+        do {
+#if DEBUG
+            Logger(category: "ProfileImage").debug("[ProfileImage] refresh profile after upload start")
+#endif
+            let confirmedProfile = try await interactor.fetchMyProfile()
+            let confirmedPath = confirmedProfile.profileImagePath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            let ignoredAsStale = confirmedPath != nil && confirmedPath != newPath
+#if DEBUG
+            Logger(category: "ProfileImageRefetch").debug("[ProfileImageRefetch] uncached=true status=success returnedProfileImage=\(confirmedPath ?? "nil") ignoredAsStale=\(ignoredAsStale)")
+            Logger(category: "ProfileImage").debug("[ProfileImage] refresh profile after upload success profileImage=\(confirmedPath ?? "nil")")
+#endif
+            viewState.displayName = confirmedProfile.nick
+            viewState.email = confirmedProfile.email
+            viewState.phoneNumber = confirmedProfile.phoneNumber ?? ""
+            viewState.serverProfile = confirmedProfile
+            sessionStore.updateProfile(
+                nick: confirmedProfile.nick,
+                profileImagePath: newPath
+            )
+            if !ignoredAsStale {
+                viewState.profileImagePath = newPath
+                viewState.editorProfileImagePath = newPath
+            }
+        } catch {
+#if DEBUG
+            Logger(category: "ProfileImageRefetch").warning("[ProfileImageRefetch] uncached=true status=\(statusCodeDescription(from: error)) returnedProfileImage=nil ignoredAsStale=false")
+            Logger(category: "ProfileImage").warning("[ProfileImage] refresh profile after upload failed reason=profileRefreshFailedAfterUpload status=\(statusCodeDescription(from: error))")
+#endif
+        }
     }
 
     private func saveProfile() async {
         guard sessionStore.isAuthenticated else { return }
+#if DEBUG
+        Logger(category: "ProfileEdit").debug("[ProfileEdit] save tapped dirty=\(viewState.isProfileEditorDirty) stagedImage=\(viewState.pendingProfileImageUpload != nil)")
+#endif
         guard viewState.canSaveProfile else {
             if viewState.editorNick.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 viewState.editorErrorMessage = "닉네임을 입력해 주세요."
@@ -249,59 +303,98 @@ final class ProfilePresenter: ObservableObject {
         }
 
         viewState.editorErrorMessage = nil
+        viewState.saveError = nil
         viewState.editorInfoMessage = nil
         viewState.isSavingProfile = true
+        viewState.isSaving = true
 
         do {
             let normalizedNick = viewState.editorNick.trimmingCharacters(in: .whitespacesAndNewlines)
             let normalizedPhoneNumber = viewState.editorPhoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)
             let textChanged = normalizedNick != editorOriginalNick || normalizedPhoneNumber != editorOriginalPhoneNumber
-            guard textChanged else {
-                viewState.isSavingProfile = false
-                viewState.isEditingProfile = false
-                viewState.noticeMessage = "프로필을 저장했어요."
-                viewState.noticeTone = .success
-                return
-            }
             let oldProfileImagePath = viewState.profileImagePath
+            let uploadedProfileImagePath = try await uploadStagedProfileImageIfNeeded()
+            let confirmedProfileImagePath: String?
+            if textChanged {
 #if DEBUG
-            Logger(category: "ProfileImage").debug("[ProfileImage] profile update request path=/v1/users/me/profile profileImageIncluded=false")
+                Logger(category: "ProfileImage").debug("[ProfileImage] profile update request path=/v1/users/me/profile profileImageIncluded=false")
 #endif
-            let profile = try await interactor.updateProfile(
-                nick: viewState.editorNick,
-                phoneNumber: viewState.editorPhoneNumber
-            )
-            let preservedProfileImagePath = oldProfileImagePath ?? profile.profileImagePath
+                let profile = try await interactor.updateProfile(
+                    nick: viewState.editorNick,
+                    phoneNumber: viewState.editorPhoneNumber
+                )
+                confirmedProfileImagePath = uploadedProfileImagePath ?? oldProfileImagePath ?? profile.profileImagePath
 
-            sessionStore.updateProfile(
-                nick: profile.nick,
-                profileImagePath: preservedProfileImagePath
-            )
+                sessionStore.updateProfile(
+                    nick: profile.nick,
+                    profileImagePath: confirmedProfileImagePath
+                )
 
-            viewState.displayName = profile.nick
-            viewState.email = profile.email
-            viewState.phoneNumber = profile.phoneNumber ?? ""
-            viewState.profileImagePath = preservedProfileImagePath
-            viewState.editorNick = profile.nick
-            viewState.editorPhoneNumber = profile.phoneNumber ?? ""
-            viewState.editorProfileImagePath = preservedProfileImagePath
+                viewState.displayName = profile.nick
+                viewState.email = profile.email
+                viewState.phoneNumber = profile.phoneNumber ?? ""
+                viewState.serverProfile = profile
+                viewState.editorNick = profile.nick
+                viewState.draftNickname = profile.nick
+                viewState.editorPhoneNumber = profile.phoneNumber ?? ""
+                editorOriginalNick = profile.nick.trimmingCharacters(in: .whitespacesAndNewlines)
+                editorOriginalPhoneNumber = (profile.phoneNumber ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                confirmedProfileImagePath = uploadedProfileImagePath ?? oldProfileImagePath
+            }
+
+            if let uploadedProfileImagePath {
+                await confirmProfileImageUpload(newPath: uploadedProfileImagePath, oldPath: oldProfileImagePath)
+            } else {
+                viewState.profileImagePath = confirmedProfileImagePath
+                viewState.editorProfileImagePath = confirmedProfileImagePath
+            }
             viewState.editorProfileImageCacheRevision = viewState.profileImageCacheRevision
             viewState.editorLocalProfileImageData = nil
+            viewState.stagedProfileImage = nil
+            viewState.pendingProfileImageUpload = nil
+            viewState.stagedProfileImageFile = nil
             viewState.profileImageUpdateState = .success
             viewState.profileImageUploadErrorMessage = nil
             viewState.editorErrorMessage = nil
             viewState.editorInfoMessage = nil
+            viewState.isProfileEditorDirty = false
             viewState.isSavingProfile = false
+            viewState.isDirty = false
+            viewState.isSaving = false
             viewState.isEditingProfile = false
             viewState.noticeMessage = "프로필을 저장했어요."
             viewState.noticeTone = .success
+#if DEBUG
+            Logger(category: "ProfileEdit").debug("[ProfileEdit] save success profileImageURL=\(viewState.profileImagePath ?? "nil")")
+#endif
         } catch {
             viewState.isSavingProfile = false
-            viewState.editorErrorMessage = resolveEditorMessage(from: error, fallback: "프로필을 저장하지 못했어요.")
+            viewState.isSaving = false
+            let message = resolveEditorMessage(from: error, fallback: "프로필을 저장하지 못했어요.")
+            viewState.editorErrorMessage = message
+            viewState.saveError = message
+            if viewState.pendingProfileImageUpload != nil {
+                viewState.profileImageUploadErrorMessage = message
+                viewState.profileImageUpdateState = .failure(message: message)
+            }
 #if DEBUG
+            Logger(category: "ProfileEdit").warning("[ProfileEdit] save failed error=\(message)")
             Logger(category: "ProfileImage").warning("[ProfileImage] failed stage=profileUpdate status=\(statusCodeDescription(from: error)) message=\(error.localizedDescription)")
 #endif
         }
+    }
+
+    private func syncEditorDirtyState() {
+        let normalizedNick = viewState.editorNick.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPhoneNumber = viewState.editorPhoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        viewState.isProfileEditorDirty = normalizedNick != editorOriginalNick
+            || normalizedPhoneNumber != editorOriginalPhoneNumber
+            || viewState.pendingProfileImageUpload != nil
+        viewState.draftNickname = viewState.editorNick
+        viewState.stagedProfileImage = viewState.editorLocalProfileImageData
+        viewState.stagedProfileImageFile = viewState.pendingProfileImageUpload
+        viewState.isDirty = viewState.isProfileEditorDirty
     }
 
     private func invalidateProfileImageCache(oldPath: String?, newPath: String?) async {

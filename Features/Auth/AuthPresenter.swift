@@ -31,17 +31,21 @@ final class AuthPresenter: ObservableObject {
             viewState.email = email
             viewState.errorMessage = nil
             viewState.emailValidationState = .idle
+            logSignUpValidation()
         case .validateEmailTapped:
             await validateEmailAvailability()
         case .passwordChanged(let password):
             viewState.password = password
             viewState.errorMessage = nil
+            logSignUpValidation()
         case .passwordConfirmationChanged(let passwordConfirmation):
             viewState.passwordConfirmation = passwordConfirmation
             viewState.errorMessage = nil
+            logSignUpValidation()
         case .nickChanged(let nick):
             viewState.nick = nick
             viewState.errorMessage = nil
+            logSignUpValidation()
         case .emailSignInTapped:
             await submitEmailSignIn()
         case .signUpTapped:
@@ -117,6 +121,7 @@ final class AuthPresenter: ObservableObject {
 
     private func submitSignUp() async {
         guard !viewState.isLoading else { return }
+        Logger(category: "Signup").debug("[Signup] submit start")
         setFormSubmitting()
 
         do {
@@ -134,12 +139,13 @@ final class AuthPresenter: ObservableObject {
                 throw NetworkError.transport
             }
             clearLoading()
+            Logger(category: "Signup").debug("[Signup] submit success")
             router.completeAuthentication()
         } catch {
             clearLoading()
             let message = resolveErrorMessage(from: error)
             viewState.errorMessage = message == viewState.configurationMessage ? nil : message
-            Logger.shared.warning("Email sign-up failed: \(error.localizedDescription)")
+            Logger(category: "Signup").warning("[Signup] submit failed message=\(message)")
         }
     }
 
@@ -152,9 +158,11 @@ final class AuthPresenter: ObservableObject {
         do {
             try await interactor.validateEmailAvailability(email: viewState.email)
             viewState.emailValidationState = .available(message: "사용 가능한 이메일이에요.")
+            logSignUpValidation()
         } catch {
             let message = resolveEmailValidationErrorMessage(from: error)
             viewState.emailValidationState = .unavailable(message: message)
+            logSignUpValidation()
             if error is AuthInputValidationError {
                 viewState.errorMessage = message
             }
@@ -352,5 +360,11 @@ final class AuthPresenter: ObservableObject {
         guard viewState.password == viewState.passwordConfirmation else {
             throw AuthInputValidationError.validation(message: "비밀번호 확인이 일치하지 않아요.")
         }
+    }
+
+    private func logSignUpValidation() {
+        Logger(category: "Signup").debug(
+            "[Signup] validation emailValid=\(viewState.emailFormatValid) passwordValid=\(viewState.passwordRuleValid && viewState.passwordsMatch) nicknameValid=\(viewState.nicknameValid) duplicateChecked=\(viewState.emailValidationState.isAvailable)"
+        )
     }
 }

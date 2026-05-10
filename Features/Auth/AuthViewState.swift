@@ -84,16 +84,54 @@ struct AuthViewState: Equatable {
     }
 
     var canRequestEmailValidation: Bool {
-        !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isLoading
+        emailFormatValid && !isLoading
     }
 
     var canSubmitSignUp: Bool {
-        !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !password.isEmpty
-            && !passwordConfirmation.isEmpty
-            && !nick.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        emailFormatValid
+            && passwordRuleValid
+            && passwordsMatch
+            && nicknameValid
             && emailValidationState.isAvailable
             && !isLoading
+    }
+
+    var emailFormatValid: Bool {
+        matches(
+            pattern: "^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}$",
+            value: email.trimmingCharacters(in: .whitespacesAndNewlines),
+            options: [.caseInsensitive]
+        )
+    }
+
+    var passwordRuleValid: Bool {
+        matches(
+            pattern: "^(?=.*[A-Za-z])(?=.*\\d)(?=.*[@$!%*#?&])[A-Za-z\\d@$!%*#?&]{8,}$",
+            value: password
+        )
+    }
+
+    var passwordsMatch: Bool {
+        !passwordConfirmation.isEmpty && password == passwordConfirmation
+    }
+
+    var nicknameValid: Bool {
+        let trimmed = nick.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forbiddenCharacters = CharacterSet(charactersIn: "-.,?*@+^${}()|[]\\")
+        return !trimmed.isEmpty && trimmed.rangeOfCharacter(from: forbiddenCharacters) == nil
+    }
+
+    private func matches(
+        pattern: String,
+        value: String,
+        options: NSRegularExpression.Options = []
+    ) -> Bool {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return false
+        }
+
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return regex.firstMatch(in: value, options: [], range: range) != nil
     }
 }
 

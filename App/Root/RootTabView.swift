@@ -4,6 +4,7 @@ import UIKit
 @MainActor
 struct RootTabView: View {
     @ObservedObject private var appState: AppState
+    @ObservedObject private var activeChatRoomTracker: ActiveChatRoomTracker
     let featureBuilderFactory: FeatureBuilderFactory
 
     @State private var homePath = NavigationPath()
@@ -25,6 +26,7 @@ struct RootTabView: View {
         featureBuilderFactory: FeatureBuilderFactory
     ) {
         _appState = ObservedObject(wrappedValue: appState)
+        _activeChatRoomTracker = ObservedObject(wrappedValue: featureBuilderFactory.activeChatRoomTracker)
         self.featureBuilderFactory = featureBuilderFactory
     }
 
@@ -74,12 +76,12 @@ struct RootTabView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !keyboardObserver.isKeyboardVisible {
+            if !keyboardObserver.isKeyboardVisible && activeChatRoomTracker.activeRoomId == nil {
                 GeometryReader { proxy in
                     RootTabBarView(
                         selectedTab: appState.selectedTab,
                         screenWidth: proxy.size.width,
-                        safeAreaBottom: proxy.safeAreaInsets.bottom,
+                        safeAreaBottom: deviceSafeAreaBottom,
                         onSelect: { tab in
                             handleTabSelection(tab)
                         }
@@ -122,6 +124,14 @@ struct RootTabView: View {
         .onChange(of: appState.pendingNotificationRoute) { _, route in
             scheduleNotificationRoute(route, source: appState.pendingNotificationRouteSource)
         }
+    }
+
+    private var deviceSafeAreaBottom: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }?
+            .safeAreaInsets.bottom ?? 0
     }
 
     private func handleTabSelection(_ tab: RootTab) {

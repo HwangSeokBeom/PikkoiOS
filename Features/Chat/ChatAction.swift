@@ -23,6 +23,7 @@ enum ChatAction {
     case fileSelectionFailed(String)
     case attachedFileRemoved(String)
     case sendMessageTapped
+    case retryMessageTapped(String)
     case roomListReachedEnd
     case nearBottomChanged(Bool, distance: CGFloat)
     case newMessageIndicatorTapped

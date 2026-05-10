@@ -192,8 +192,8 @@ enum ChatMessageIdentityResolver {
     ) -> Bool {
         guard lhs.roomID == rhs.roomID,
               lhs.sender.id == rhs.sender.id,
-              lhs.filePaths == rhs.filePaths,
-              stableBodyHash(lhs.content) == stableBodyHash(rhs.content) else {
+              ChatAttachmentSignature.matches(lhs.filePaths, rhs.filePaths),
+              contentMatches(lhs.content, rhs.content, hasFiles: !lhs.filePaths.isEmpty || !rhs.filePaths.isEmpty) else {
             return false
         }
         if let currentUserID,
@@ -211,6 +211,52 @@ enum ChatMessageIdentityResolver {
 
     private static func timestampKey(_ date: Date) -> String {
         String(format: "%.3f", date.timeIntervalSince1970)
+    }
+
+    private static func contentMatches(_ lhs: String, _ rhs: String, hasFiles: Bool) -> Bool {
+        if stableBodyHash(lhs) == stableBodyHash(rhs) {
+            return true
+        }
+        guard hasFiles else { return false }
+        let normalized = [lhs, rhs].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return normalized.contains("")
+            && normalized.contains(ChatMessageRequestPolicy.fileOnlyContent)
+    }
+}
+
+enum ChatAttachmentSignature {
+    static func matches(_ lhs: [String], _ rhs: [String]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        guard !lhs.isEmpty || !rhs.isEmpty else { return true }
+        return signature(lhs) == signature(rhs)
+    }
+
+    static func signature(_ paths: [String]) -> [String] {
+        paths.map(normalizedPathSignature).sorted()
+    }
+
+    private static func normalizedPathSignature(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        if let url = URL(string: trimmed), url.scheme != nil {
+            return normalizedPathAndName(url.path)
+        }
+
+        return normalizedPathAndName(trimmed)
+    }
+
+    private static func normalizedPathAndName(_ path: String) -> String {
+        let normalized = path
+            .replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .lowercased()
+        let lastPath = (normalized as NSString).lastPathComponent
+        let lastTwo = normalized
+            .split(separator: "/")
+            .suffix(2)
+            .joined(separator: "/")
+        return lastTwo.isEmpty ? lastPath : lastTwo
     }
 }
 
@@ -404,7 +450,7 @@ enum ChatMessageMergePolicy {
         guard optimistic.effectiveServerChatID == nil,
               optimistic.sendStatus.isPendingDelivery,
               optimistic.sender.id == serverMessage.sender.id,
-              optimistic.filePaths == serverMessage.filePaths else {
+              ChatAttachmentSignature.matches(optimistic.filePaths, serverMessage.filePaths) else {
             return false
         }
         if let optimisticClientID = optimistic.clientMessageID,
@@ -447,8 +493,8 @@ struct ChatUploadFile: Equatable, Sendable {
         self.typeIdentifier = typeIdentifier
     }
 
-    func normalized(mimeType: String) -> ChatUploadFile {
-        ChatUploadFile(data: data, fileName: fileName, mimeType: mimeType, typeIdentifier: typeIdentifier)
+    func normalized(fileName: String? = nil, mimeType: String) -> ChatUploadFile {
+        ChatUploadFile(data: data, fileName: fileName ?? self.fileName, mimeType: mimeType, typeIdentifier: typeIdentifier)
     }
 }
 
@@ -481,7 +527,7 @@ extension ChatUploadValidationError: LocalizedError {
         case .fileTooLarge:
             return "파일은 5MB 이하만 업로드할 수 있어요."
         case .unsupportedType:
-            return "지원하지 않는 파일 형식이에요. jpg, jpeg, png, gif, pdf만 가능해요."
+            return "지원하지 않는 파일 형식이에요. jpg, jpeg, png, gif, heic, heif, pdf만 가능해요."
         case .imageStillTooLarge:
             return "이미지 용량을 줄였지만 5MB를 초과해요."
         }
@@ -511,30 +557,49 @@ enum ChatUploadValidator {
     }
 
     static func prepareFile(_ file: ChatUploadFile) throws -> ChatUploadFile {
+        let detected = ChatUploadFileTypeDetector.detect(data: file.data, fileName: file.fileName, mimeType: file.mimeType)
+        let normalizedInput = ChatUploadFile(
+            data: file.data,
+            fileName: detected.fileName,
+            mimeType: detected.mimeType,
+            typeIdentifier: file.typeIdentifier ?? detected.typeIdentifier
+        )
         let descriptor: FileUploadDescriptor
         do {
             descriptor = try FileUploadValidator.descriptor(
-                fileName: file.fileName,
-                mimeType: file.mimeType,
-                typeIdentifier: file.typeIdentifier,
+                fileName: normalizedInput.fileName,
+                mimeType: normalizedInput.mimeType,
+                typeIdentifier: normalizedInput.typeIdentifier,
                 policy: .chatFiles
             )
         } catch FileUploadValidationError.unsupportedType {
+            #if DEBUG
+            Logger(category: "ChatUploadValidation").warning("[ChatUploadValidation] rejected endpoint=chat ext=\((normalizedInput.fileName as NSString).pathExtension.lowercased()) mime=\(normalizedInput.mimeType) reason=unsupportedType")
+            #endif
             throw ChatUploadValidationError.unsupportedType(fileName: file.fileName)
         } catch {
             throw error
         }
 
-        guard file.data.count > ChatUploadPolicy.maxFileSizeBytes else {
-            return file.normalized(mimeType: descriptor.normalizedMimeType)
+        #if DEBUG
+        Logger(category: "ChatUploadValidation").debug("[ChatUploadValidation] accepted endpoint=chat ext=\(descriptor.normalizedExtension) mime=\(descriptor.normalizedMimeType)")
+        #endif
+
+        let shouldPreprocessImage = descriptor.isCompressibleImage
+            && (normalizedInput.data.count > ChatUploadPolicy.maxFileSizeBytes
+                || descriptor.normalizedMimeType == "image/heic"
+                || descriptor.normalizedMimeType == "image/heif")
+
+        guard normalizedInput.data.count > ChatUploadPolicy.maxFileSizeBytes || shouldPreprocessImage else {
+            return normalizedInput.normalized(mimeType: ChatUploadFileTypeDetector.canonicalMimeType(descriptor.normalizedMimeType))
         }
 
-        if descriptor.isCompressibleImage {
+        if shouldPreprocessImage {
             do {
                 let processed = try ImageUploadPreprocessor().process(
                     ImageUploadPreprocessInput(
-                        data: file.data,
-                        filename: file.fileName,
+                        data: normalizedInput.data,
+                        filename: normalizedInput.fileName,
                         mimeType: descriptor.normalizedMimeType,
                         purpose: .chat,
                         targetLimitBytes: ChatUploadPolicy.maxFileSizeBytes
@@ -550,13 +615,82 @@ enum ChatUploadValidator {
                     typeIdentifier: file.typeIdentifier
                 )
             } catch ImageUploadPreprocessorError.overLimitAfterCompression {
-                throw ChatUploadValidationError.imageStillTooLarge(fileName: file.fileName)
+                throw ChatUploadValidationError.imageStillTooLarge(fileName: normalizedInput.fileName)
             } catch {
-                throw ChatUploadValidationError.fileTooLarge(fileName: file.fileName)
+                throw ChatUploadValidationError.fileTooLarge(fileName: normalizedInput.fileName)
             }
         }
 
-        throw ChatUploadValidationError.fileTooLarge(fileName: file.fileName)
+        throw ChatUploadValidationError.fileTooLarge(fileName: normalizedInput.fileName)
+    }
+}
+
+enum ChatUploadFileTypeDetector {
+    static func detect(data: Data, fileName: String, mimeType: String) -> (fileName: String, mimeType: String, typeIdentifier: String?) {
+        let trimmedName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let currentExtension = (trimmedName as NSString).pathExtension.lowercased()
+        let detected = detectedFileType(data: data)
+        let ext = detected.extension ?? currentExtension.nilIfEmpty ?? fallbackExtension(mimeType: mimeType)
+        let canonicalMime = canonicalMimeType(detected.mimeType ?? mimeType)
+        let resolvedName: String
+        if currentExtension.isEmpty, let ext {
+            let base = (trimmedName as NSString).deletingPathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+            resolvedName = "\(base.isEmpty ? "chat-\(Int(Date().timeIntervalSince1970))" : base).\(ext)"
+        } else {
+            resolvedName = trimmedName.isEmpty ? "chat-\(Int(Date().timeIntervalSince1970)).\(ext ?? "jpg")" : trimmedName
+        }
+        return (resolvedName, canonicalMime, detected.typeIdentifier)
+    }
+
+    static func canonicalMimeType(_ mimeType: String) -> String {
+        let normalized = mimeType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "image/jpg":
+            return "image/jpeg"
+        default:
+            return normalized
+        }
+    }
+
+    private static func detectedFileType(data: Data) -> (extension: String?, mimeType: String?, typeIdentifier: String?) {
+        let bytes = Array(data.prefix(12))
+        if bytes.starts(with: [0xFF, 0xD8, 0xFF]) {
+            return ("jpg", "image/jpeg", UTType.jpeg.identifier)
+        }
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+            return ("png", "image/png", UTType.png.identifier)
+        }
+        if bytes.count >= 6,
+           String(bytes: bytes.prefix(6), encoding: .ascii).map({ $0 == "GIF87a" || $0 == "GIF89a" }) == true {
+            return ("gif", "image/gif", UTType.gif.identifier)
+        }
+        if bytes.starts(with: [0x25, 0x50, 0x44, 0x46]) {
+            return ("pdf", "application/pdf", UTType.pdf.identifier)
+        }
+        if bytes.count >= 12,
+           String(bytes: bytes[4..<8], encoding: .ascii) == "ftyp" {
+            return ("heic", "image/heic", UTType.heic.identifier)
+        }
+        return (nil, nil, nil)
+    }
+
+    private static func fallbackExtension(mimeType: String) -> String? {
+        switch canonicalMimeType(mimeType) {
+        case "image/jpeg":
+            return "jpg"
+        case "image/png":
+            return "png"
+        case "image/gif":
+            return "gif"
+        case "image/heic":
+            return "heic"
+        case "image/heif":
+            return "heif"
+        case "application/pdf":
+            return "pdf"
+        default:
+            return nil
+        }
     }
 }
 
@@ -1657,15 +1791,13 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
     private func fetchMatchingPendingRecord(for message: ChatMessage, scope: ChatRoomScope, context: NSManagedObjectContext) throws -> NSManagedObject? {
         let request = NSFetchRequest<NSManagedObject>(entityName: Field.entity)
         request.predicate = NSPredicate(
-            format: "%K == %@ AND %K == %@ AND %K == %@ AND %K == %@ AND %K IN %@",
+            format: "%K == %@ AND %K == %@ AND %K == %@ AND %K IN %@",
             Field.roomID,
             scope.roomID,
             Field.localCacheKey,
             scope.localCacheKey,
             Field.senderUserID,
             message.sender.id,
-            Field.content,
-            message.content,
             Field.sendStatus,
             ChatSendStatus.pendingRawValues
         )
@@ -1677,7 +1809,12 @@ actor CoreDataChatLocalDataSource: ChatLocalDataSourceProtocol {
         return candidates.first { record in
             guard let pending = mapRecord(record),
                   pending.effectiveServerChatID == nil,
-                  pending.filePaths == message.filePaths else {
+                  ChatMessageIdentityResolver.isSameMessage(
+                    pending,
+                    message,
+                    roomScopeKey: scope.roomScopeKey,
+                    currentUserID: nil
+                  ) else {
                 return false
             }
             let pendingDate = pending.createdAt ?? pending.updatedAt
@@ -1854,6 +1991,7 @@ protocol ChatInteracting {
     func savePendingMessage(_ message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage]
     func replacePendingMessage(localID: String, with message: ChatMessage, scope: ChatRoomScope) async throws -> [ChatMessage]
     func markMessageFailed(messageID: String, scope: ChatRoomScope) async throws -> [ChatMessage]
+    func updateMessageSendStatus(messageID: String, status: ChatSendStatus, scope: ChatRoomScope) async throws -> [ChatMessage]
     func loadMessages(roomID: String, after next: String?) async throws -> [ChatMessage]
     func sendMessage(scope: ChatRoomScope, pendingMessage: ChatMessage) async throws -> ChatMessage
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String]
@@ -2249,6 +2387,12 @@ struct ChatInteractor: ChatInteracting {
         return messages
     }
 
+    func updateMessageSendStatus(messageID: String, status: ChatSendStatus, scope: ChatRoomScope) async throws -> [ChatMessage] {
+        let messages = try await localDataSource.updateSendStatus(messageID: messageID, status: status, scope: scope)
+        touchStoreConversation(scope: scope, latestActivityDate: Date())
+        return messages
+    }
+
     func loadMessages(roomID: String, after next: String? = nil) async throws -> [ChatMessage] {
         guard sessionStore.isAuthenticated else {
             throw ChatFeatureError.authenticationRequired
@@ -2274,6 +2418,7 @@ struct ChatInteractor: ChatInteracting {
         guard let clientMessageID = pendingMessage.clientMessageID?.nilIfEmpty else {
             throw ChatFeatureError.unavailable(message: "메시지 식별자를 만들지 못했어요.")
         }
+        let requestContent = trimmed.nilIfEmpty ?? ChatMessageRequestPolicy.fileOnlyContent
 
         do {
             Logger.shared.debug("[ChatSend] clientMessageId=\(clientMessageID) action=postStart")
@@ -2283,7 +2428,7 @@ struct ChatInteractor: ChatInteracting {
             let sentMessage = try await sendingCoordinator.send(clientMessageID: clientMessageID) {
                 try await repository.sendMessage(
                     roomID: roomID,
-                    content: trimmed,
+                    content: requestContent,
                     files: files,
                     clientMessageID: clientMessageID
                 )
@@ -2310,6 +2455,9 @@ struct ChatInteractor: ChatInteracting {
             let preparedFiles = try await ChatUploadValidator.prepareForUpload(files)
 #if DEBUG
             Logger(category: "ChatUpload").debug("[ChatUpload] prepared fileCount=\(preparedFiles.count) totalBytes=\(preparedFiles.reduce(0) { $0 + $1.data.count })")
+            for file in preparedFiles {
+                Logger(category: "ChatUpload").debug("[ChatUpload] started roomId=\(roomID) filename=\(file.fileName) mime=\(file.mimeType) size=\(file.data.count)")
+            }
 #endif
             return try await chatRepository.uploadFiles(roomID: roomID, files: preparedFiles)
         } catch is CancellationError {
@@ -2533,6 +2681,10 @@ extension NotificationCenter {
             ]
         )
     }
+}
+
+private enum ChatMessageRequestPolicy {
+    static let fileOnlyContent = "파일을 보냈어요."
 }
 
 private extension String {

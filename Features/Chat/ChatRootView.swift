@@ -1,3 +1,4 @@
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -29,6 +30,8 @@ struct ChatRootView: View {
     @State private var chatViewInstanceID = UUID().uuidString
     @State private var isRoomDetailVisible = false
     @State private var measuredComposerHeight = Layout.estimatedComposerHeight
+    @State private var lastBottomDistanceUpdate: (nearBottom: Bool, distance: CGFloat)?
+    @State private var selectedMediaPreview: ChatMediaPreviewSelection?
     private let presentationKind: ChatPresentationKind
 
     init(
@@ -61,7 +64,12 @@ struct ChatRootView: View {
             if presenter.viewState.showsInternalBackButton {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
-                        Task { await presenter.send(.backToRoomsTapped) }
+                        isComposerFocused = false
+                        Logger.shared.debug("[ChatFocus] clear reason=backButton")
+                        Task {
+                            await Task.yield()
+                            await presenter.send(.backToRoomsTapped)
+                        }
                     } label: {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 16, weight: .semibold))
@@ -115,6 +123,15 @@ struct ChatRootView: View {
             allowsMultipleSelection: true
         ) { result in
             Task { await handleFileImport(result) }
+        }
+        .fullScreenCover(item: $selectedMediaPreview) { selection in
+            ChatMediaPreviewView(
+                path: selection.path,
+                imageLoader: imageLoader,
+                onDismiss: {
+                    selectedMediaPreview = nil
+                }
+            )
         }
     }
 
@@ -356,7 +373,17 @@ struct ChatRootView: View {
                         }
                     } else {
                         ForEach(presenter.viewState.messages) { message in
-                            ChatMessageBubble(message: message, imageLoader: imageLoader)
+                            ChatMessageBubble(
+                                message: message,
+                                imageLoader: imageLoader,
+                                containerWidth: containerSize.width,
+                                onMediaTapped: { path in
+                                    selectedMediaPreview = ChatMediaPreviewSelection(path: path)
+                                },
+                                onRetry: {
+                                    Task { await presenter.send(.retryMessageTapped(message.id)) }
+                                }
+                            )
                                 .id(message.id)
                         }
                     }
@@ -424,11 +451,10 @@ struct ChatRootView: View {
 
     private var composerBottomPadding: CGFloat {
         Layout.composerBottomPadding
-            + (keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)
     }
 
     private var customTabBarAvoidanceHeight: CGFloat {
-        RootTabBarMetrics.contentHeight
+        0
     }
 
     private var newMessageIndicator: some View {
@@ -674,14 +700,20 @@ struct ChatRootView: View {
                 return
             }
             let preferredType = preferredUploadType(from: item.supportedContentTypes)
-            let ext = preferredType.preferredFilenameExtension ?? "jpg"
-            let mimeType = preferredType.preferredMIMEType ?? "image/jpeg"
+            let detected = ChatUploadFileTypeDetector.detect(
+                data: rawData,
+                fileName: "chat-\(Int(Date().timeIntervalSince1970))-\(index)",
+                mimeType: preferredType.preferredMIMEType ?? "image/jpeg"
+            )
+#if DEBUG
+            Logger(category: "ChatFilePicker").debug("[ChatFilePicker] selected filename=\(detected.fileName) ext=\((detected.fileName as NSString).pathExtension.lowercased()) detectedMime=\(detected.mimeType) size=\(rawData.count)")
+#endif
 
             files.append(
                 ChatUploadFile(
                     data: rawData,
-                    fileName: "chat-\(Int(Date().timeIntervalSince1970))-\(index).\(ext.lowercased())",
-                    mimeType: mimeType,
+                    fileName: detected.fileName,
+                    mimeType: detected.mimeType,
                     typeIdentifier: preferredType.identifier
                 )
             )
@@ -707,11 +739,19 @@ struct ChatRootView: View {
                 return
             }
             let type = UTType(filenameExtension: url.pathExtension) ?? .pdf
+            let detected = ChatUploadFileTypeDetector.detect(
+                data: data,
+                fileName: url.lastPathComponent,
+                mimeType: type.preferredMIMEType ?? "application/pdf"
+            )
+#if DEBUG
+            Logger(category: "ChatFilePicker").debug("[ChatFilePicker] selected filename=\(detected.fileName) ext=\((detected.fileName as NSString).pathExtension.lowercased()) detectedMime=\(detected.mimeType) size=\(data.count)")
+#endif
             files.append(
                 ChatUploadFile(
                     data: data,
-                    fileName: url.lastPathComponent,
-                    mimeType: type.preferredMIMEType ?? "application/pdf",
+                    fileName: detected.fileName,
+                    mimeType: detected.mimeType,
                     typeIdentifier: type.identifier
                 )
             )
@@ -751,7 +791,14 @@ struct ChatRootView: View {
         let visibleBottom = containerHeight - measuredComposerHeight - composerBottomPadding
         let distance = max(0, bottomY - visibleBottom)
         let nearBottom = distance <= Layout.nearBottomThreshold
-        Task {
+        if let lastBottomDistanceUpdate,
+           lastBottomDistanceUpdate.nearBottom == nearBottom,
+           abs(lastBottomDistanceUpdate.distance - distance) <= Layout.geometryTolerance {
+            return
+        }
+        Task { @MainActor in
+            await Task.yield()
+            lastBottomDistanceUpdate = (nearBottom, distance)
             await presenter.send(.nearBottomChanged(nearBottom, distance: distance))
         }
     }
@@ -772,7 +819,7 @@ struct ChatRootView: View {
 #if DEBUG
         guard ChatDebugOptions.isComposerGeometryLoggingEnabled else { return }
         Logger.shared.debug(
-            "[ChatComposer] keyboardHeight=\(keyboardObserver.keyboardHeight) isKeyboardVisible=\(keyboardObserver.isKeyboardVisible)"
+            "[ChatComposerLayout] keyboardHeight=\(keyboardObserver.keyboardHeight) safeAreaBottom=unknown tabBarVisible=false bottomInset=\(composerBottomPadding) strategy=safeAreaInset"
         )
         Logger.shared.debug(
             "[ChatComposer] bottomPadding=\(composerBottomPadding) customTabBarHeight=\(keyboardObserver.isKeyboardVisible ? 0 : customTabBarAvoidanceHeight)"
@@ -960,6 +1007,9 @@ private struct ChatRoomRow: View {
 private struct ChatMessageBubble: View {
     let message: ChatMessageRowViewState
     let imageLoader: any AuthorizedImageLoading
+    let containerWidth: CGFloat
+    let onMediaTapped: (String) -> Void
+    let onRetry: () -> Void
 
     var body: some View {
         VStack(spacing: PikkoSpacing.xs) {
@@ -994,7 +1044,18 @@ private struct ChatMessageBubble: View {
         }
     }
 
+    @ViewBuilder
     private var bubble: some View {
+        if isMediaOnlyMessage, let firstImagePath = message.filePaths.first, message.filePaths.count == 1 {
+            mediaBubble(path: firstImagePath)
+        } else if isMediaOnlyMessage {
+            mediaOnlyGrid
+        } else {
+            textAndAttachmentBubble
+        }
+    }
+
+    private var textAndAttachmentBubble: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
             if !message.content.isEmpty {
                 Text(highlightedContent)
@@ -1003,53 +1064,90 @@ private struct ChatMessageBubble: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if !message.filePaths.isEmpty {
-                LazyVGrid(
-                    columns: Array(repeating: GridItem(.fixed(82), spacing: 6), count: min(message.filePaths.count, 2)),
-                    spacing: 6
-                ) {
-                    ForEach(message.filePaths, id: \.self) { path in
-                        if isImagePath(path) {
-                            AuthorizedAsyncImage(
-                                path: path,
-                                loader: imageLoader,
-                                contentMode: .fill,
-                                cornerRadius: PikkoRadius.card,
-                                showsProgress: true
-                            )
-                            .frame(width: 82, height: 82)
-                            .clipped()
-                        } else {
-                            Link(destination: URL(string: path) ?? URL(fileURLWithPath: path)) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "doc.fill")
-                                    Text((path as NSString).lastPathComponent)
-                                        .lineLimit(1)
-                                }
-                                .font(PikkoTypography.caption)
-                                .foregroundStyle(message.isMine ? .white : PikkoColor.primaryPressed)
-                                .frame(width: 164, height: 40, alignment: .leading)
-                            }
-                        }
+            attachmentGrid
+        }
+        .padding(.horizontal, PikkoSpacing.md)
+        .padding(.vertical, PikkoSpacing.sm)
+        .bubbleChrome(
+            fill: message.isSelectedSearchMatch ? selectedBubbleColor : (message.isMine ? bubbleColor : PikkoColor.elevatedSurface),
+            stroke: message.isSelectedSearchMatch
+                ? PikkoColor.warning.opacity(0.95)
+                : (message.isMine ? .clear : PikkoColor.divider.opacity(0.65)),
+            lineWidth: message.isSelectedSearchMatch ? 2 : 1
+        )
+        .frame(maxWidth: 260, alignment: message.isMine ? .trailing : .leading)
+    }
+
+    @ViewBuilder
+    private var attachmentGrid: some View {
+        if !message.filePaths.isEmpty {
+            let hasFileCard = message.filePaths.contains { !isImagePath($0) }
+            let columnWidth: CGFloat = hasFileCard ? 192 : 96
+            let columnCount = hasFileCard ? 1 : min(message.filePaths.count, 2)
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.fixed(columnWidth), spacing: 6), count: columnCount),
+                alignment: .leading,
+                spacing: 6
+            ) {
+                ForEach(message.filePaths, id: \.self) { path in
+                    if isImagePath(path) {
+                        mediaThumbnail(path: path)
+                    } else {
+                        fileCard(path: path)
                     }
                 }
             }
         }
-        .padding(.horizontal, PikkoSpacing.md)
-        .padding(.vertical, PikkoSpacing.sm)
-        .background(message.isSelectedSearchMatch ? selectedBubbleColor : (message.isMine ? bubbleColor : PikkoColor.elevatedSurface))
-        .overlay {
-            RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                .stroke(
-                    message.isSelectedSearchMatch
-                        ? PikkoColor.warning.opacity(0.95)
-                        : (message.isMine ? .clear : PikkoColor.divider.opacity(0.65)),
-                    lineWidth: message.isSelectedSearchMatch ? 2 : 1
-                )
+    }
+
+    private func mediaBubble(path: String) -> some View {
+        ChatMediaBubbleContent(
+            messageID: message.id,
+            path: path,
+            imageLoader: imageLoader,
+            availableWidth: containerWidth,
+            isMine: message.isMine,
+            isSelected: message.isSelectedSearchMatch,
+            onTap: {
+                onMediaTapped(path)
+            }
+        )
+    }
+
+    private func mediaThumbnail(path: String) -> some View {
+        Button {
+            onMediaTapped(path)
+        } label: {
+            AuthorizedAsyncImage(
+                path: path,
+                loader: imageLoader,
+                contentMode: .fit,
+                cornerRadius: PikkoRadius.card,
+                showsProgress: true,
+                downsampleMaxPixelSize: 480
+            )
+            .frame(width: 96, height: 96)
+            .background(Color.black.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         }
-        .shadow(color: message.isSelectedSearchMatch ? PikkoColor.warning.opacity(0.22) : .clear, radius: 10, y: 2)
-        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
-        .frame(maxWidth: 260, alignment: message.isMine ? .trailing : .leading)
+        .buttonStyle(.plain)
+    }
+
+    private func fileCard(path: String) -> some View {
+        Link(destination: URL(string: path) ?? URL(fileURLWithPath: path)) {
+            HStack(spacing: PikkoSpacing.xs) {
+                Image(systemName: "doc.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                Text(fileName(for: path))
+                    .font(PikkoTypography.caption)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(message.isMine ? .white : PikkoColor.primaryPressed)
+            .padding(.horizontal, PikkoSpacing.sm)
+            .frame(width: 192, height: 44, alignment: .leading)
+            .background(message.isMine ? .white.opacity(0.16) : PikkoColor.primarySoft)
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+        }
     }
 
     private var timestampAndStatus: some View {
@@ -1060,10 +1158,23 @@ private struct ChatMessageBubble: View {
                 .lineLimit(1)
 
             if let statusText = message.statusText {
-                Text(statusText)
-                    .font(PikkoTypography.caption)
-                    .foregroundStyle(message.sendStatus == .failed ? PikkoColor.error : PikkoColor.tertiaryText)
-                    .lineLimit(1)
+                if message.sendStatus == .failed || message.sendStatus == .failedAuth || message.sendStatus == .recoveryNeeded {
+                    Button(action: onRetry) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("재시도")
+                        }
+                        .font(PikkoTypography.caption)
+                        .foregroundStyle(PikkoColor.error)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(statusText)
+                } else {
+                    Text(statusText)
+                        .font(PikkoTypography.caption)
+                        .foregroundStyle(PikkoColor.tertiaryText)
+                        .lineLimit(1)
+                }
             }
         }
     }
@@ -1091,12 +1202,268 @@ private struct ChatMessageBubble: View {
         return attributed
     }
 
+    private var mediaOnlyGrid: some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.fixed(112), spacing: 6), count: min(message.filePaths.count, 2)),
+            alignment: .leading,
+            spacing: 6
+        ) {
+            ForEach(message.filePaths, id: \.self) { path in
+                mediaThumbnail(path: path)
+                    .frame(width: 112, height: 112)
+            }
+        }
+        .padding(2)
+        .bubbleChrome(
+            fill: message.isSelectedSearchMatch ? PikkoColor.warning.opacity(0.10) : .clear,
+            stroke: message.isSelectedSearchMatch ? PikkoColor.warning.opacity(0.95) : .clear,
+            lineWidth: message.isSelectedSearchMatch ? 2 : 0
+        )
+    }
+
+    private var isMediaOnlyMessage: Bool {
+        ChatMediaMessagePresentationPolicy.isMediaOnly(
+            content: message.content,
+            filePaths: message.filePaths
+        )
+    }
+
     private func isImagePath(_ path: String) -> Bool {
-        let value = path.lowercased()
-        return value.hasSuffix(".jpg")
-            || value.hasSuffix(".jpeg")
-            || value.hasSuffix(".png")
-            || value.hasSuffix(".gif")
+        ChatMediaMessagePresentationPolicy.isImagePath(path)
+    }
+
+    private func fileName(for path: String) -> String {
+        let name = (path as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "첨부 파일" : name
+    }
+}
+
+private struct ChatMediaBubbleContent: View {
+    private enum Layout {
+        static let cornerRadius: CGFloat = 18
+    }
+
+    let messageID: String
+    let path: String
+    let imageLoader: any AuthorizedImageLoading
+    let availableWidth: CGFloat
+    let isMine: Bool
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    @State private var originalPixelSize: CGSize?
+
+    var body: some View {
+        Button(action: onTap) {
+            AuthorizedAsyncImage(
+                path: path,
+                loader: imageLoader,
+                contentMode: .fill,
+                cornerRadius: Layout.cornerRadius,
+                showsProgress: true,
+                downsampleMaxPixelSize: 1_080,
+                onImageSizeResolved: { size in
+                    updateOriginalPixelSize(size)
+                }
+            )
+            .frame(width: resolvedSize.width, height: resolvedSize.height)
+            .background(Color.black.opacity(0.035))
+            .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous)
+                    .stroke(
+                        isSelected ? PikkoColor.warning.opacity(0.95) : PikkoColor.divider.opacity(0.28),
+                        lineWidth: isSelected ? 2 : 1
+                    )
+            }
+            .contentShape(RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .task(id: path) {
+            await loadOriginalPixelSize()
+        }
+        .onChange(of: resolvedSize) { _, _ in
+            logLayoutDiagnostics(source: originalPixelSize == nil ? "placeholder" : "loaded")
+        }
+        .onAppear {
+            logLayoutDiagnostics(source: originalPixelSize == nil ? "placeholder" : "loaded")
+        }
+    }
+
+    private var resolvedSize: CGSize {
+        ChatImageBubbleLayoutPolicy.renderedSize(
+            originalPixelSize: originalPixelSize,
+            availableWidth: availableWidth
+        )
+    }
+
+    private func loadOriginalPixelSize() async {
+        do {
+            let data = try await imageLoader.imageData(for: path)
+            let loadedPixelSize = ChatMediaMetadata.pixelSize(from: data)
+            await MainActor.run {
+                updateOriginalPixelSize(loadedPixelSize)
+            }
+#if DEBUG
+            let aspect = loadedPixelSize.map { $0.width / $0.height } ?? ChatImageBubbleLayoutPolicy.fallbackAspectRatio
+            let aspectText = String(format: "%.3f", aspect)
+            let isGIF = ChatMediaMetadata.isGIF(data: data, path: path)
+            Logger(category: "ChatMediaBubble").debug(
+                isGIF
+                    ? "[ChatMediaBubble] render type=gif animated=true mode=mediaOnly aspect=\(aspectText)"
+                    : "[ChatMediaBubble] render type=image mime=\(ChatMediaMetadata.mimeType(data: data, path: path)) mode=mediaOnly aspect=\(aspectText)"
+            )
+#endif
+        } catch {
+#if DEBUG
+            if ChatMediaMetadata.isGIFPath(path) {
+                Logger(category: "ChatMediaBubble").warning("[ChatMediaBubble] gifFallback reason=metadataLoadFailed")
+            }
+#endif
+        }
+    }
+
+    private func updateOriginalPixelSize(_ size: CGSize?) {
+        guard let size, size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else {
+            return
+        }
+        if let originalPixelSize {
+            let currentAspect = originalPixelSize.width / originalPixelSize.height
+            let newAspect = size.width / size.height
+            let currentArea = originalPixelSize.width * originalPixelSize.height
+            let newArea = size.width * size.height
+            if abs(currentAspect - newAspect) < 0.001, newArea <= currentArea {
+                return
+            }
+        }
+        if originalPixelSize != size {
+            originalPixelSize = size
+        }
+    }
+
+#if DEBUG
+    private func logLayoutDiagnostics(source: String) {
+        let size = resolvedSize
+        let originalSize = originalPixelSize ?? .zero
+        let aspect = originalPixelSize.map { $0.width / $0.height } ?? ChatImageBubbleLayoutPolicy.fallbackAspectRatio
+        let value = [
+            source,
+            "\(Int(originalSize.width))x\(Int(originalSize.height))",
+            String(format: "%.3f", aspect),
+            "\(Int(size.width))x\(Int(size.height))",
+            "\(Int(availableWidth.rounded()))",
+            "\(isMine)"
+        ].joined(separator: "|")
+        DebugLogDeduplicator.shared.printWhenChanged(
+            key: "ChatImageLayout.\(messageID)",
+            value: value,
+            logger: Logger(category: "ChatImageLayout"),
+            message: "messageId=\(messageID) source=\(source) originalSize=\(Int(originalSize.width))x\(Int(originalSize.height)) aspect=\(String(format: "%.3f", aspect)) renderedSize=\(Int(size.width))x\(Int(size.height)) containerWidth=\(Int(availableWidth.rounded())) isMine=\(isMine)"
+        )
+    }
+#else
+    private func logLayoutDiagnostics(source: String) {}
+#endif
+}
+
+private enum ChatMediaMetadata {
+    static func pixelSize(from data: Data) -> CGSize? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, options),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let pixelWidth = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+              let pixelHeight = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+              pixelWidth.doubleValue > 0,
+              pixelHeight.doubleValue > 0 else {
+            return nil
+        }
+        return CGSize(width: pixelWidth.doubleValue, height: pixelHeight.doubleValue)
+    }
+
+    static func isGIF(data: Data, path: String) -> Bool {
+        isGIFPath(path) || gifHeaderMatches(data)
+    }
+
+    static func isGIFPath(_ path: String) -> Bool {
+        normalizedPath(path).hasSuffix(".gif")
+    }
+
+    static func mimeType(data: Data, path: String) -> String {
+        let normalized = normalizedPath(path)
+        if normalized.hasSuffix(".png") {
+            return "image/png"
+        }
+        if normalized.hasSuffix(".gif") || gifHeaderMatches(data) {
+            return "image/gif"
+        }
+        return "image/jpeg"
+    }
+
+    private static func gifHeaderMatches(_ data: Data) -> Bool {
+        guard data.count >= 6,
+              let header = String(bytes: data.prefix(6), encoding: .ascii) else {
+            return false
+        }
+        return header == "GIF87a" || header == "GIF89a"
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        if let components = URLComponents(string: path),
+           !components.path.isEmpty {
+            return components.path.lowercased()
+        }
+        return path.components(separatedBy: "?").first?.lowercased() ?? path.lowercased()
+    }
+}
+
+private struct ChatMediaPreviewSelection: Identifiable {
+    let path: String
+    var id: String { path }
+}
+
+private struct ChatMediaPreviewView: View {
+    let path: String
+    let imageLoader: any AuthorizedImageLoading
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            AuthorizedAsyncImage(
+                path: path,
+                loader: imageLoader,
+                contentMode: .fit,
+                cornerRadius: 0,
+                showsProgress: true,
+                downsampleMaxPixelSize: 1_600
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, PikkoSpacing.sm)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 42, height: 42)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+            }
+            .padding(.top, PikkoSpacing.xl)
+            .padding(.trailing, PikkoSpacing.lg)
+        }
+    }
+}
+
+private extension View {
+    func bubbleChrome(fill: Color, stroke: Color, lineWidth: CGFloat) -> some View {
+        self
+            .background(fill)
+            .overlay {
+                RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                    .stroke(stroke, lineWidth: lineWidth)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
     }
 }
 

@@ -14,7 +14,14 @@ enum ProfileImageUpdateState: Equatable {
     case failure(message: String)
 }
 
+struct ProfilePendingImageUpload: Equatable {
+    let data: Data
+    let fileName: String
+    let mimeType: String
+}
+
 struct ProfileViewState: Equatable {
+    var serverProfile: UserProfile?
     var title = "마이"
     var displayName = "로그인 정보를 불러오는 중이에요."
     var email = ""
@@ -34,14 +41,22 @@ struct ProfileViewState: Equatable {
     var editorProfileImagePath: String?
     var editorProfileImageCacheRevision = 0
     var editorLocalProfileImageData: Data?
+    var pendingProfileImageUpload: ProfilePendingImageUpload?
     var profileImageUpdateState: ProfileImageUpdateState = .idle
     var isUploadingProfileImage = false
     var isSavingProfile = false
+    var isProfileEditorDirty = false
     var profileImageUploadErrorMessage: String?
     var editorErrorMessage: String?
     var editorInfoMessage: String?
     var noticeMessage: String?
     var noticeTone: ProfileStatusTone?
+    var draftNickname = ""
+    var stagedProfileImage: Data?
+    var stagedProfileImageFile: ProfilePendingImageUpload?
+    var isDirty = false
+    var isSaving = false
+    var saveError: String?
 
     var profileImageDisplayPath: String? {
         cacheBusted(path: profileImagePath, revision: profileImageCacheRevision)
@@ -52,17 +67,13 @@ struct ProfileViewState: Equatable {
     }
 
     var saveProfileActionTitle: String {
-        if isUploadingProfileImage {
-            return "이미지 업로드 중..."
-        }
-
         return isSavingProfile ? "저장 중..." : "저장하기"
     }
 
     var canSaveProfile: Bool {
         !editorNick.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !isUploadingProfileImage
             && !isSavingProfile
+            && isProfileEditorDirty
             && profileImageUploadErrorMessage == nil
             && editorErrorMessage == nil
     }

@@ -21,6 +21,7 @@ enum CommunityDetailAction {
     case commentEditSaveTapped
     case commentEditCancelled
     case commentDeleteConfirmed(String)
+    case replyThreadBackTapped
     case replyThreadDismissed
     case replyDraftChanged(String)
     case replySubmitTapped

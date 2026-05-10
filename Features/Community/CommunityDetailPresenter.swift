@@ -28,6 +28,7 @@ final class CommunityDetailPresenter: ObservableObject {
     private var failedCommentIDs = Set<String>()
     private var submittingCommentDraftKeys = Set<String>()
     private var submittingReplyDraftKeys = Set<String>()
+    private var isDismissingReplyThread = false
 
     init(
         postID: String,
@@ -105,8 +106,10 @@ final class CommunityDetailPresenter: ObservableObject {
             cancelEditingComment()
         case .commentDeleteConfirmed(let commentID):
             await deleteComment(commentID: commentID)
+        case .replyThreadBackTapped:
+            closeReplyThread(source: "backButton")
         case .replyThreadDismissed:
-            closeReplyThread()
+            closeReplyThread(source: "navigationDismiss")
         case .replyDraftChanged(let draft):
             updateReplyDraft(draft)
         case .replySubmitTapped:
@@ -471,17 +474,42 @@ final class CommunityDetailPresenter: ObservableObject {
             return
         }
 
+        isDismissingReplyThread = false
         viewState.replyThread = CommunityCommentThreadState(
             parentComment: makeCommentRowState(from: parentComment, depth: 0),
             replies: parentComment.replies.map { makeCommentRowState(from: $0, depth: 1) }
         )
         #if DEBUG
-        Logger(category: "CommentReply").debug("[CommentReply] open parentCommentId=\(parentCommentID)")
+        Logger(category: "CommentReplyNavigation").debug("[CommentReplyNavigation] open parentCommentId=\(parentCommentID)")
         #endif
     }
 
-    private func closeReplyThread() {
+    private func closeReplyThread(source: String) {
+        if isDismissingReplyThread {
+            #if DEBUG
+            Logger(category: "CommentReplyNavigation").debug("[CommentReplyNavigation] pop ignored reason=alreadyDismissing")
+            #endif
+            return
+        }
+
+        guard let parentCommentID = viewState.replyThread?.parentComment.id else {
+            return
+        }
+
+        isDismissingReplyThread = true
+        #if DEBUG
+        if source == "backButton" {
+            Logger(category: "CommentReplyNavigation").debug("[CommentReplyNavigation] back tapped parentCommentId=\(parentCommentID)")
+        }
+        #endif
         viewState.replyThread = nil
+        Task { @MainActor in
+            await Task.yield()
+            #if DEBUG
+            Logger(category: "CommentReplyNavigation").debug("[CommentReplyNavigation] pop completed destination=postDetail")
+            #endif
+            isDismissingReplyThread = false
+        }
     }
 
     private func updateReplyDraft(_ draft: String) {

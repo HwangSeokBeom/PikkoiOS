@@ -309,6 +309,31 @@ final class AuthFeatureTests: XCTestCase {
         XCTAssertTrue(presenter.viewState.canSubmitSignUp)
     }
 
+    func testSignUpSubmitButtonRequiresAllValidationGates() async {
+        let presenter = AuthPresenter(
+            interactor: AuthInteractor(
+                authRepository: SpyAuthRepository(),
+                socialAuthService: StubSocialAuthService(),
+                appConfiguration: makeAppConfiguration()
+            ),
+            router: SpyAuthRouter(),
+            sessionStore: makeSessionStore()
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.emailChanged("pikko@example.com"))
+        await presenter.send(.passwordChanged("Password1!"))
+        await presenter.send(.passwordConfirmationChanged("Password2!"))
+        await presenter.send(.nickChanged("픽코"))
+        await presenter.send(.validateEmailTapped)
+
+        XCTAssertFalse(presenter.viewState.canSubmitSignUp)
+
+        await presenter.send(.passwordConfirmationChanged("Password1!"))
+
+        XCTAssertTrue(presenter.viewState.canSubmitSignUp)
+    }
+
     func testAuthPresenterMarksEmailAsUnavailableWhenValidationConflicts() async {
         let presenter = AuthPresenter(
             interactor: AuthInteractor(
@@ -512,11 +537,16 @@ final class ProfileFeatureTests: XCTestCase {
         }.jpegData(compressionQuality: 0.9)!
         await presenter.send(.profileImageDataSelected(imageData, fileName: "profile.jpg"))
 
+        XCTAssertNil(presenter.viewState.editorProfileImagePath)
+        XCTAssertNotNil(presenter.viewState.editorLocalProfileImageData)
+        XCTAssertTrue(presenter.viewState.canSaveProfile)
+        await presenter.send(.saveProfileTapped)
+
         XCTAssertEqual(
             presenter.viewState.editorProfileImagePath,
             "https://example.com/profile/uploaded.jpg"
         )
-        XCTAssertEqual(presenter.viewState.editorInfoMessage, "프로필 이미지가 변경되었어요.")
+        XCTAssertEqual(presenter.viewState.noticeMessage, "프로필을 저장했어요.")
         XCTAssertNil(presenter.viewState.profileImageUploadErrorMessage)
     }
 

@@ -13,6 +13,9 @@ struct AuthRootView: View {
     @EnvironmentObject private var sessionStore: SessionStore
 
     @State private var screen: Screen = .hub
+    @State private var isSignUpPasswordVisible = false
+    @State private var isSignUpPasswordConfirmationVisible = false
+    @FocusState private var focusedSignUpField: SignUpField?
 
     init(presenter: AuthPresenter) {
         _presenter = StateObject(wrappedValue: presenter)
@@ -40,6 +43,7 @@ struct AuthRootView: View {
                     .padding(.top, PikkoSpacing.lg)
                     .padding(.bottom, PikkoSpacing.xxl)
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
             .safeAreaPadding(.top, PikkoSpacing.md)
             .safeAreaPadding(.bottom, PikkoSpacing.md)
@@ -52,6 +56,13 @@ struct AuthRootView: View {
         .task {
             await presenter.send(.onAppear)
         }
+    }
+
+    private enum SignUpField: Hashable {
+        case email
+        case password
+        case passwordConfirmation
+        case nickname
     }
 
     private var headerBar: some View {
@@ -208,120 +219,39 @@ struct AuthRootView: View {
 
     private var signUpContent: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.xl) {
-            screenHeader(
-                title: "회원가입",
-                subtitle: "이메일, 비밀번호, 닉네임을 입력하고 가입을 완료해 주세요."
-            )
+            VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+                Text("회원가입")
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(PikkoColor.primaryText)
+
+                Text("이메일, 비밀번호, 닉네임을 입력하고 Pikko를 시작해 보세요.")
+                    .font(PikkoTypography.body)
+                    .foregroundStyle(PikkoColor.secondaryText)
+                    .lineSpacing(4)
+            }
 
             statusCards
 
+            signUpFormCard
+
             VStack(spacing: PikkoSpacing.sm) {
-                TextField(
-                    "",
-                    text: Binding(
-                        get: { presenter.viewState.email },
-                        set: { value in
-                            Task { await presenter.send(.emailChanged(value)) }
-                        }
-                    ),
-                    prompt: Text("이메일").foregroundStyle(PikkoColor.secondaryText)
-                )
-                .textInputAutocapitalization(.never)
-                .keyboardType(.emailAddress)
-                .autocorrectionDisabled()
-                .authInputStyle()
-
-                HStack(spacing: PikkoSpacing.sm) {
-                    Button {
-                        Task {
-                            await presenter.send(.validateEmailTapped)
-                        }
-                    } label: {
-                        Text(presenter.viewState.emailValidationButtonTitle)
-                            .font(PikkoTypography.captionStrong)
-                            .foregroundStyle(
-                                presenter.viewState.emailValidationState.isAvailable
-                                    ? PikkoColor.accentStrong
-                                    : PikkoColor.primaryText
-                            )
-                            .padding(.horizontal, PikkoSpacing.md)
-                            .frame(height: 36)
-                            .background(PikkoColor.surface)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous)
-                                    .stroke(PikkoColor.line, lineWidth: 1)
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!presenter.viewState.canRequestEmailValidation || presenter.viewState.emailValidationState.isValidating)
-
-                    if let emailValidationMessage = presenter.viewState.emailValidationState.message {
-                        Text(emailValidationMessage)
-                            .font(PikkoTypography.caption)
-                            .foregroundStyle(
-                                presenter.viewState.emailValidationState.isAvailable
-                                    ? PikkoColor.accentStrong
-                                    : PikkoColor.secondaryText
-                            )
-                            .lineLimit(2)
+                PrimaryButton(
+                    title: presenter.viewState.signUpSubmitTitle,
+                    systemImage: "person.badge.plus.fill",
+                    isLoading: presenter.viewState.isFormSubmitting,
+                    isEnabled: presenter.viewState.canSubmitSignUp
+                ) {
+                    Task {
+                        await presenter.send(.signUpTapped)
                     }
                 }
+                .opacity(presenter.viewState.canSubmitSignUp ? 1 : 0.72)
 
-                SecureField(
-                    "",
-                    text: Binding(
-                        get: { presenter.viewState.password },
-                        set: { value in
-                            Task { await presenter.send(.passwordChanged(value)) }
-                        }
-                    ),
-                    prompt: Text("비밀번호").foregroundStyle(PikkoColor.secondaryText)
-                )
-                .authInputStyle()
-
-                SecureField(
-                    "",
-                    text: Binding(
-                        get: { presenter.viewState.passwordConfirmation },
-                        set: { value in
-                            Task { await presenter.send(.passwordConfirmationChanged(value)) }
-                        }
-                    ),
-                    prompt: Text("비밀번호 확인").foregroundStyle(PikkoColor.secondaryText)
-                )
-                .authInputStyle()
-
-                TextField(
-                    "",
-                    text: Binding(
-                        get: { presenter.viewState.nick },
-                        set: { value in
-                            Task { await presenter.send(.nickChanged(value)) }
-                        }
-                    ),
-                    prompt: Text("닉네임").foregroundStyle(PikkoColor.secondaryText)
-                )
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .authInputStyle()
+                Text(presenter.viewState.signUpValidationHint)
+                    .font(PikkoTypography.caption)
+                    .foregroundStyle(PikkoColor.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
-            .disabled(presenter.viewState.isLoading)
-
-            PrimaryButton(
-                title: presenter.viewState.signUpSubmitTitle,
-                systemImage: "person.badge.plus",
-                isLoading: presenter.viewState.isFormSubmitting,
-                isEnabled: presenter.viewState.canSubmitSignUp
-            ) {
-                Task {
-                    await presenter.send(.signUpTapped)
-                }
-            }
-
-            Text(presenter.viewState.signUpValidationHint)
-                .font(PikkoTypography.caption)
-                .foregroundStyle(PikkoColor.secondaryText)
 
             inlineLinkRow(
                 leadingText: "이미 계정이 있나요?",
@@ -329,7 +259,269 @@ struct AuthRootView: View {
             ) {
                 switchScreen(.emailLogin)
             }
+            .frame(maxWidth: .infinity, alignment: .center)
         }
+    }
+
+    private var signUpFormCard: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.md) {
+            signUpEmailField
+
+            Divider()
+                .overlay(PikkoColor.divider.opacity(0.5))
+
+            signUpPasswordField
+            signUpPasswordConfirmationField
+            signUpNicknameField
+        }
+        .padding(PikkoSpacing.lg)
+        .background(.ultraThinMaterial)
+        .background(PikkoColor.surface.opacity(0.72))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(PikkoColor.primary.opacity(0.18), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .shadow(color: PikkoColor.primary.opacity(0.14), radius: 22, y: 12)
+        .disabled(presenter.viewState.isLoading)
+    }
+
+    private var signUpEmailField: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+            signUpFieldShell(
+                title: "이메일",
+                systemImage: "envelope.fill",
+                isFocused: focusedSignUpField == .email
+            ) {
+                TextField(
+                    "pikko@example.com",
+                    text: Binding(
+                        get: { presenter.viewState.email },
+                        set: { value in
+                            Task { await presenter.send(.emailChanged(value)) }
+                        }
+                    )
+                )
+                .textInputAutocapitalization(.never)
+                .keyboardType(.emailAddress)
+                .autocorrectionDisabled()
+                .focused($focusedSignUpField, equals: .email)
+            } trailing: {
+                Button {
+                    Task { await presenter.send(.validateEmailTapped) }
+                } label: {
+                    Text(presenter.viewState.emailValidationButtonTitle)
+                        .font(PikkoTypography.captionStrong)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, PikkoSpacing.sm)
+                        .frame(height: 32)
+                        .background(
+                            presenter.viewState.canRequestEmailValidation
+                                ? PikkoColor.primary
+                                : PikkoColor.gray300
+                        )
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!presenter.viewState.canRequestEmailValidation || presenter.viewState.emailValidationState.isValidating)
+            }
+
+            validationLine(
+                text: presenter.viewState.emailValidationState.message ?? "사용 가능한 이메일인지 중복 확인이 필요해요.",
+                isSatisfied: presenter.viewState.emailValidationState.isAvailable,
+                isActive: !presenter.viewState.email.isEmpty || presenter.viewState.emailValidationState.message != nil
+            )
+            validationLine(
+                text: "올바른 이메일 형식",
+                isSatisfied: presenter.viewState.emailFormatValid,
+                isActive: !presenter.viewState.email.isEmpty
+            )
+        }
+    }
+
+    private var signUpPasswordField: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+            signUpFieldShell(
+                title: "비밀번호",
+                systemImage: "lock.fill",
+                isFocused: focusedSignUpField == .password
+            ) {
+                Group {
+                    if isSignUpPasswordVisible {
+                        TextField(
+                            "비밀번호",
+                            text: Binding(
+                                get: { presenter.viewState.password },
+                                set: { value in
+                                    Task { await presenter.send(.passwordChanged(value)) }
+                                }
+                            )
+                        )
+                    } else {
+                        SecureField(
+                            "비밀번호",
+                            text: Binding(
+                                get: { presenter.viewState.password },
+                                set: { value in
+                                    Task { await presenter.send(.passwordChanged(value)) }
+                                }
+                            )
+                        )
+                    }
+                }
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($focusedSignUpField, equals: .password)
+            } trailing: {
+                Button {
+                    isSignUpPasswordVisible.toggle()
+                } label: {
+                    Image(systemName: isSignUpPasswordVisible ? "eye.slash.fill" : "eye.fill")
+                        .foregroundStyle(PikkoColor.secondaryText)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+            }
+
+            validationLine(
+                text: "8자 이상, 영문/숫자/특수문자 포함",
+                isSatisfied: presenter.viewState.passwordRuleValid,
+                isActive: !presenter.viewState.password.isEmpty
+            )
+        }
+    }
+
+    private var signUpPasswordConfirmationField: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+            signUpFieldShell(
+                title: "비밀번호 확인",
+                systemImage: "checkmark.shield.fill",
+                isFocused: focusedSignUpField == .passwordConfirmation
+            ) {
+                Group {
+                    if isSignUpPasswordConfirmationVisible {
+                        TextField(
+                            "비밀번호 확인",
+                            text: Binding(
+                                get: { presenter.viewState.passwordConfirmation },
+                                set: { value in
+                                    Task { await presenter.send(.passwordConfirmationChanged(value)) }
+                                }
+                            )
+                        )
+                    } else {
+                        SecureField(
+                            "비밀번호 확인",
+                            text: Binding(
+                                get: { presenter.viewState.passwordConfirmation },
+                                set: { value in
+                                    Task { await presenter.send(.passwordConfirmationChanged(value)) }
+                                }
+                            )
+                        )
+                    }
+                }
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($focusedSignUpField, equals: .passwordConfirmation)
+            } trailing: {
+                Button {
+                    isSignUpPasswordConfirmationVisible.toggle()
+                } label: {
+                    Image(systemName: isSignUpPasswordConfirmationVisible ? "eye.slash.fill" : "eye.fill")
+                        .foregroundStyle(PikkoColor.secondaryText)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+            }
+
+            validationLine(
+                text: "비밀번호가 일치해요",
+                isSatisfied: presenter.viewState.passwordsMatch,
+                isActive: !presenter.viewState.passwordConfirmation.isEmpty
+            )
+        }
+    }
+
+    private var signUpNicknameField: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+            signUpFieldShell(
+                title: "닉네임",
+                systemImage: "person.crop.circle.fill",
+                isFocused: focusedSignUpField == .nickname
+            ) {
+                TextField(
+                    "닉네임",
+                    text: Binding(
+                        get: { presenter.viewState.nick },
+                        set: { value in
+                            Task { await presenter.send(.nickChanged(value)) }
+                        }
+                    )
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($focusedSignUpField, equals: .nickname)
+            } trailing: {
+                EmptyView()
+            }
+
+            validationLine(
+                text: "필수 닉네임",
+                isSatisfied: presenter.viewState.nicknameValid,
+                isActive: !presenter.viewState.nick.isEmpty
+            )
+        }
+    }
+
+    private func signUpFieldShell<Field: View, Trailing: View>(
+        title: String,
+        systemImage: String,
+        isFocused: Bool,
+        @ViewBuilder field: () -> Field,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(spacing: PikkoSpacing.sm) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(isFocused ? PikkoColor.primary : PikkoColor.secondaryText)
+                .frame(width: 30, height: 30)
+                .background(PikkoColor.primarySoft.opacity(isFocused ? 1 : 0.58))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(PikkoColor.tertiaryText)
+
+                field()
+                    .font(PikkoTypography.body)
+                    .foregroundStyle(PikkoColor.primaryText)
+                    .tint(PikkoColor.primary)
+            }
+
+            trailing()
+        }
+        .padding(.horizontal, PikkoSpacing.md)
+        .frame(minHeight: 62)
+        .background(PikkoColor.elevatedSurface.opacity(isFocused ? 0.98 : 0.76))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(isFocused ? PikkoColor.primary.opacity(0.52) : PikkoColor.divider.opacity(0.58), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func validationLine(text: String, isSatisfied: Bool, isActive: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: isSatisfied ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 12, weight: .semibold))
+            Text(text)
+                .font(PikkoTypography.caption)
+                .lineLimit(2)
+        }
+        .foregroundStyle(isSatisfied ? PikkoColor.success : (isActive ? PikkoColor.warning : PikkoColor.secondaryText))
+        .padding(.horizontal, PikkoSpacing.xs)
     }
 
     private var serviceRequirementCard: some View {

@@ -9,6 +9,7 @@ struct AuthorizedAsyncImage: View {
         case idle
         case loading
         case success(Image)
+        case animatedGIF(Data)
         case failure
     }
 
@@ -18,6 +19,7 @@ struct AuthorizedAsyncImage: View {
     var cornerRadius: CGFloat = PikkoRadius.card
     var showsProgress = true
     var downsampleMaxPixelSize: CGFloat = 1_200
+    var onImageSizeResolved: ((CGSize) -> Void)? = nil
 
     @State private var phase: Phase = .idle
 
@@ -28,6 +30,9 @@ struct AuthorizedAsyncImage: View {
                 image
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
+                    .transition(.opacity)
+            case .animatedGIF(let data):
+                AnimatedGIFImage(data: data, contentMode: contentMode)
                     .transition(.opacity)
             case .loading:
                 SkeletonView(cornerRadius: cornerRadius)
@@ -61,6 +66,19 @@ struct AuthorizedAsyncImage: View {
 
         do {
             let data = try await loader.imageData(for: path)
+            if ImageFormatDetector.isGIF(data: data, path: path) {
+                let imageSize = ImageMetadata.pixelSize(from: data)
+                await MainActor.run {
+                    phase = .animatedGIF(data)
+                    if let imageSize {
+                        onImageSizeResolved?(imageSize)
+                    }
+                }
+#if DEBUG
+                logger.debug("[ImageDecode] animatedGIF originalSize=\(data.count) path=\(path)")
+#endif
+                return
+            }
             guard let uiImage = await ImageDownsampler.downsample(
                 data: data,
                 maxPixelSize: downsampleMaxPixelSize,
@@ -72,6 +90,7 @@ struct AuthorizedAsyncImage: View {
             }
             await MainActor.run {
                 phase = .success(Image(uiImage: uiImage))
+                onImageSizeResolved?(uiImage.size)
             }
 #if DEBUG
             if isProfileImagePath(path) {
@@ -85,6 +104,92 @@ struct AuthorizedAsyncImage: View {
 
     private func isProfileImagePath(_ path: String) -> Bool {
         path.contains("/profiles/") || path.contains("avatarRevision=")
+    }
+}
+
+private struct AnimatedGIFImage: UIViewRepresentable {
+    let data: Data
+    let contentMode: ContentMode
+
+    func makeUIView(context: Context) -> UIImageView {
+        let imageView = UIImageView()
+        imageView.clipsToBounds = true
+        imageView.contentMode = uiViewContentMode
+        imageView.image = AnimatedGIFDecoder.animatedImage(data: data) ?? UIImage(data: data)
+        imageView.startAnimating()
+        return imageView
+    }
+
+    func updateUIView(_ uiView: UIImageView, context: Context) {
+        uiView.contentMode = uiViewContentMode
+        uiView.image = AnimatedGIFDecoder.animatedImage(data: data) ?? UIImage(data: data)
+        uiView.startAnimating()
+    }
+
+    private var uiViewContentMode: UIView.ContentMode {
+        switch contentMode {
+        case .fit:
+            return .scaleAspectFit
+        case .fill:
+            return .scaleAspectFill
+        @unknown default:
+            return .scaleAspectFill
+        }
+    }
+}
+
+private enum ImageFormatDetector {
+    static func isGIF(data: Data, path: String?) -> Bool {
+        if path?.lowercased().hasSuffix(".gif") == true {
+            return true
+        }
+        guard data.count >= 6,
+              let header = String(bytes: data.prefix(6), encoding: .ascii) else {
+            return false
+        }
+        return header == "GIF87a" || header == "GIF89a"
+    }
+}
+
+private enum AnimatedGIFDecoder {
+    static func animatedImage(data: Data) -> UIImage? {
+        let options = [kCGImageSourceShouldCache: true] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
+            return nil
+        }
+        let frameCount = CGImageSourceGetCount(source)
+        guard frameCount > 1 else {
+            return UIImage(data: data)
+        }
+
+        var images: [UIImage] = []
+        images.reserveCapacity(frameCount)
+        var duration: TimeInterval = 0
+
+        for index in 0..<frameCount {
+            guard let cgImage = CGImageSourceCreateImageAtIndex(source, index, nil) else {
+                continue
+            }
+            duration += frameDuration(at: index, source: source)
+            images.append(UIImage(cgImage: cgImage))
+        }
+
+        guard !images.isEmpty else {
+            return UIImage(data: data)
+        }
+        return UIImage.animatedImage(with: images, duration: max(duration, 0.1))
+    }
+
+    private static func frameDuration(at index: Int, source: CGImageSource) -> TimeInterval {
+        let defaultDelay = 0.1
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+              let gifProperties = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any] else {
+            return defaultDelay
+        }
+        let unclamped = gifProperties[kCGImagePropertyGIFUnclampedDelayTime] as? NSNumber
+        let clamped = gifProperties[kCGImagePropertyGIFDelayTime] as? NSNumber
+        let delay = unclamped?.doubleValue ?? clamped?.doubleValue ?? defaultDelay
+        return delay < 0.02 ? defaultDelay : delay
     }
 }
 
@@ -127,6 +232,21 @@ private enum ImageDownsampler {
             return UIImage(data: data)
         }
         return UIImage(cgImage: cgImage)
+    }
+}
+
+private enum ImageMetadata {
+    static func pixelSize(from data: Data) -> CGSize? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, options),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let pixelWidth = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+              let pixelHeight = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+              pixelWidth.doubleValue > 0,
+              pixelHeight.doubleValue > 0 else {
+            return nil
+        }
+        return CGSize(width: pixelWidth.doubleValue, height: pixelHeight.doubleValue)
     }
 }
 

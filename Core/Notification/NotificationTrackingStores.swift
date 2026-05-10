@@ -29,8 +29,8 @@ protocol ActiveChatRoomTracking: AnyObject {
 }
 
 @MainActor
-final class ActiveChatRoomTracker: ActiveChatRoomTracking {
-    var activeRoomId: String?
+final class ActiveChatRoomTracker: ObservableObject, ActiveChatRoomTracking {
+    @Published var activeRoomId: String?
 }
 
 @MainActor

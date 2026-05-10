@@ -85,6 +85,7 @@ struct ProfileInteractor: ProfileInteracting {
         )
 
         return ProfileViewState(
+            serverProfile: profile,
             displayName: effectiveProfile.nick,
             email: effectiveProfile.email,
             phoneNumber: effectiveProfile.phoneNumber ?? "",
@@ -97,7 +98,8 @@ struct ProfileInteractor: ProfileInteracting {
             logoutActionTitle: sessionStore.isAuthenticated ? "로그아웃" : "로그인 필요",
             editorNick: effectiveProfile.nick,
             editorPhoneNumber: effectiveProfile.phoneNumber ?? "",
-            editorProfileImagePath: effectiveProfile.profileImagePath
+            editorProfileImagePath: effectiveProfile.profileImagePath,
+            draftNickname: effectiveProfile.nick
         )
     }
 

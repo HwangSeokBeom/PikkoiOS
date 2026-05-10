@@ -30,7 +30,7 @@ enum FileUploadEndpointPolicy: Equatable, Sendable {
         case .profileImage, .reviewImages:
             return ["jpg", "jpeg", "png"]
         case .chatFiles:
-            return ["jpg", "jpeg", "png", "gif", "pdf"]
+            return ["jpg", "jpeg", "png", "gif", "heic", "heif", "pdf"]
         case .postFiles:
             return ["jpg", "jpeg", "png", "gif", "webp", "mp4", "mov", "avi", "mkv", "wmv"]
         }
@@ -41,7 +41,7 @@ enum FileUploadEndpointPolicy: Equatable, Sendable {
         case .profileImage, .reviewImages:
             return ["image/jpeg", "image/jpg", "image/png"]
         case .chatFiles:
-            return ["image/jpeg", "image/jpg", "image/png", "image/gif", "application/pdf"]
+            return ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/heic", "image/heif", "application/pdf"]
         case .postFiles:
             return [
                 "image/jpeg",
@@ -106,8 +106,12 @@ struct FileUploadDescriptor: Equatable, Sendable {
             || normalizedMimeType == "image/jpeg"
             || normalizedMimeType == "image/jpg"
             || normalizedMimeType == "image/png"
+            || normalizedMimeType == "image/heic"
+            || normalizedMimeType == "image/heif"
             || conforms(to: .jpeg)
             || conforms(to: .png)
+            || conforms(to: .heic)
+            || conforms(to: .heif)
     }
 
     private var extensionIsSupported: Bool {
@@ -134,6 +138,8 @@ struct FileUploadDescriptor: Equatable, Sendable {
             return type.conforms(to: .jpeg)
                 || type.conforms(to: .png)
                 || type.conforms(to: .gif)
+                || type.conforms(to: .heic)
+                || type.conforms(to: .heif)
                 || type.conforms(to: .pdf)
         case .postFiles:
             return type.conforms(to: .image) || type.conforms(to: .movie)

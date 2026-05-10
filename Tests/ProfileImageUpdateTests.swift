@@ -107,7 +107,7 @@ final class ProfileImageUpdateTests: XCTestCase {
         XCTAssertEqual(remote.updatedPhoneNumber, "01012345678")
     }
 
-    func testProfilePresenterUploadSuccessUpdatesEditorStateAndInvalidatesCache() async throws {
+    func testProfilePresenterSelectionStagesImageWithoutUploading() async throws {
         let sessionStore = makeAuthenticatedSessionStore()
         let interactor = StubProfileInteractor()
         let imageLoader = StubProfileImageLoader()
@@ -122,10 +122,61 @@ final class ProfileImageUpdateTests: XCTestCase {
         await presenter.send(.editProfileTapped)
         await presenter.send(.profileImageDataSelected(data, fileName: "avatar.heic"))
 
+        XCTAssertEqual(interactor.uploadCallCount, 0)
+        XCTAssertEqual(presenter.viewState.editorProfileImagePath, "https://example.com/old.jpg")
+        XCTAssertEqual(presenter.viewState.profileImagePath, "https://example.com/old.jpg")
+        XCTAssertEqual(sessionStore.profileImagePath, "https://example.com/old.jpg")
+        XCTAssertNotNil(presenter.viewState.editorLocalProfileImageData)
+        XCTAssertNotNil(presenter.viewState.pendingProfileImageUpload)
+        XCTAssertNotNil(presenter.viewState.stagedProfileImage)
+        XCTAssertNotNil(presenter.viewState.stagedProfileImageFile)
+        XCTAssertTrue(presenter.viewState.isDirty)
+        XCTAssertTrue(presenter.viewState.canSaveProfile)
+        let removedPaths = await imageLoader.removedPathsSnapshot()
+        XCTAssertTrue(removedPaths.isEmpty)
+    }
+
+    func testProfileEditorRouteRemainsActiveAfterImageSelection() async throws {
+        let sessionStore = makeAuthenticatedSessionStore()
+        let interactor = StubProfileInteractor()
+        let presenter = ProfilePresenter(
+            interactor: interactor,
+            router: StubProfileRouter(),
+            sessionStore: sessionStore,
+            imageLoader: StubProfileImageLoader()
+        )
+        let data = try XCTUnwrap(makeTestImage(size: CGSize(width: 500, height: 500)).jpegData(compressionQuality: 0.9))
+
+        await presenter.send(.editProfileTapped)
+        await presenter.send(.profileImageDataSelected(data, fileName: "avatar.jpg"))
+
+        XCTAssertTrue(presenter.viewState.isEditingProfile)
+        XCTAssertEqual(interactor.uploadCallCount, 0)
+        XCTAssertNotNil(presenter.viewState.stagedProfileImageFile)
+    }
+
+    func testProfilePresenterSaveUploadsStagedImageAndInvalidatesCache() async throws {
+        let sessionStore = makeAuthenticatedSessionStore()
+        let interactor = StubProfileInteractor()
+        let imageLoader = StubProfileImageLoader()
+        let presenter = ProfilePresenter(
+            interactor: interactor,
+            router: StubProfileRouter(),
+            sessionStore: sessionStore,
+            imageLoader: imageLoader
+        )
+        let data = try XCTUnwrap(makeTestImage(size: CGSize(width: 500, height: 500)).jpegData(compressionQuality: 0.9))
+
+        await presenter.send(.editProfileTapped)
+        await presenter.send(.profileImageDataSelected(data, fileName: "avatar.heic"))
+        await presenter.send(.saveProfileTapped)
+
+        XCTAssertEqual(interactor.uploadCallCount, 1)
         XCTAssertEqual(presenter.viewState.editorProfileImagePath, interactor.uploadedPath)
         XCTAssertEqual(presenter.viewState.profileImagePath, interactor.uploadedPath)
         XCTAssertEqual(sessionStore.profileImagePath, interactor.uploadedPath)
         XCTAssertNil(presenter.viewState.editorLocalProfileImageData)
+        XCTAssertNil(presenter.viewState.pendingProfileImageUpload)
         XCTAssertNil(presenter.viewState.profileImageUploadErrorMessage)
         XCTAssertEqual(presenter.viewState.profileImageUpdateState, .success)
         let removedPaths = await imageLoader.removedPathsSnapshot()
@@ -147,12 +198,14 @@ final class ProfileImageUpdateTests: XCTestCase {
         await presenter.send(.editProfileTapped)
         let originalPath = presenter.viewState.editorProfileImagePath
         await presenter.send(.profileImageDataSelected(data, fileName: "avatar.jpg"))
+        await presenter.send(.saveProfileTapped)
 
         XCTAssertEqual(presenter.viewState.editorProfileImagePath, originalPath)
         XCTAssertEqual(presenter.viewState.profileImagePath, originalPath)
         XCTAssertEqual(sessionStore.profileImagePath, originalPath)
         XCTAssertNotNil(presenter.viewState.profileImageUploadErrorMessage)
-        XCTAssertNil(presenter.viewState.editorLocalProfileImageData)
+        XCTAssertNotNil(presenter.viewState.editorLocalProfileImageData)
+        XCTAssertNotNil(presenter.viewState.pendingProfileImageUpload)
     }
 
     func testStaleProfileLoadDoesNotOverwriteNewUploadedAvatar() async throws {
@@ -174,7 +227,9 @@ final class ProfileImageUpdateTests: XCTestCase {
         interactor.releaseInitialLoad()
         await loadTask.value
 
-        XCTAssertEqual(presenter.viewState.editorProfileImagePath, interactor.uploadedPath)
+        XCTAssertEqual(presenter.viewState.editorProfileImagePath, "https://example.com/old.jpg")
+        XCTAssertNotNil(presenter.viewState.editorLocalProfileImageData)
+        XCTAssertEqual(interactor.uploadCallCount, 0)
     }
 
     func testStaleProfileRefetchCannotOverwriteNewUploadedAvatar() async throws {
@@ -192,6 +247,7 @@ final class ProfileImageUpdateTests: XCTestCase {
 
         await presenter.send(.editProfileTapped)
         await presenter.send(.profileImageDataSelected(data, fileName: "avatar.jpg"))
+        await presenter.send(.saveProfileTapped)
 
         XCTAssertEqual(presenter.viewState.profileImagePath, interactor.uploadedPath)
         XCTAssertEqual(sessionStore.profileImagePath, interactor.uploadedPath)
@@ -211,13 +267,14 @@ final class ProfileImageUpdateTests: XCTestCase {
 
         await presenter.send(.editProfileTapped)
         await presenter.send(.profileImageDataSelected(data, fileName: "avatar.jpg"))
+        await presenter.send(.saveProfileTapped)
 
         let removedPaths = await imageLoader.removedPathsSnapshot()
         XCTAssertTrue(removedPaths.contains("https://example.com/old.jpg"))
         XCTAssertTrue(removedPaths.contains(interactor.uploadedPath))
     }
 
-    func testDuplicateProfileImageUploadTapIsIgnoredWhileUploadInProgress() async throws {
+    func testDuplicateProfileSaveTapIsIgnoredWhileUploadInProgress() async throws {
         let sessionStore = makeAuthenticatedSessionStore()
         let interactor = StubProfileInteractor()
         interactor.holdUpload = true
@@ -230,9 +287,10 @@ final class ProfileImageUpdateTests: XCTestCase {
         let data = try XCTUnwrap(makeTestImage(size: CGSize(width: 500, height: 500)).jpegData(compressionQuality: 0.9))
 
         await presenter.send(.editProfileTapped)
-        let firstUpload = Task { await presenter.send(.profileImageDataSelected(data, fileName: "avatar.jpg")) }
-        await interactor.waitForUploadStarted()
         await presenter.send(.profileImageDataSelected(data, fileName: "avatar.jpg"))
+        let firstUpload = Task { await presenter.send(.saveProfileTapped) }
+        await interactor.waitForUploadStarted()
+        await presenter.send(.saveProfileTapped)
         XCTAssertEqual(interactor.uploadCallCount, 1)
 
         interactor.releaseUpload()

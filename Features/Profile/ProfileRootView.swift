@@ -70,10 +70,12 @@ struct ProfileRootView: View {
                         path: presenter.viewState.profileImageDisplayPath,
                         loader: imageLoader,
                         contentMode: .fill,
-                        cornerRadius: 32,
+                        cornerRadius: 36,
                         showsProgress: false
                     )
                     .frame(width: 72, height: 72)
+                    .clipped()
+                    .clipShape(Circle())
 
                     VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
                         Text(presenter.viewState.displayName)
@@ -332,7 +334,7 @@ private struct ProfileEditorView: View {
     let imageLoader: any AuthorizedImageLoading
 
     @Environment(\.dismiss) private var dismiss
-    @State private var isPhotoPickerPresented = false
+    @State private var selectedProfileImageItem: PhotosPickerItem?
 
     var body: some View {
         NavigationStack {
@@ -340,14 +342,21 @@ private struct ProfileEditorView: View {
                 VStack(alignment: .leading, spacing: PikkoSpacing.lg) {
                     VStack(alignment: .center, spacing: PikkoSpacing.md) {
                         editorAvatarView
-                            .frame(width: 96, height: 96)
-
-                        Button {
+                            .frame(width: 104, height: 104)
+                            .aspectRatio(1, contentMode: .fit)
+                            .clipShape(Circle())
+                            .fixedSize()
+                            .onAppear {
 #if DEBUG
-                            Logger(category: "ProfileImage").debug("[ProfileImage] picker presented source=photos")
+                                Logger(category: "ProfileImageLayout").debug("[ProfileImageLayout] size=104x104 shape=circle stretched=false")
 #endif
-                            isPhotoPickerPresented = true
-                        } label: {
+                            }
+
+                        PhotosPicker(
+                            selection: $selectedProfileImageItem,
+                            matching: .images,
+                            preferredItemEncoding: .current
+                        ) {
                             Text("프로필 이미지 변경")
                                 .font(PikkoTypography.captionStrong)
                                 .foregroundStyle(PikkoColor.primaryPressed)
@@ -360,7 +369,13 @@ private struct ProfileEditorView: View {
                                 }
                                 .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
                         }
-                        .buttonStyle(.plain)
+                        .simultaneousGesture(
+                            TapGesture().onEnded {
+#if DEBUG
+                                Logger(category: "ProfileImage").debug("[ProfileImage] picker presented source=photos")
+#endif
+                            }
+                        )
                         .disabled(presenter.viewState.isUploadingProfileImage || presenter.viewState.isSavingProfile)
 
                         switch presenter.viewState.profileImageUpdateState {
@@ -439,30 +454,10 @@ private struct ProfileEditorView: View {
                 }
             }
         }
-        .sheet(isPresented: $isPhotoPickerPresented) {
-            ProfilePhotoPicker(
-                onCancel: {
-                    isPhotoPickerPresented = false
-                },
-                onLoadFailure: { message in
-                    isPhotoPickerPresented = false
-                    Task { @MainActor in
-                        await presenter.send(.profileImageSelectionFailed(message))
-                    }
-                },
-                onDataLoaded: { data, fileName in
-                    isPhotoPickerPresented = false
-                    Task { @MainActor in
-                        await presenter.send(
-                            .profileImageDataSelected(
-                                data,
-                                fileName: fileName
-                            )
-                        )
-                    }
-                }
-            )
-            .ignoresSafeArea()
+        .onChange(of: selectedProfileImageItem) { _, item in
+            Task { @MainActor in
+                await handleProfileImageSelection(item)
+            }
         }
         .onChange(of: presenter.viewState.profileImageDisplayPath) { _, newValue in
 #if DEBUG
@@ -476,6 +471,62 @@ private struct ProfileEditorView: View {
         }
     }
 
+    private func handleProfileImageSelection(_ item: PhotosPickerItem?) async {
+        guard let item else { return }
+
+        let contentTypes = item.supportedContentTypes
+        let providerTypes = contentTypes.map(\.identifier).joined(separator: ",")
+        let preferredType = preferredProfileImageType(from: contentTypes)
+        let typeIdentifier = preferredType.identifier
+#if DEBUG
+        Logger(category: "ProfileImage").debug("[ProfileImage] picker selected count=1 providerTypes=\(providerTypes) suggestedName=nil")
+        Logger(category: "ProfileImage").debug("[ProfileImage] load start itemType=\(typeIdentifier)")
+#endif
+
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  !data.isEmpty else {
+#if DEBUG
+                Logger(category: "ProfileImage").warning("[ProfileImage] load failed reason=imageDataUnavailable")
+#endif
+                selectedProfileImageItem = nil
+                await presenter.send(.profileImageSelectionFailed("이미지를 불러오지 못했어요. 다른 사진을 선택해 주세요."))
+                return
+            }
+
+            let fileName = profileImageFileName(for: preferredType)
+            let metadata = ProfileImagePreprocessor.diagnosticMetadata(data: data, filename: fileName)
+#if DEBUG
+            Logger(category: "ProfileImage").debug("[ProfileImage] selected asset contentType=\(metadata.contentType) originalBytes=\(data.count) pixelWidth=\(metadata.pixelWidth) pixelHeight=\(metadata.pixelHeight)")
+            Logger(category: "ProfileImage").debug("[ProfileImage] load success originalBytes=\(data.count) contentType=\(metadata.contentType) filename=\(fileName)")
+            if metadata.pixelWidth > 0, metadata.pixelHeight > 0 {
+                Logger(category: "ProfileImage").debug("[ProfileImage] decode success pixelWidth=\(metadata.pixelWidth) pixelHeight=\(metadata.pixelHeight) orientation=\(metadata.orientation)")
+            }
+#endif
+            selectedProfileImageItem = nil
+            await presenter.send(.profileImageDataSelected(data, fileName: fileName))
+        } catch {
+#if DEBUG
+            Logger(category: "ProfileImage").warning("[ProfileImage] load failed reason=photoLoadFailed")
+#endif
+            selectedProfileImageItem = nil
+            await presenter.send(.profileImageSelectionFailed("iCloud에서 사진을 불러오지 못했어요. 네트워크 상태를 확인한 뒤 다시 시도해 주세요."))
+        }
+    }
+
+    private func preferredProfileImageType(from types: [UTType]) -> UTType {
+        if let jpeg = types.first(where: { $0.conforms(to: .jpeg) }) { return jpeg }
+        if let png = types.first(where: { $0.conforms(to: .png) }) { return png }
+        if let heic = types.first(where: { $0.conforms(to: .heic) }) { return heic }
+        if let heif = types.first(where: { $0.conforms(to: .heif) }) { return heif }
+        return types.first(where: { $0.conforms(to: .image) && !$0.conforms(to: .gif) }) ?? .jpeg
+    }
+
+    private func profileImageFileName(for type: UTType) -> String {
+        let fileExtension = type.preferredFilenameExtension ?? "jpg"
+        return "profile.\(fileExtension)"
+    }
+
     @ViewBuilder
     private var editorAvatarView: some View {
         if let data = presenter.viewState.editorLocalProfileImageData,
@@ -483,173 +534,23 @@ private struct ProfileEditorView: View {
             Image(uiImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
+                .frame(width: 104, height: 104)
+                .clipped()
+                .clipShape(Circle())
         } else {
             AuthorizedAsyncImage(
                 path: presenter.viewState.editorProfileImageDisplayPath,
                 loader: imageLoader,
                 contentMode: .fill,
-                cornerRadius: 40,
+                cornerRadius: 52,
                 showsProgress: false
             )
+            .frame(width: 104, height: 104)
+            .clipped()
+            .clipShape(Circle())
         }
     }
 
-}
-
-private struct ProfilePhotoPicker: UIViewControllerRepresentable {
-    let onCancel: @MainActor () -> Void
-    let onLoadFailure: @MainActor (String) -> Void
-    let onDataLoaded: @MainActor (Data, String) -> Void
-
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var configuration = PHPickerConfiguration(photoLibrary: .shared())
-        configuration.filter = .images
-        configuration.selectionLimit = 1
-        configuration.preferredAssetRepresentationMode = .current
-        let picker = PHPickerViewController(configuration: configuration)
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
-
-    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        private let parent: ProfilePhotoPicker
-        private var didStartLoading = false
-
-        init(parent: ProfilePhotoPicker) {
-            self.parent = parent
-        }
-
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            picker.dismiss(animated: true)
-
-            guard let result = results.first else {
-#if DEBUG
-                Logger(category: "ProfileImage").debug("[ProfileImage] picker cancelled")
-#endif
-                Task { @MainActor in
-                    parent.onCancel()
-                }
-                return
-            }
-
-            guard !didStartLoading else { return }
-            didStartLoading = true
-
-            let provider = result.itemProvider
-            let providerTypes = provider.registeredTypeIdentifiers.joined(separator: ",")
-            let suggestedName = provider.suggestedName ?? "nil"
-#if DEBUG
-            Logger(category: "ProfileImage").debug("[ProfileImage] picker selected count=1 providerTypes=\(providerTypes) suggestedName=\(suggestedName)")
-#endif
-
-            guard let typeIdentifier = Self.preferredImageTypeIdentifier(from: provider.registeredTypeIdentifiers) else {
-#if DEBUG
-                Logger(category: "ProfileImage").warning("[ProfileImage] load failed reason=unsupportedFormat")
-#endif
-                Task { @MainActor in
-                    parent.onLoadFailure("지원하지 않는 이미지 형식이에요. 다른 사진을 선택해 주세요.")
-                }
-                return
-            }
-
-#if DEBUG
-            Logger(category: "ProfileImage").debug("[ProfileImage] load start itemType=\(typeIdentifier)")
-#endif
-            Self.loadImageData(from: provider, typeIdentifier: typeIdentifier) { [parent] data, error in
-                if let error {
-#if DEBUG
-                    Logger(category: "ProfileImage").warning("[ProfileImage] load failed reason=\(Self.sanitizedLoadFailureReason(from: error))")
-#endif
-                    Task { @MainActor in
-                        parent.onLoadFailure("iCloud에서 사진을 불러오지 못했어요. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.")
-                    }
-                    return
-                }
-
-                guard let data, !data.isEmpty else {
-#if DEBUG
-                    Logger(category: "ProfileImage").warning("[ProfileImage] load failed reason=imageDataUnavailable")
-#endif
-                    Task { @MainActor in
-                        parent.onLoadFailure("이미지를 불러오지 못했어요. 다른 사진을 선택해 주세요.")
-                    }
-                    return
-                }
-
-                let fileName = Self.fileName(suggestedName: suggestedName, typeIdentifier: typeIdentifier)
-                let metadata = ProfileImagePreprocessor.diagnosticMetadata(data: data, filename: fileName)
-#if DEBUG
-                Logger(category: "ProfileImage").debug("[ProfileImage] selected asset contentType=\(metadata.contentType) originalBytes=\(data.count) pixelWidth=\(metadata.pixelWidth) pixelHeight=\(metadata.pixelHeight)")
-                Logger(category: "ProfileImage").debug("[ProfileImage] load success originalBytes=\(data.count) contentType=\(metadata.contentType) filename=\(fileName)")
-                if metadata.pixelWidth > 0, metadata.pixelHeight > 0 {
-                    Logger(category: "ProfileImage").debug("[ProfileImage] decode success pixelWidth=\(metadata.pixelWidth) pixelHeight=\(metadata.pixelHeight) orientation=\(metadata.orientation)")
-                }
-#endif
-                Task { @MainActor in
-                    parent.onDataLoaded(data, fileName)
-                }
-            }
-        }
-
-        private static func preferredImageTypeIdentifier(from identifiers: [String]) -> String? {
-            let supported = identifiers.compactMap { identifier -> (String, UTType)? in
-                guard let type = UTType(identifier),
-                      type.conforms(to: .image),
-                      !type.conforms(to: .gif),
-                      !type.conforms(to: .webP) else {
-                    return nil
-                }
-                return (identifier, type)
-            }
-
-            return supported.first { $0.1.conforms(to: .jpeg) }?.0
-                ?? supported.first { $0.1.conforms(to: .png) }?.0
-                ?? supported.first { $0.1.conforms(to: .heic) }?.0
-                ?? supported.first { $0.1.conforms(to: .heif) }?.0
-                ?? supported.first?.0
-        }
-
-        private static func loadImageData(
-            from provider: NSItemProvider,
-            typeIdentifier: String,
-            completion: @escaping @Sendable (Data?, Error?) -> Void
-        ) {
-            provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { fileURL, fileError in
-                if let fileURL,
-                   let data = try? Data(contentsOf: fileURL),
-                   !data.isEmpty {
-                    completion(data, nil)
-                    return
-                }
-
-                provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, dataError in
-                    completion(data, dataError ?? fileError)
-                }
-            }
-        }
-
-        private static func fileName(suggestedName: String, typeIdentifier: String) -> String {
-            let fallbackExtension = UTType(typeIdentifier)?.preferredFilenameExtension ?? "jpg"
-            let rawBaseName = suggestedName == "nil" ? "" : (suggestedName as NSString).deletingPathExtension
-            let baseName = rawBaseName.trimmingCharacters(in: .whitespacesAndNewlines)
-            return "\(baseName.isEmpty ? "profile-\(Int(Date().timeIntervalSince1970))" : baseName).\(fallbackExtension)"
-        }
-
-        private static func sanitizedLoadFailureReason(from error: Error) -> String {
-            let nsError = error as NSError
-            if nsError.domain == NSCocoaErrorDomain {
-                return "photoLoadFailed code=\(nsError.code)"
-            }
-            return "photoLoadFailed"
-        }
-    }
 }
 
 enum StoreListMode: Equatable, Sendable {

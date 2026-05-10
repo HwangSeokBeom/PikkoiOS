@@ -112,6 +112,9 @@ struct CommunityDetailRootView: View {
                     onDeleteConfirmed: { commentID in
                         Task { await presenter.send(.commentDeleteConfirmed(commentID)) }
                     },
+                    onBackTapped: {
+                        Task { await presenter.send(.replyThreadBackTapped) }
+                    },
                     onScrollTargetHandled: {
                         Task { await presenter.send(.replyScrollTargetHandled) }
                     }
@@ -151,7 +154,6 @@ private extension CommunityDetailRootView {
             set: { isPresented in
                 guard !isPresented else { return }
                 Task { @MainActor in
-                    await Task.yield()
                     await presenter.send(.replyThreadDismissed)
                 }
             }

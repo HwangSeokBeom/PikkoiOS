@@ -631,6 +631,60 @@ final class CommunityDetailFeatureTests: XCTestCase {
         XCTAssertEqual(presenter.viewState.replyThread?.replies.map(\.id), ["reply-1"])
     }
 
+    func testReplyThreadBackRemovesOnlyReplyThreadState() async {
+        let parent = makeComment(id: "parent-1", postID: "post-123")
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: StubCommunityDetailInteractor(
+                loadContentResult: .success(
+                    CommunityDetailContent(
+                        detail: makeDetail(postID: "post-123", comments: [parent]),
+                        distanceMeters: nil
+                    )
+                ),
+                loadCommentsResults: [.success(CursorPage(items: [parent], nextCursor: nil))]
+            ),
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.commentReplyTapped("parent-1"))
+        await presenter.send(.replyThreadBackTapped)
+
+        XCTAssertNil(presenter.viewState.replyThread)
+        XCTAssertEqual(presenter.viewState.postID, "post-123")
+        XCTAssertTrue(presenter.viewState.hasLoadedContent)
+    }
+
+    func testReplyThreadDoubleBackDoesNotClearPostDetailState() async {
+        let parent = makeComment(id: "parent-1", postID: "post-123")
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: StubCommunityDetailInteractor(
+                loadContentResult: .success(
+                    CommunityDetailContent(
+                        detail: makeDetail(postID: "post-123", comments: [parent]),
+                        distanceMeters: nil
+                    )
+                ),
+                loadCommentsResults: [.success(CursorPage(items: [parent], nextCursor: nil))]
+            ),
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.commentReplyTapped("parent-1"))
+        await presenter.send(.replyThreadBackTapped)
+        await presenter.send(.replyThreadBackTapped)
+        await presenter.send(.onDisappear)
+
+        XCTAssertNil(presenter.viewState.replyThread)
+        XCTAssertEqual(presenter.viewState.commentSection.comments.map(\.id), ["parent-1"])
+        XCTAssertTrue(presenter.viewState.hasLoadedContent)
+    }
+
     func testReplyThreadStateUpdatesWhenPostDetailRefreshes() async {
         let initialParent = makeComment(id: "parent-1", postID: "post-123")
         let refreshedParent = makeComment(

@@ -11,6 +11,10 @@ struct FeatureBuilderFactory {
         self.appState = appState
     }
 
+    var activeChatRoomTracker: ActiveChatRoomTracker {
+        container.activeChatRoomTracker
+    }
+
     func makeAuthView(
         context: AuthPresentationContext = .generic,
         onAuthenticated: @escaping () -> Void = {}

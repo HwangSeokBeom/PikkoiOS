@@ -360,6 +360,7 @@ struct CommentReplyThreadView: View {
     let onEditSaveTapped: () -> Void
     let onEditCancelTapped: () -> Void
     let onDeleteConfirmed: (String) -> Void
+    let onBackTapped: () -> Void
     let onScrollTargetHandled: () -> Void
 
     @State private var pendingDeletionComment: CommunityDetailCommentRowViewState?
@@ -442,6 +443,16 @@ struct CommentReplyThreadView: View {
         }
         .navigationTitle("댓글")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: onBackTapped) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .accessibilityLabel("뒤로가기")
+            }
+        }
         .alert(item: $pendingDeletionComment) { comment in
             Alert(
                 title: Text("댓글을 삭제할까요?"),
