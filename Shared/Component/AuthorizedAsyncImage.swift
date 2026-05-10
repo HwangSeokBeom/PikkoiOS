@@ -11,6 +11,30 @@ struct AuthorizedAsyncImage: View {
         case success(Image)
         case animatedGIF(Data)
         case failure
+
+        var isLoading: Bool {
+            if case .loading = self { return true }
+            return false
+        }
+
+        var isSuccess: Bool {
+            if case .success = self { return true }
+            return false
+        }
+
+        var isAnimatedGIF: Bool {
+            if case .animatedGIF = self { return true }
+            return false
+        }
+
+        var isTerminal: Bool {
+            switch self {
+            case .success, .animatedGIF, .failure:
+                return true
+            case .idle, .loading:
+                return false
+            }
+        }
     }
 
     let path: String?
@@ -22,6 +46,7 @@ struct AuthorizedAsyncImage: View {
     var onImageSizeResolved: ((CGSize) -> Void)? = nil
 
     @State private var phase: Phase = .idle
+    @State private var loadedPath: String?
 
     var body: some View {
         ZStack {
@@ -58,38 +83,69 @@ struct AuthorizedAsyncImage: View {
 
     private func load() async {
         guard let path, !path.isEmpty else {
-            await MainActor.run { phase = .failure }
+            await MainActor.run {
+                if loadedPath != path || !phase.isTerminal {
+                    phase = .failure
+                    loadedPath = path
+                }
+            }
             return
         }
 
-        await MainActor.run { phase = .loading }
+        if await MainActor.run(body: { loadedPath == path && phase.isTerminal }) {
+            return
+        }
+
+        await MainActor.run {
+            if loadedPath != path || !phase.isLoading {
+                phase = .loading
+                loadedPath = path
+            }
+        }
 
         do {
             let data = try await loader.imageData(for: path)
             if ImageFormatDetector.isGIF(data: data, path: path) {
                 let imageSize = ImageMetadata.pixelSize(from: data)
                 await MainActor.run {
-                    phase = .animatedGIF(data)
+                    if loadedPath != path || !phase.isAnimatedGIF {
+                        phase = .animatedGIF(data)
+                        loadedPath = path
+                    }
                     if let imageSize {
                         onImageSizeResolved?(imageSize)
                     }
                 }
 #if DEBUG
-                logger.debug("[ImageDecode] animatedGIF originalSize=\(data.count) path=\(path)")
+                DebugLogDeduplicator.shared.printWhenChanged(
+                    key: "ImageDecode.gif.\(Self.cacheKey(path: path))",
+                    value: "\(data.count)",
+                    logger: logger,
+                    message: "[ImageDecode] animatedGIF originalSize=\(data.count) path=\(Self.diagnosticPath(path))"
+                )
 #endif
                 return
             }
             guard let uiImage = await ImageDownsampler.downsample(
                 data: data,
                 maxPixelSize: downsampleMaxPixelSize,
+                cacheKey: "\(Self.cacheKey(path: path))|\(Int(downsampleMaxPixelSize.rounded()))",
                 logger: logger
             ) else {
                 logger.warning("Image decode failed. path=\(path)")
-                await MainActor.run { phase = .failure }
+                await MainActor.run {
+                    if loadedPath != path || !phase.isTerminal {
+                        phase = .failure
+                        loadedPath = path
+                    }
+                }
                 return
             }
             await MainActor.run {
-                phase = .success(Image(uiImage: uiImage))
+                if loadedPath != path || !phase.isSuccess {
+                    phase = .success(Image(uiImage: uiImage))
+                    loadedPath = path
+                }
                 onImageSizeResolved?(uiImage.size)
             }
 #if DEBUG
@@ -98,12 +154,30 @@ struct AuthorizedAsyncImage: View {
             }
 #endif
         } catch {
-            await MainActor.run { phase = .failure }
+            await MainActor.run {
+                if loadedPath != path || !phase.isTerminal {
+                    phase = .failure
+                    loadedPath = path
+                }
+            }
         }
     }
 
     private func isProfileImagePath(_ path: String) -> Bool {
         path.contains("/profiles/") || path.contains("avatarRevision=")
+    }
+
+    private static func cacheKey(path: String) -> String {
+        if let components = URLComponents(string: path),
+           let host = components.host,
+           !components.path.isEmpty {
+            return "\(host)\(components.path)"
+        }
+        return path.components(separatedBy: "?").first ?? path
+    }
+
+    private static func diagnosticPath(_ path: String) -> String {
+        cacheKey(path: path)
     }
 }
 
@@ -122,7 +196,9 @@ private struct AnimatedGIFImage: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIImageView, context: Context) {
         uiView.contentMode = uiViewContentMode
-        uiView.image = AnimatedGIFDecoder.animatedImage(data: data) ?? UIImage(data: data)
+        if uiView.image == nil {
+            uiView.image = AnimatedGIFDecoder.animatedImage(data: data) ?? UIImage(data: data)
+        }
         uiView.startAnimating()
     }
 
@@ -197,12 +273,28 @@ private enum ImageDownsampler {
     static func downsample(
         data: Data,
         maxPixelSize: CGFloat,
+        cacheKey: String,
         logger: Logger
     ) async -> UIImage? {
+        if let cached = ImageDecodeCache.shared.image(for: cacheKey) {
+#if DEBUG
+            DebugLogDeduplicator.shared.printWhenChanged(
+                key: "ImageDecode.cache.\(cacheKey)",
+                value: "hit",
+                logger: logger,
+                message: "[ImageDecode] cacheHit key=\(cacheKey)"
+            )
+#endif
+            return cached
+        }
+
         let start = CFAbsoluteTimeGetCurrent()
         let image = await Task.detached(priority: .utility) {
             makeDownsampledImage(data: data, maxPixelSize: maxPixelSize)
         }.value
+        if let image {
+            ImageDecodeCache.shared.insert(image, for: cacheKey)
+        }
 
 #if DEBUG
         if let image {
@@ -235,6 +327,27 @@ private enum ImageDownsampler {
     }
 }
 
+private final class ImageDecodeCache: @unchecked Sendable {
+    static let shared = ImageDecodeCache()
+
+    private let cache = NSCache<NSString, UIImage>()
+
+    private init() {
+        cache.countLimit = 240
+        cache.totalCostLimit = 64 * 1_024 * 1_024
+    }
+
+    func image(for key: String) -> UIImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    func insert(_ image: UIImage, for key: String) {
+        let pixelWidth = Int(image.size.width * image.scale)
+        let pixelHeight = Int(image.size.height * image.scale)
+        cache.setObject(image, forKey: key as NSString, cost: max(1, pixelWidth * pixelHeight * 4))
+    }
+}
+
 private enum ImageMetadata {
     static func pixelSize(from data: Data) -> CGSize? {
         let options = [kCGImageSourceShouldCache: false] as CFDictionary
@@ -246,7 +359,21 @@ private enum ImageMetadata {
               pixelHeight.doubleValue > 0 else {
             return nil
         }
-        return CGSize(width: pixelWidth.doubleValue, height: pixelHeight.doubleValue)
+        return normalizedPixelSize(
+            width: pixelWidth.doubleValue,
+            height: pixelHeight.doubleValue,
+            orientation: properties[kCGImagePropertyOrientation] as? NSNumber
+        )
+    }
+
+    private static func normalizedPixelSize(width: Double, height: Double, orientation: NSNumber?) -> CGSize {
+        let orientationValue = orientation?.intValue ?? 1
+        switch orientationValue {
+        case 5, 6, 7, 8:
+            return CGSize(width: height, height: width)
+        default:
+            return CGSize(width: width, height: height)
+        }
     }
 }
 

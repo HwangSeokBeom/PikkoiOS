@@ -872,6 +872,9 @@ final class ChatPresenter: ObservableObject {
         let isSelected = viewState.selectedSearchResult?.messageID == message.renderID
         return ChatMessageRowViewState(
             id: message.renderID,
+            serverChatID: message.effectiveServerChatID,
+            localTemporaryID: message.effectiveLocalTemporaryID,
+            clientMessageID: message.clientMessageID,
             dateText: dateText,
             content: message.content,
             searchMatchRanges: searchMatchRanges(for: message),
@@ -1226,16 +1229,48 @@ final class ChatPresenter: ObservableObject {
     private func applyScrollActionResult(_ action: ChatScrollActionResult, localTemporaryId: String?) {
         switch action {
         case .scrollToBottom(let reason):
+#if DEBUG
+            DebugLogDeduplicator.shared.printWhenChanged(
+                key: "ChatAutoScroll.presenter",
+                value: "execute|\(reason)|\(isNearBottom)",
+                logger: Logger(category: "ChatAutoScroll"),
+                message: "[ChatAutoScroll] action=execute reason=\(reason) nearBottom=\(isNearBottom) userInteracting=false"
+            )
+#endif
             enqueueScroll(target: .bottom, reason: reason, animated: true)
         case .scrollToMessage(let id, let reason):
             enqueueScroll(target: .message(id: id), reason: reason, animated: true)
         case .showNewMessageIndicator:
             viewState.newMessageCount += 1
             viewState.showsNewMessageIndicator = true
+#if DEBUG
+            DebugLogDeduplicator.shared.printWhenChanged(
+                key: "ChatAutoScroll.presenter",
+                value: "skip|newMessageIndicator|\(isNearBottom)",
+                logger: Logger(category: "ChatAutoScroll"),
+                message: "[ChatAutoScroll] action=skip reason=userAwayFromBottom nearBottom=\(isNearBottom) userInteracting=true"
+            )
+#endif
             Logger.shared.debug("[ChatScroll] messageReceived sender=other isNearBottom=false action=showNewMessageIndicator")
         case .keepPosition:
             _ = localTemporaryId
+#if DEBUG
+            DebugLogDeduplicator.shared.printWhenChanged(
+                key: "ChatAutoScroll.presenter",
+                value: "skip|echoReplace|\(isNearBottom)",
+                logger: Logger(category: "ChatAutoScroll"),
+                message: "[ChatAutoScroll] action=skip reason=echoReplace nearBottom=\(isNearBottom) userInteracting=false"
+            )
+#endif
         case .preservePosition:
+#if DEBUG
+            DebugLogDeduplicator.shared.printWhenChanged(
+                key: "ChatAutoScroll.presenter",
+                value: "skip|preservePosition|\(isNearBottom)",
+                logger: Logger(category: "ChatAutoScroll"),
+                message: "[ChatAutoScroll] action=skip reason=preservePosition nearBottom=\(isNearBottom) userInteracting=true"
+            )
+#endif
             break
         }
     }

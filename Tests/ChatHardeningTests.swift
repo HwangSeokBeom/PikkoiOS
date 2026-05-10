@@ -131,6 +131,26 @@ final class ChatHardeningTests: XCTestCase {
         ))
     }
 
+    func testImageWithUserTextUsesMixedMediaContentMode() {
+        XCTAssertEqual(
+            ChatMediaMessagePresentationPolicy.contentMode(
+                content: "짧은 설명",
+                filePaths: ["https://api.example.com/data/chats/room-1/photo.jpg?token=abc"]
+            ),
+            .mediaWithText
+        )
+    }
+
+    func testGIFWithUserTextUsesMixedMediaContentMode() {
+        XCTAssertEqual(
+            ChatMediaMessagePresentationPolicy.contentMode(
+                content: "움직이는 이미지",
+                filePaths: ["https://api.example.com/data/chats/room-1/anim.gif?token=abc"]
+            ),
+            .mediaWithText
+        )
+    }
+
     func testPDFDefaultFileTextDoesNotRenderAsMediaBubble() {
         XCTAssertFalse(ChatMediaMessagePresentationPolicy.isMediaOnly(
             content: "파일을 보냈어요.",

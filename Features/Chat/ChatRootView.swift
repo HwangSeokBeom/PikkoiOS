@@ -10,6 +10,7 @@ struct ChatRootView: View {
         static let composerBottomPadding: CGFloat = PikkoSpacing.sm
         static let messageListBottomGap: CGFloat = PikkoSpacing.lg
         static let geometryTolerance: CGFloat = 1
+        static let bottomDistanceTolerance: CGFloat = 6
         static let nearBottomThreshold: CGFloat = 140
     }
 
@@ -31,6 +32,8 @@ struct ChatRootView: View {
     @State private var isRoomDetailVisible = false
     @State private var measuredComposerHeight = Layout.estimatedComposerHeight
     @State private var lastBottomDistanceUpdate: (nearBottom: Bool, distance: CGFloat)?
+    @State private var pendingBottomDistanceUpdate: (nearBottom: Bool, distance: CGFloat)?
+    @State private var bottomDistanceUpdateTask: Task<Void, Never>?
     @State private var selectedMediaPreview: ChatMediaPreviewSelection?
     private let presentationKind: ChatPresentationKind
 
@@ -777,6 +780,16 @@ struct ChatRootView: View {
         }
 
         Logger.shared.debug("[ChatScroll] execute target=\(command.target.logValue) animated=\(command.animated)")
+#if DEBUG
+        if command.target == .bottom {
+            DebugLogDeduplicator.shared.printWhenChanged(
+                key: "ChatAutoScroll.execute",
+                value: "\(command.id)|\(command.reason)",
+                logger: Logger(category: "ChatAutoScroll"),
+                message: "[ChatAutoScroll] action=execute reason=\(command.reason) nearBottom=\(lastBottomDistanceUpdate?.nearBottom ?? false) userInteracting=false"
+            )
+        }
+#endif
         if command.animated {
             withAnimation(.easeOut(duration: 0.22)) {
                 action()
@@ -793,15 +806,60 @@ struct ChatRootView: View {
         let nearBottom = distance <= Layout.nearBottomThreshold
         if let lastBottomDistanceUpdate,
            lastBottomDistanceUpdate.nearBottom == nearBottom,
-           abs(lastBottomDistanceUpdate.distance - distance) <= Layout.geometryTolerance {
+           abs(lastBottomDistanceUpdate.distance - distance) <= Layout.bottomDistanceTolerance {
+#if DEBUG
+            logBottomPreference(old: lastBottomDistanceUpdate.distance, new: distance, action: "ignored")
+#endif
             return
         }
-        Task { @MainActor in
+        pendingBottomDistanceUpdate = (nearBottom, distance)
+        guard bottomDistanceUpdateTask == nil else {
+#if DEBUG
+            logBottomPreference(old: lastBottomDistanceUpdate?.distance, new: distance, action: "coalesced")
+#endif
+            return
+        }
+
+        bottomDistanceUpdateTask = Task { @MainActor in
             await Task.yield()
-            lastBottomDistanceUpdate = (nearBottom, distance)
-            await presenter.send(.nearBottomChanged(nearBottom, distance: distance))
+            guard let pendingBottomDistanceUpdate else {
+                bottomDistanceUpdateTask = nil
+                return
+            }
+
+            if let lastBottomDistanceUpdate,
+               lastBottomDistanceUpdate.nearBottom == pendingBottomDistanceUpdate.nearBottom,
+               abs(lastBottomDistanceUpdate.distance - pendingBottomDistanceUpdate.distance) <= Layout.bottomDistanceTolerance {
+#if DEBUG
+                logBottomPreference(old: lastBottomDistanceUpdate.distance, new: pendingBottomDistanceUpdate.distance, action: "ignored")
+#endif
+                self.pendingBottomDistanceUpdate = nil
+                bottomDistanceUpdateTask = nil
+                return
+            }
+
+#if DEBUG
+            logBottomPreference(old: lastBottomDistanceUpdate?.distance, new: pendingBottomDistanceUpdate.distance, action: "applied")
+#endif
+            lastBottomDistanceUpdate = pendingBottomDistanceUpdate
+            self.pendingBottomDistanceUpdate = nil
+            bottomDistanceUpdateTask = nil
+            await presenter.send(.nearBottomChanged(pendingBottomDistanceUpdate.nearBottom, distance: pendingBottomDistanceUpdate.distance))
         }
     }
+
+#if DEBUG
+    private func logBottomPreference(old: CGFloat?, new: CGFloat, action: String) {
+        let oldText = old.map { String(format: "%.1f", $0) } ?? "nil"
+        let newText = String(format: "%.1f", new)
+        DebugLogDeduplicator.shared.printWhenChanged(
+            key: "ChatBottomPreference",
+            value: "\(oldText)|\(newText)|\(action)",
+            logger: Logger(category: "ChatBottomPreference"),
+            message: "[ChatBottomPreference] old=\(oldText) new=\(newText) action=\(action)"
+        )
+    }
+#endif
 
     private func updateMeasuredComposerHeight(_ height: CGFloat) {
         guard height.isFinite, height > 0 else { return }
@@ -1011,6 +1069,8 @@ private struct ChatMessageBubble: View {
     let onMediaTapped: (String) -> Void
     let onRetry: () -> Void
 
+    @State private var resolvedMixedMediaSize: CGSize?
+
     var body: some View {
         VStack(spacing: PikkoSpacing.xs) {
             if let dateText = message.dateText {
@@ -1046,16 +1106,159 @@ private struct ChatMessageBubble: View {
 
     @ViewBuilder
     private var bubble: some View {
-        if isMediaOnlyMessage, let firstImagePath = message.filePaths.first, message.filePaths.count == 1 {
-            mediaBubble(path: firstImagePath)
-        } else if isMediaOnlyMessage {
+        switch contentMode {
+        case .mediaOnly where message.filePaths.count == 1:
+            if let firstImagePath = message.filePaths.first {
+                mediaBubble(path: firstImagePath, mode: .mediaOnly)
+            }
+        case .mediaOnly:
             mediaOnlyGrid
-        } else {
+        case .mediaWithText:
+            mediaWithTextBubble
+        case .textOnly, .textWithAttachments:
             textAndAttachmentBubble
         }
     }
 
+    private var textOnlyBubble: some View {
+        Text(highlightedContent)
+            .font(PikkoTypography.body)
+            .foregroundStyle(message.isMine ? .white : PikkoColor.primaryText)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, PikkoSpacing.md)
+            .padding(.vertical, PikkoSpacing.sm)
+            .bubbleChrome(
+                fill: message.isSelectedSearchMatch ? selectedBubbleColor : (message.isMine ? bubbleColor : PikkoColor.elevatedSurface),
+                stroke: message.isSelectedSearchMatch
+                    ? PikkoColor.warning.opacity(0.95)
+                    : (message.isMine ? .clear : PikkoColor.divider.opacity(0.65)),
+                lineWidth: message.isSelectedSearchMatch ? 2 : 1
+            )
+            .frame(maxWidth: 260, alignment: message.isMine ? .trailing : .leading)
+    }
+
+    @ViewBuilder
+    private var mediaWithTextBubble: some View {
+        if let firstImagePath = message.filePaths.first, message.filePaths.count == 1 {
+            let mediaSize = resolvedMixedMediaSize ?? ChatMediaLayoutPolicy.renderedSize(
+                originalPixelSize: nil,
+                aspectRatio: ChatMediaAspectCache.shared.aspectRatio(for: mediaAspectKeys(for: firstImagePath)),
+                availableWidth: containerWidth
+            )
+            let bubbleWidth = mixedBubbleWidth(mediaWidth: mediaSize.width)
+
+            VStack(alignment: message.isMine ? .trailing : .leading, spacing: 0) {
+                mixedMediaView(path: firstImagePath, bubbleWidth: bubbleWidth, mode: .mediaWithText)
+
+                Text(highlightedContent)
+                    .font(PikkoTypography.body)
+                    .foregroundStyle(message.isMine ? .white : PikkoColor.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, PikkoSpacing.md)
+                    .padding(.vertical, PikkoSpacing.sm)
+                    .frame(width: bubbleWidth, alignment: .leading)
+            }
+            .frame(width: bubbleWidth, alignment: message.isMine ? .trailing : .leading)
+            .background(message.isSelectedSearchMatch ? selectedBubbleColor : (message.isMine ? bubbleColor : PikkoColor.elevatedSurface))
+            .overlay {
+                RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                    .stroke(
+                        message.isSelectedSearchMatch
+                            ? PikkoColor.warning.opacity(0.95)
+                            : (message.isMine ? .clear : PikkoColor.divider.opacity(0.65)),
+                        lineWidth: message.isSelectedSearchMatch ? 2 : 1
+                    )
+            }
+            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+            .onAppear {
+                logMixedBubbleLayout(path: firstImagePath, mediaSize: mediaSize, bubbleWidth: bubbleWidth)
+            }
+        } else {
+            mediaGridWithTextBubble
+        }
+    }
+
+    private var mediaGridWithTextBubble: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+            mediaOnlyGrid
+
+            Text(highlightedContent)
+                .font(PikkoTypography.body)
+                .foregroundStyle(message.isMine ? .white : PikkoColor.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, PikkoSpacing.md)
+                .padding(.vertical, PikkoSpacing.sm)
+        }
+        .background(message.isSelectedSearchMatch ? selectedBubbleColor : (message.isMine ? bubbleColor : PikkoColor.elevatedSurface))
+        .overlay {
+            RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
+                .stroke(
+                    message.isSelectedSearchMatch
+                        ? PikkoColor.warning.opacity(0.95)
+                        : (message.isMine ? .clear : PikkoColor.divider.opacity(0.65)),
+                    lineWidth: message.isSelectedSearchMatch ? 2 : 1
+                )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+        .frame(maxWidth: 260, alignment: message.isMine ? .trailing : .leading)
+    }
+
+    private func mixedMediaView(path: String, bubbleWidth: CGFloat, mode: ChatMediaBubbleContent.Mode) -> some View {
+        ChatMediaBubbleContent(
+            messageID: message.id,
+            path: path,
+            imageLoader: imageLoader,
+            availableWidth: containerWidth,
+            isMine: message.isMine,
+            isSelected: false,
+            mode: mode,
+            aspectCacheKeys: mediaAspectKeys(for: path),
+            onResolvedSizeChanged: { size, _, _ in
+                guard resolvedMixedMediaSize != size else { return }
+                resolvedMixedMediaSize = size
+            },
+            onTap: {
+                onMediaTapped(path)
+            }
+        )
+        .frame(width: bubbleWidth, alignment: message.isMine ? .trailing : .leading)
+    }
+
+    private func mixedBubbleWidth(mediaWidth: CGFloat) -> CGFloat {
+        let maximumWidth = ChatMediaLayoutPolicy.maximumBubbleWidth(availableWidth: containerWidth)
+        let textWidth = min(
+            maximumWidth,
+            measuredTextSize(for: message.content, constrainedWidth: maximumWidth - PikkoSpacing.md * 2).width + PikkoSpacing.md * 2
+        )
+        return min(maximumWidth, max(mediaWidth, textWidth).rounded(.toNearestOrAwayFromZero))
+    }
+
+    private func measuredTextSize(for text: String, constrainedWidth: CGFloat) -> CGSize {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .zero }
+
+        let font = UIFont.preferredFont(forTextStyle: .body)
+        let rect = (trimmed as NSString).boundingRect(
+            with: CGSize(width: max(1, constrainedWidth), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font],
+            context: nil
+        )
+        return CGSize(
+            width: min(constrainedWidth, ceil(rect.width)),
+            height: ceil(rect.height)
+        )
+    }
+
     private var textAndAttachmentBubble: some View {
+        if contentMode == .textOnly {
+            return AnyView(textOnlyBubble)
+        }
+
+        return AnyView(legacyTextAndAttachmentBubble)
+    }
+
+    private var legacyTextAndAttachmentBubble: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
             if !message.content.isEmpty {
                 Text(highlightedContent)
@@ -1076,6 +1279,45 @@ private struct ChatMessageBubble: View {
             lineWidth: message.isSelectedSearchMatch ? 2 : 1
         )
         .frame(maxWidth: 260, alignment: message.isMine ? .trailing : .leading)
+    }
+
+    private func mediaAspectKeys(for path: String) -> [String] {
+        [
+            ChatMediaAspectCache.cacheKey(forPath: path),
+            message.serverChatID.map { "server:\($0)" },
+            message.clientMessageID.map { "client:\($0)" },
+            message.localTemporaryID.map { "local:\($0)" },
+            "message:\(message.id)"
+        ].compactMap { $0 }
+    }
+
+#if DEBUG
+    private func logMixedBubbleLayout(path: String, mediaSize: CGSize, bubbleWidth: CGFloat) {
+        let aspect = ChatMediaAspectCache.shared.aspectRatio(for: mediaAspectKeys(for: path)) ?? ChatMediaLayoutPolicy.fallbackAspectRatio
+        let source = ChatMediaAspectCache.shared.source(for: mediaAspectKeys(for: path)) ?? "fallback"
+        let textSize = measuredTextSize(
+            for: message.content,
+            constrainedWidth: max(1, bubbleWidth - PikkoSpacing.md * 2)
+        )
+        let textWidth = textSize.width + PikkoSpacing.md * 2
+        let bubbleHeight = mediaSize.height + textSize.height + PikkoSpacing.sm * 2
+        let value = "\(Int(mediaSize.width))x\(Int(mediaSize.height))|\(Int(textWidth))|\(Int(bubbleWidth))|\(String(format: "%.3f", aspect))|\(source)"
+        DebugLogDeduplicator.shared.printWhenChanged(
+            key: "ChatMixedBubbleLayout.\(message.id)",
+            value: value,
+            logger: Logger(category: "ChatMixedBubbleLayout"),
+            message: "[ChatMixedBubbleLayout] messageId=\(message.id) mode=mediaWithText mediaSize=\(Int(mediaSize.width))x\(Int(mediaSize.height)) textWidth=\(Int(textWidth)) bubbleSize=\(Int(bubbleWidth))x\(Int(bubbleHeight)) aspect=\(String(format: "%.3f", aspect)) source=\(source)"
+        )
+    }
+#else
+    private func logMixedBubbleLayout(path: String, mediaSize: CGSize, bubbleWidth: CGFloat) {}
+#endif
+
+    private var contentMode: ChatMessageContentMode {
+        ChatMediaMessagePresentationPolicy.contentMode(
+            content: message.content,
+            filePaths: message.filePaths
+        )
     }
 
     @ViewBuilder
@@ -1100,7 +1342,7 @@ private struct ChatMessageBubble: View {
         }
     }
 
-    private func mediaBubble(path: String) -> some View {
+    private func mediaBubble(path: String, mode: ChatMediaBubbleContent.Mode = .mediaOnly) -> some View {
         ChatMediaBubbleContent(
             messageID: message.id,
             path: path,
@@ -1108,6 +1350,8 @@ private struct ChatMessageBubble: View {
             availableWidth: containerWidth,
             isMine: message.isMine,
             isSelected: message.isSelectedSearchMatch,
+            mode: mode,
+            aspectCacheKeys: mediaAspectKeys(for: path),
             onTap: {
                 onMediaTapped(path)
             }
@@ -1221,13 +1465,6 @@ private struct ChatMessageBubble: View {
         )
     }
 
-    private var isMediaOnlyMessage: Bool {
-        ChatMediaMessagePresentationPolicy.isMediaOnly(
-            content: message.content,
-            filePaths: message.filePaths
-        )
-    }
-
     private func isImagePath(_ path: String) -> Bool {
         ChatMediaMessagePresentationPolicy.isImagePath(path)
     }
@@ -1238,7 +1475,115 @@ private struct ChatMessageBubble: View {
     }
 }
 
+private final class ChatMediaAspectCache: @unchecked Sendable {
+    enum Action {
+        case ignored
+        case updated
+    }
+
+    struct UpdateResult {
+        let action: Action
+        let source: String
+    }
+
+    static let shared = ChatMediaAspectCache()
+
+    private let lock = NSLock()
+    private var entries: [String: (aspect: CGFloat, source: String)] = [:]
+
+    private init() {}
+
+    static func cacheKey(forPath path: String) -> String {
+        if let components = URLComponents(string: path),
+           let host = components.host,
+           !components.path.isEmpty {
+            return "url:\(host)\(components.path)"
+        }
+        return "path:\(path.components(separatedBy: "?").first ?? path)"
+    }
+
+    func aspectRatio(for keys: [String]) -> CGFloat? {
+        lock.lock()
+        defer { lock.unlock() }
+        return keys.lazy.compactMap { self.entries[$0]?.aspect }.first
+    }
+
+    func source(for keys: [String]) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return keys.lazy.compactMap { self.entries[$0]?.source }.first
+    }
+
+    func update(keys: [String], aspectRatio: CGFloat, source: String) -> UpdateResult {
+        guard aspectRatio.isFinite, aspectRatio > 0 else {
+            return UpdateResult(action: .ignored, source: source)
+        }
+
+        lock.lock()
+        let existing = keys.lazy.compactMap { self.entries[$0] }.first
+        if let existing, abs(existing.aspect - aspectRatio) <= 0.01 {
+            copyExistingEntry(existing, to: keys)
+            lock.unlock()
+            logAspectUpdate(keys: keys, old: existing.aspect, new: aspectRatio, action: "ignored", reason: "sameAspect")
+            return UpdateResult(action: .ignored, source: existing.source)
+        }
+
+        if let existing, !isHigherPriority(source, than: existing.source) {
+            copyExistingEntry(existing, to: keys)
+            lock.unlock()
+            logAspectUpdate(keys: keys, old: existing.aspect, new: aspectRatio, action: "ignored", reason: "stableAspect")
+            return UpdateResult(action: .ignored, source: existing.source)
+        }
+
+        let entry = (aspect: aspectRatio, source: source)
+        keys.forEach { self.entries[$0] = entry }
+        lock.unlock()
+        logAspectUpdate(keys: keys, old: existing?.aspect, new: aspectRatio, action: "updated", reason: source)
+        return UpdateResult(action: .updated, source: source)
+    }
+
+    private func copyExistingEntry(_ entry: (aspect: CGFloat, source: String), to keys: [String]) {
+        keys.forEach { self.entries[$0] = entry }
+    }
+
+    private func isHigherPriority(_ source: String, than existingSource: String) -> Bool {
+        priority(for: source) > priority(for: existingSource)
+    }
+
+    private func priority(for source: String) -> Int {
+        switch source {
+        case "metadata":
+            return 50
+        case "local", "decoded":
+            return 40
+        case "cache":
+            return 30
+        default:
+            return 10
+        }
+    }
+
+    private func logAspectUpdate(keys: [String], old: CGFloat?, new: CGFloat, action: String, reason: String) {
+#if DEBUG
+        let key = keys.first ?? "-"
+        let oldText = old.map { String(format: "%.3f", $0) } ?? "nil"
+        let newText = String(format: "%.3f", new)
+        DebugLogDeduplicator.shared.printWhenChanged(
+            key: "ChatAspectCache.\(key)",
+            value: "\(oldText)|\(newText)|\(action)|\(reason)",
+            logger: Logger(category: "ChatAspectCache"),
+            message: "[ChatAspectCache] key=\(key) old=\(oldText) new=\(newText) action=\(action) reason=\(reason)"
+        )
+#endif
+    }
+}
+
 private struct ChatMediaBubbleContent: View {
+    enum Mode: String {
+        case mediaOnly
+        case mediaWithText
+    }
+
     private enum Layout {
         static let cornerRadius: CGFloat = 18
     }
@@ -1249,9 +1594,13 @@ private struct ChatMediaBubbleContent: View {
     let availableWidth: CGFloat
     let isMine: Bool
     let isSelected: Bool
+    let mode: Mode
+    let aspectCacheKeys: [String]
+    var onResolvedSizeChanged: ((CGSize, CGFloat, String) -> Void)? = nil
     let onTap: () -> Void
 
     @State private var originalPixelSize: CGSize?
+    @State private var aspectSource = "fallback"
 
     var body: some View {
         Button(action: onTap) {
@@ -1259,24 +1608,24 @@ private struct ChatMediaBubbleContent: View {
                 path: path,
                 loader: imageLoader,
                 contentMode: .fill,
-                cornerRadius: Layout.cornerRadius,
+                cornerRadius: contentCornerRadius,
                 showsProgress: true,
                 downsampleMaxPixelSize: 1_080,
                 onImageSizeResolved: { size in
-                    updateOriginalPixelSize(size)
+                    updateOriginalPixelSize(size, source: "decoded")
                 }
             )
             .frame(width: resolvedSize.width, height: resolvedSize.height)
             .background(Color.black.opacity(0.035))
-            .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: contentCornerRadius, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: contentCornerRadius, style: .continuous)
                     .stroke(
                         isSelected ? PikkoColor.warning.opacity(0.95) : PikkoColor.divider.opacity(0.28),
                         lineWidth: isSelected ? 2 : 1
                     )
             }
-            .contentShape(RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: contentCornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .task(id: path) {
@@ -1291,10 +1640,15 @@ private struct ChatMediaBubbleContent: View {
     }
 
     private var resolvedSize: CGSize {
-        ChatImageBubbleLayoutPolicy.renderedSize(
+        ChatMediaLayoutPolicy.renderedSize(
             originalPixelSize: originalPixelSize,
+            aspectRatio: ChatMediaAspectCache.shared.aspectRatio(for: aspectCacheKeys),
             availableWidth: availableWidth
         )
+    }
+
+    private var contentCornerRadius: CGFloat {
+        mode == .mediaOnly ? Layout.cornerRadius : 0
     }
 
     private func loadOriginalPixelSize() async {
@@ -1302,16 +1656,19 @@ private struct ChatMediaBubbleContent: View {
             let data = try await imageLoader.imageData(for: path)
             let loadedPixelSize = ChatMediaMetadata.pixelSize(from: data)
             await MainActor.run {
-                updateOriginalPixelSize(loadedPixelSize)
+                updateOriginalPixelSize(loadedPixelSize, source: "metadata")
             }
 #if DEBUG
-            let aspect = loadedPixelSize.map { $0.width / $0.height } ?? ChatImageBubbleLayoutPolicy.fallbackAspectRatio
+            let aspect = loadedPixelSize.map { $0.width / $0.height } ?? ChatMediaLayoutPolicy.fallbackAspectRatio
             let aspectText = String(format: "%.3f", aspect)
             let isGIF = ChatMediaMetadata.isGIF(data: data, path: path)
-            Logger(category: "ChatMediaBubble").debug(
-                isGIF
-                    ? "[ChatMediaBubble] render type=gif animated=true mode=mediaOnly aspect=\(aspectText)"
-                    : "[ChatMediaBubble] render type=image mime=\(ChatMediaMetadata.mimeType(data: data, path: path)) mode=mediaOnly aspect=\(aspectText)"
+            DebugLogDeduplicator.shared.printWhenChanged(
+                key: "ChatMediaBubble.\(messageID).\(path)",
+                value: "\(mode.rawValue)|\(aspectText)|\(isGIF)",
+                logger: Logger(category: "ChatMediaBubble"),
+                message: isGIF
+                    ? "[ChatMediaBubble] render type=gif animated=true mode=\(mode.rawValue) aspect=\(aspectText)"
+                    : "[ChatMediaBubble] render type=image mime=\(ChatMediaMetadata.mimeType(data: data, path: path)) mode=\(mode.rawValue) aspect=\(aspectText)"
             )
 #endif
         } catch {
@@ -1323,21 +1680,26 @@ private struct ChatMediaBubbleContent: View {
         }
     }
 
-    private func updateOriginalPixelSize(_ size: CGSize?) {
+    private func updateOriginalPixelSize(_ size: CGSize?, source: String) {
         guard let size, size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else {
             return
         }
-        if let originalPixelSize {
-            let currentAspect = originalPixelSize.width / originalPixelSize.height
-            let newAspect = size.width / size.height
-            let currentArea = originalPixelSize.width * originalPixelSize.height
-            let newArea = size.width * size.height
-            if abs(currentAspect - newAspect) < 0.001, newArea <= currentArea {
-                return
-            }
-        }
-        if originalPixelSize != size {
+
+        let aspect = size.width / size.height
+        let cacheResult = ChatMediaAspectCache.shared.update(
+            keys: aspectCacheKeys,
+            aspectRatio: aspect,
+            source: source
+        )
+
+        if originalPixelSize != size, cacheResult.action != .ignored {
             originalPixelSize = size
+            aspectSource = cacheResult.source
+            onResolvedSizeChanged?(resolvedSize, aspect, aspectSource)
+        } else if originalPixelSize == nil, let cachedAspect = ChatMediaAspectCache.shared.aspectRatio(for: aspectCacheKeys) {
+            originalPixelSize = CGSize(width: cachedAspect, height: 1)
+            aspectSource = ChatMediaAspectCache.shared.source(for: aspectCacheKeys) ?? "cache"
+            onResolvedSizeChanged?(resolvedSize, cachedAspect, aspectSource)
         }
     }
 
@@ -1345,20 +1707,24 @@ private struct ChatMediaBubbleContent: View {
     private func logLayoutDiagnostics(source: String) {
         let size = resolvedSize
         let originalSize = originalPixelSize ?? .zero
-        let aspect = originalPixelSize.map { $0.width / $0.height } ?? ChatImageBubbleLayoutPolicy.fallbackAspectRatio
+        let aspect = originalPixelSize.map { $0.width / $0.height }
+            ?? ChatMediaAspectCache.shared.aspectRatio(for: aspectCacheKeys)
+            ?? ChatMediaLayoutPolicy.fallbackAspectRatio
         let value = [
             source,
             "\(Int(originalSize.width))x\(Int(originalSize.height))",
             String(format: "%.3f", aspect),
             "\(Int(size.width))x\(Int(size.height))",
             "\(Int(availableWidth.rounded()))",
-            "\(isMine)"
+            "\(isMine)",
+            mode.rawValue,
+            aspectSource
         ].joined(separator: "|")
         DebugLogDeduplicator.shared.printWhenChanged(
             key: "ChatImageLayout.\(messageID)",
             value: value,
             logger: Logger(category: "ChatImageLayout"),
-            message: "messageId=\(messageID) source=\(source) originalSize=\(Int(originalSize.width))x\(Int(originalSize.height)) aspect=\(String(format: "%.3f", aspect)) renderedSize=\(Int(size.width))x\(Int(size.height)) containerWidth=\(Int(availableWidth.rounded())) isMine=\(isMine)"
+            message: "messageId=\(messageID) source=\(source) originalSize=\(Int(originalSize.width))x\(Int(originalSize.height)) aspect=\(String(format: "%.3f", aspect)) renderedSize=\(Int(size.width))x\(Int(size.height)) containerWidth=\(Int(availableWidth.rounded())) isMine=\(isMine) mode=\(mode.rawValue) aspectSource=\(aspectSource)"
         )
     }
 #else
@@ -1377,7 +1743,21 @@ private enum ChatMediaMetadata {
               pixelHeight.doubleValue > 0 else {
             return nil
         }
-        return CGSize(width: pixelWidth.doubleValue, height: pixelHeight.doubleValue)
+        return normalizedPixelSize(
+            width: pixelWidth.doubleValue,
+            height: pixelHeight.doubleValue,
+            orientation: properties[kCGImagePropertyOrientation] as? NSNumber
+        )
+    }
+
+    private static func normalizedPixelSize(width: Double, height: Double, orientation: NSNumber?) -> CGSize {
+        let orientationValue = orientation?.intValue ?? 1
+        switch orientationValue {
+        case 5, 6, 7, 8:
+            return CGSize(width: height, height: width)
+        default:
+            return CGSize(width: width, height: height)
+        }
     }
 
     static func isGIF(data: Data, path: String) -> Bool {

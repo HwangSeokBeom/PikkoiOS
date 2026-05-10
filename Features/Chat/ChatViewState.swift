@@ -139,6 +139,9 @@ struct ChatRoomRowViewState: Equatable, Identifiable {
 
 struct ChatMessageRowViewState: Equatable, Identifiable {
     let id: String
+    let serverChatID: String?
+    let localTemporaryID: String?
+    let clientMessageID: String?
     let dateText: String?
     let content: String
     let searchMatchRanges: [NSRange]
@@ -163,6 +166,13 @@ struct ChatMessageRowViewState: Equatable, Identifiable {
     }
 }
 
+enum ChatMessageContentMode: Equatable {
+    case textOnly
+    case mediaOnly
+    case mediaWithText
+    case textWithAttachments
+}
+
 enum ChatMediaMessagePresentationPolicy {
     static let defaultFileOnlyContent = "파일을 보냈어요."
     private static let fileOnlyContentPlaceholders: Set<String> = [
@@ -177,6 +187,23 @@ enum ChatMediaMessagePresentationPolicy {
         isEmptyOrDefaultFileContent(content)
             && !filePaths.isEmpty
             && filePaths.allSatisfy(isImagePath)
+    }
+
+    static func contentMode(content: String, filePaths: [String]) -> ChatMessageContentMode {
+        let hasText = !isEmptyOrDefaultFileContent(content)
+        let hasFiles = !filePaths.isEmpty
+        let hasOnlyMediaFiles = hasFiles && filePaths.allSatisfy(isImagePath)
+
+        switch (hasText, hasFiles, hasOnlyMediaFiles) {
+        case (false, true, true):
+            return .mediaOnly
+        case (true, true, true):
+            return .mediaWithText
+        case (true, false, _), (false, false, _):
+            return .textOnly
+        default:
+            return .textWithAttachments
+        }
     }
 
     static func isImagePath(_ path: String) -> Bool {
@@ -208,13 +235,20 @@ enum ChatMediaMessagePresentationPolicy {
     }
 }
 
-enum ChatImageBubbleLayoutPolicy {
+enum ChatMediaLayoutPolicy {
     static let fallbackAspectRatio: CGFloat = 1
     static let minimumWidth: CGFloat = 132
     static let minimumHeight: CGFloat = 120
     static let maximumHeight: CGFloat = 400
     static let maximumAbsoluteWidth: CGFloat = 284
     static let maximumWidthFraction: CGFloat = 0.62
+
+    static func maximumBubbleWidth(availableWidth: CGFloat) -> CGFloat {
+        max(
+            minimumWidth,
+            min(maximumAbsoluteWidth, availableWidth * maximumWidthFraction)
+        )
+    }
 
     static func renderedSize(
         originalPixelSize: CGSize?,
@@ -224,10 +258,7 @@ enum ChatImageBubbleLayoutPolicy {
         let aspectRatio = sanitizedAspectRatio(
             explicitAspectRatio ?? originalPixelSize.map { $0.width / $0.height }
         )
-        let maximumWidth = max(
-            minimumWidth,
-            min(maximumAbsoluteWidth, availableWidth * maximumWidthFraction)
-        )
+        let maximumWidth = maximumBubbleWidth(availableWidth: availableWidth)
 
         var width = maximumWidth
         var height = width / aspectRatio
@@ -262,6 +293,22 @@ enum ChatImageBubbleLayoutPolicy {
             return fallbackAspectRatio
         }
         return value
+    }
+}
+
+enum ChatImageBubbleLayoutPolicy {
+    static let fallbackAspectRatio = ChatMediaLayoutPolicy.fallbackAspectRatio
+
+    static func renderedSize(
+        originalPixelSize: CGSize?,
+        aspectRatio explicitAspectRatio: CGFloat? = nil,
+        availableWidth: CGFloat
+    ) -> CGSize {
+        ChatMediaLayoutPolicy.renderedSize(
+            originalPixelSize: originalPixelSize,
+            aspectRatio: explicitAspectRatio,
+            availableWidth: availableWidth
+        )
     }
 }
 
