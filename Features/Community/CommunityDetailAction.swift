@@ -14,10 +14,15 @@ enum CommunityDetailAction {
     case storeSnippetTapped(String)
     case commentComposerChanged(String)
     case commentSubmitTapped
+    case commentReplyTapped(String)
     case commentLoadMoreIfNeeded(String)
     case commentEditTapped(String)
     case commentEditDraftChanged(String)
     case commentEditSaveTapped
     case commentEditCancelled
     case commentDeleteConfirmed(String)
+    case replyThreadDismissed
+    case replyDraftChanged(String)
+    case replySubmitTapped
+    case replyScrollTargetHandled
 }

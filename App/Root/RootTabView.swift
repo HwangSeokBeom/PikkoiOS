@@ -663,13 +663,19 @@ private final class RootTabKeyboardObserver: ObservableObject {
     }
 
     @objc private func handleKeyboardWillChangeFrame(_ notification: Notification) {
-        animationDuration = animationDuration(from: notification)
-        isKeyboardVisible = keyboardOverlapHeight(from: notification) > 0
+        updateKeyboardState(
+            isVisible: keyboardOverlapHeight(from: notification) > 0,
+            duration: animationDuration(from: notification),
+            key: "rootTabKeyboard"
+        )
     }
 
     @objc private func handleKeyboardWillHide(_ notification: Notification) {
-        animationDuration = animationDuration(from: notification)
-        isKeyboardVisible = false
+        updateKeyboardState(
+            isVisible: false,
+            duration: animationDuration(from: notification),
+            key: "rootTabKeyboard"
+        )
     }
 
     private func keyboardOverlapHeight(from notification: Notification) -> CGFloat {
@@ -687,5 +693,22 @@ private final class RootTabKeyboardObserver: ObservableObject {
 
     private func animationDuration(from notification: Notification) -> Double {
         notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+    }
+
+    private func updateKeyboardState(isVisible: Bool, duration: Double, key: String) {
+        let didChange = isKeyboardVisible != isVisible || animationDuration != duration
+        guard didChange else {
+            #if DEBUG
+            DebugLogDeduplicator.shared.printWhenChanged(
+                key: "SwiftUIStateGuard.\(key)",
+                value: "\(isVisible)|\(duration)",
+                logger: Logger(category: "SwiftUIStateGuard"),
+                message: "[SwiftUIStateGuard] dedupe layout update key=\(key)"
+            )
+            #endif
+            return
+        }
+        animationDuration = duration
+        isKeyboardVisible = isVisible
     }
 }

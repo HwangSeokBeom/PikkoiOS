@@ -6,7 +6,7 @@ protocol CommunityDetailInteracting {
     func loadInitialContent() async throws -> CommunityDetailContent
     func deletePost() async throws
     func loadComments(nextCursor: String?) async throws -> CursorPage<CommunityComment>
-    func createComment(content: String) async throws -> CommunityComment
+    func createComment(content: String, parentCommentID: String?) async throws -> CommunityComment
     func updateComment(commentID: String, content: String) async throws -> CommunityComment
     func deleteComment(commentID: String) async throws
     func updateLikeStatus(isLiked: Bool) async throws -> Bool
@@ -67,7 +67,7 @@ struct CommunityDetailInteractor: CommunityDetailInteracting {
         }
     }
 
-    func createComment(content: String) async throws -> CommunityComment {
+    func createComment(content: String, parentCommentID: String?) async throws -> CommunityComment {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw CommunityDetailCommentFeatureError.validation(message: "댓글 내용을 입력해 주세요.")
@@ -77,7 +77,7 @@ struct CommunityDetailInteractor: CommunityDetailInteracting {
             let comment = try await communityRepository.createComment(
                 postID: postID,
                 content: trimmed,
-                parentCommentID: nil
+                parentCommentID: parentCommentID
             )
             return applyCurrentUser(to: comment)
         } catch {

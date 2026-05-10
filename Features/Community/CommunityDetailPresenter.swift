@@ -27,6 +27,7 @@ final class CommunityDetailPresenter: ObservableObject {
     private var pendingCommentIDs = Set<String>()
     private var failedCommentIDs = Set<String>()
     private var submittingCommentDraftKeys = Set<String>()
+    private var submittingReplyDraftKeys = Set<String>()
 
     init(
         postID: String,
@@ -90,6 +91,8 @@ final class CommunityDetailPresenter: ObservableObject {
             syncCommentSectionState()
         case .commentSubmitTapped:
             await submitComment()
+        case .commentReplyTapped(let commentID):
+            openReplyThread(parentCommentID: commentID)
         case .commentLoadMoreIfNeeded(let lastVisibleCommentID):
             await loadMoreCommentsIfNeeded(lastVisibleCommentID: lastVisibleCommentID)
         case .commentEditTapped(let commentID):
@@ -102,6 +105,14 @@ final class CommunityDetailPresenter: ObservableObject {
             cancelEditingComment()
         case .commentDeleteConfirmed(let commentID):
             await deleteComment(commentID: commentID)
+        case .replyThreadDismissed:
+            closeReplyThread()
+        case .replyDraftChanged(let draft):
+            updateReplyDraft(draft)
+        case .replySubmitTapped:
+            await submitReply()
+        case .replyScrollTargetHandled:
+            clearReplyScrollTarget()
         }
     }
 
@@ -326,7 +337,7 @@ final class CommunityDetailPresenter: ObservableObject {
         #endif
 
         do {
-            let createdComment = try await interactor.createComment(content: draft)
+            let createdComment = try await interactor.createComment(content: draft, parentCommentID: nil)
             pendingCommentIDs.remove(localTemporaryID)
             comments = replaceOptimisticComment(
                 localTemporaryID: localTemporaryID,
@@ -450,6 +461,112 @@ final class CommunityDetailPresenter: ObservableObject {
         }
     }
 
+    private func openReplyThread(parentCommentID: String) {
+        guard let parentComment = comments.first(where: { $0.id == parentCommentID }),
+              parentComment.parentCommentID == nil else {
+            return
+        }
+
+        if viewState.replyThread?.parentComment.id == parentCommentID {
+            return
+        }
+
+        viewState.replyThread = CommunityCommentThreadState(
+            parentComment: makeCommentRowState(from: parentComment, depth: 0),
+            replies: parentComment.replies.map { makeCommentRowState(from: $0, depth: 1) }
+        )
+        #if DEBUG
+        Logger(category: "CommentReply").debug("[CommentReply] open parentCommentId=\(parentCommentID)")
+        #endif
+    }
+
+    private func closeReplyThread() {
+        viewState.replyThread = nil
+    }
+
+    private func updateReplyDraft(_ draft: String) {
+        guard viewState.replyThread != nil else { return }
+        viewState.replyThread?.draft = draft
+        if viewState.replyThread?.errorMessage != nil,
+           viewState.replyThread?.requiresAuthentication == false {
+            viewState.replyThread?.errorMessage = nil
+        }
+    }
+
+    private func submitReply() async {
+        guard var thread = viewState.replyThread else { return }
+        guard !thread.isSubmitting else { return }
+        guard ensureAuthenticatedForReplyAction(message: "답글을 작성하려면 로그인이 필요합니다.") else {
+            return
+        }
+
+        let draft = thread.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !draft.isEmpty else {
+            setReplyError(message: "답글 내용을 입력해 주세요.", requiresAuthentication: false)
+            return
+        }
+
+        let parentCommentID = thread.parentComment.id
+        let draftKey = normalizedReplyDraftKey(parentCommentID: parentCommentID, draft: draft)
+        guard submittingReplyDraftKeys.insert(draftKey).inserted else {
+            return
+        }
+
+        thread.isSubmitting = true
+        thread.errorMessage = nil
+        thread.requiresAuthentication = false
+        viewState.replyThread = thread
+        #if DEBUG
+        Logger(category: "CommentReply").debug("[CommentReply] submit started parentCommentId=\(parentCommentID) contentLength=\(draft.count)")
+        #endif
+
+        do {
+            let createdComment = try await interactor.createComment(
+                content: draft,
+                parentCommentID: parentCommentID
+            )
+            let createdReply = makeReplyComment(
+                from: createdComment,
+                parentCommentID: parentCommentID
+            )
+            submittingReplyDraftKeys.remove(draftKey)
+            comments = appendReply(createdReply, toParentCommentID: parentCommentID, in: comments)
+            syncDetailComments()
+            syncAllViewState()
+            viewState.replyThread?.draft = ""
+            viewState.replyThread?.isSubmitting = false
+            viewState.replyThread?.errorMessage = nil
+            viewState.replyThread?.requiresAuthentication = false
+            viewState.replyThread?.scrollTargetReplyID = createdReply.id
+            if let detail {
+                postCommunityChange(summary: detail.summary)
+            }
+            #if DEBUG
+            Logger(category: "CommentReply").debug("[CommentReply] submit success parentCommentId=\(parentCommentID) replyId=\(createdReply.id)")
+            Logger(category: "CommentReply").debug("[CommentReply] scroll target replyId=\(createdReply.id)")
+            #endif
+        } catch {
+            submittingReplyDraftKeys.remove(draftKey)
+            viewState.replyThread?.draft = draft
+            viewState.replyThread?.isSubmitting = false
+            let message = resolveCommentErrorMessage(from: error)
+            let requiresAuthentication = isCommentAuthenticationFailure(error)
+            viewState.replyThread?.errorMessage = message
+            viewState.replyThread?.requiresAuthentication = requiresAuthentication
+            if requiresAuthentication {
+                router.routeToAuth(context: .communityComment)
+            }
+            #if DEBUG
+            Logger(category: "CommentReply").debug("[CommentReply] submit failed parentCommentId=\(parentCommentID) reason=\(message)")
+            #endif
+        }
+    }
+
+    private func clearReplyScrollTarget() {
+        guard viewState.replyThread?.scrollTargetReplyID != nil else { return }
+        viewState.replyThread?.scrollTargetReplyID = nil
+    }
+
     private func syncDetailComments() {
         guard let currentDetail = detail else { return }
         detail = CommunityPostDetail(
@@ -488,6 +605,7 @@ final class CommunityDetailPresenter: ObservableObject {
         viewState.commentSection.countText = "댓글 \(comments.reduce(0) { $0 + $1.totalCountIncludingReplies })개"
         viewState.commentSection.nextCursor = nextCommentCursor
         viewState.commentSection.canLoadMore = nextCommentCursor != nil
+        syncReplyThreadState()
 
         if comments.isEmpty && !viewState.commentSection.isInitialLoading {
             if viewState.commentSection.requiresAuthentication {
@@ -554,6 +672,16 @@ final class CommunityDetailPresenter: ObservableObject {
             message: message,
             requiresAuthentication: requiresAuthentication
         )
+    }
+
+    private func ensureAuthenticatedForReplyAction(message: String) -> Bool {
+        guard sessionStore.isAuthenticated else {
+            setReplyError(message: message, requiresAuthentication: true)
+            router.routeToAuth(context: .communityComment)
+            return false
+        }
+
+        return true
     }
 
     private func ensureAuthenticatedForCommentAction(message: String) -> Bool {
@@ -666,6 +794,14 @@ final class CommunityDetailPresenter: ObservableObject {
         viewState.commentSection.errorMessage = message
         viewState.commentSection.requiresAuthentication = requiresAuthentication
         syncCommentSectionState()
+    }
+
+    private func setReplyError(
+        message: String,
+        requiresAuthentication: Bool
+    ) {
+        viewState.replyThread?.errorMessage = message
+        viewState.replyThread?.requiresAuthentication = requiresAuthentication
     }
 
     private func makeUpdatedSummary(
@@ -830,6 +966,18 @@ final class CommunityDetailPresenter: ObservableObject {
         )
     }
 
+    private func syncReplyThreadState() {
+        guard var thread = viewState.replyThread else { return }
+        guard let parentComment = comments.first(where: { $0.id == thread.parentComment.id }) else {
+            viewState.replyThread = nil
+            return
+        }
+
+        thread.parentComment = makeCommentRowState(from: parentComment, depth: 0)
+        thread.replies = parentComment.replies.map { makeCommentRowState(from: $0, depth: 1) }
+        viewState.replyThread = thread
+    }
+
     private func appendUniqueComments(
         existing: [CommunityComment],
         incoming: [CommunityComment]
@@ -907,6 +1055,56 @@ final class CommunityDetailPresenter: ObservableObject {
 
     private func normalizedCommentDraftKey(_ draft: String) -> String {
         "\(viewState.postID)|\(sessionStore.currentUserID ?? "guest")|\(draft)"
+    }
+
+    private func normalizedReplyDraftKey(parentCommentID: String, draft: String) -> String {
+        "\(viewState.postID)|\(parentCommentID)|\(sessionStore.currentUserID ?? "guest")|\(draft)"
+    }
+
+    private func makeReplyComment(
+        from comment: CommunityComment,
+        parentCommentID: String
+    ) -> CommunityComment {
+        CommunityComment(
+            id: comment.id,
+            postID: comment.postID.isEmpty ? viewState.postID : comment.postID,
+            parentCommentID: parentCommentID,
+            author: comment.author,
+            content: comment.content,
+            createdAt: comment.createdAt,
+            updatedAt: comment.updatedAt,
+            isMine: comment.isMine,
+            isHidden: comment.isHidden,
+            replies: []
+        )
+    }
+
+    private func appendReply(
+        _ reply: CommunityComment,
+        toParentCommentID parentCommentID: String,
+        in comments: [CommunityComment]
+    ) -> [CommunityComment] {
+        comments.map { comment in
+            guard comment.id == parentCommentID else {
+                return comment
+            }
+
+            let replies = comment.replies.contains(where: { $0.id == reply.id })
+                ? comment.replies.map { $0.id == reply.id ? reply : $0 }
+                : comment.replies + [reply]
+            return CommunityComment(
+                id: comment.id,
+                postID: comment.postID,
+                parentCommentID: comment.parentCommentID,
+                author: comment.author,
+                content: comment.content,
+                createdAt: comment.createdAt,
+                updatedAt: comment.updatedAt,
+                isMine: comment.isMine,
+                isHidden: comment.isHidden,
+                replies: replies
+            )
+        }
     }
 
     private func replaceComment(

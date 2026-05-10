@@ -109,7 +109,31 @@ struct ChatRoomRowViewState: Equatable, Identifiable {
     let timeText: String
     let avatarPath: String?
     let section: ChatRoomRowSection
+    let titleMatchRanges: [NSRange]
+    let subtitleMatchRanges: [NSRange]
     var searchSnippet: String? = nil
+
+    init(
+        id: String,
+        title: String,
+        subtitle: String,
+        timeText: String,
+        avatarPath: String?,
+        section: ChatRoomRowSection,
+        titleMatchRanges: [NSRange] = [],
+        subtitleMatchRanges: [NSRange] = [],
+        searchSnippet: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.timeText = timeText
+        self.avatarPath = avatarPath
+        self.section = section
+        self.titleMatchRanges = titleMatchRanges
+        self.subtitleMatchRanges = subtitleMatchRanges
+        self.searchSnippet = searchSnippet
+    }
 }
 
 struct ChatMessageRowViewState: Equatable, Identifiable {
@@ -143,6 +167,7 @@ struct ChatMessageSearchState: Equatable {
     var query = ""
     var matches: [ChatSearchResultViewState] = []
     var selectedMatchIndex: Int?
+    var scrollTargetChatId: String?
     var isLoadingSearchExpansion = false
     var searchScope: ChatSearchScope = .loadedMessagesOnly
     var mayHaveOlderUnloadedMessages = true
@@ -157,13 +182,33 @@ struct ChatMessageSearchState: Equatable {
     }
 }
 
-struct ChatSearchResultViewState: Equatable, Identifiable {
+struct ChatMessageSearchMatch: Equatable, Identifiable {
     let id: String
     let messageID: String
     let preview: String
     let matchRanges: [NSRange]
     let createdAt: Date?
     let messageIndex: Int
+}
+
+typealias ChatSearchResultViewState = ChatMessageSearchMatch
+
+enum ChatRoomSearchEmptyReason: Equatable {
+    case noMatches
+    case noRooms
+}
+
+struct ChatRoomSearchState: Equatable {
+    var isActive = false
+    var query = ""
+    var resultRoomIds: [String] = []
+    var isLoading = false
+    var emptyReason: ChatRoomSearchEmptyReason?
+    var hasCompletedInitialLoad = false
+
+    var resultCount: Int? {
+        isActive && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? resultRoomIds.count : nil
+    }
 }
 
 enum ChatScrollTarget: Equatable {
@@ -203,8 +248,7 @@ struct ChatViewState: Equatable {
     var scrollCommand: ChatScrollCommand?
     var showsNewMessageIndicator = false
     var newMessageCount = 0
-    var roomListSearchQuery = ""
-    var roomListSearchResultCount: Int?
+    var roomListSearch = ChatRoomSearchState()
     var isSearchActive = false
     var searchQuery = ""
     var searchResults: [ChatSearchResultViewState] = []
@@ -222,6 +266,19 @@ struct ChatViewState: Equatable {
         return searchResults[selectedSearchResultIndex]
     }
 
+    var roomListSearchQuery: String {
+        get { roomListSearch.query }
+        set { roomListSearch.query = newValue }
+    }
+
+    var roomListSearchResultCount: Int? {
+        roomListSearch.resultCount
+    }
+
+    var isRoomListSearchActive: Bool {
+        roomListSearch.isActive
+    }
+
     var searchStatusText: String {
         let trimmedQuery = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedQuery.isEmpty {
@@ -233,11 +290,18 @@ struct ChatViewState: Equatable {
         if searchResults.isEmpty {
             return "검색 결과가 없어요."
         }
+        if let selectedSearchResultIndex {
+            return "\(selectedSearchResultIndex + 1) / \(searchResults.count)"
+        }
         return "\(searchResults.count)개 결과"
     }
 
+    var showsMessageSearchPanel: Bool {
+        isSearchActive && !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var showsEmptyState: Bool {
-        !isLoading && mode == .roomList && rooms.isEmpty && emptyTitle != nil
+        !isLoading && mode == .roomList && rooms.isEmpty && emptyTitle != nil && !roomListSearch.isActive
     }
 
     var showsDetailEmptyState: Bool {
@@ -259,7 +323,7 @@ struct ChatViewState: Equatable {
     }
 
     var canNavigateSearchResults: Bool {
-        searchResults.count > 1
+        !searchResults.isEmpty
     }
 
     var searchScopeNoticeText: String {

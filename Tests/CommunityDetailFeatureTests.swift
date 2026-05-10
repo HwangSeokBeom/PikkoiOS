@@ -383,6 +383,286 @@ final class CommunityDetailFeatureTests: XCTestCase {
         }
     }
 
+    func testTopLevelCommentSubmitCallsCreateWithoutParentCommentID() async {
+        let interactor = StubCommunityDetailInteractor(
+            loadContentResult: .success(
+                CommunityDetailContent(
+                    detail: makeDetail(postID: "post-123", comments: []),
+                    distanceMeters: nil
+                )
+            ),
+            loadCommentsResults: [.success(CursorPage(items: [], nextCursor: nil))],
+            createCommentResult: .success(makeComment(id: "new-comment", postID: "post-123", isMine: true))
+        )
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: interactor,
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.commentComposerChanged("  새 댓글  "))
+        await presenter.send(.commentSubmitTapped)
+
+        XCTAssertEqual(interactor.recordedCreateCommentRequests.count, 1)
+        XCTAssertEqual(interactor.recordedCreateCommentRequests.first?.content, "새 댓글")
+        XCTAssertNil(interactor.recordedCreateCommentRequests.first?.parentCommentID)
+    }
+
+    func testReplySubmitCallsCreateWithParentCommentIDAndClearsDraft() async {
+        let parent = makeComment(id: "parent-1", postID: "post-123")
+        let interactor = StubCommunityDetailInteractor(
+            loadContentResult: .success(
+                CommunityDetailContent(
+                    detail: makeDetail(postID: "post-123", comments: [parent]),
+                    distanceMeters: nil
+                )
+            ),
+            loadCommentsResults: [.success(CursorPage(items: [parent], nextCursor: nil))],
+            createCommentResult: .success(
+                makeComment(
+                    id: "reply-1",
+                    postID: "post-123",
+                    content: "새 답글",
+                    isMine: true,
+                    parentCommentID: "parent-1"
+                )
+            )
+        )
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: interactor,
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.commentReplyTapped("parent-1"))
+        await presenter.send(.replyDraftChanged("  새 답글  "))
+        await presenter.send(.replySubmitTapped)
+
+        XCTAssertEqual(interactor.recordedCreateCommentRequests.count, 1)
+        XCTAssertEqual(interactor.recordedCreateCommentRequests.first?.content, "새 답글")
+        XCTAssertEqual(interactor.recordedCreateCommentRequests.first?.parentCommentID, "parent-1")
+        XCTAssertEqual(presenter.viewState.replyThread?.draft, "")
+        XCTAssertEqual(presenter.viewState.replyThread?.replies.map(\.id), ["reply-1"])
+        XCTAssertEqual(presenter.viewState.replyThread?.scrollTargetReplyID, "reply-1")
+    }
+
+    func testReplySubmitIsIgnoredForWhitespaceDraft() async {
+        let parent = makeComment(id: "parent-1", postID: "post-123")
+        let interactor = StubCommunityDetailInteractor(
+            loadContentResult: .success(
+                CommunityDetailContent(
+                    detail: makeDetail(postID: "post-123", comments: [parent]),
+                    distanceMeters: nil
+                )
+            ),
+            loadCommentsResults: [.success(CursorPage(items: [parent], nextCursor: nil))]
+        )
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: interactor,
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.commentReplyTapped("parent-1"))
+        await presenter.send(.replyDraftChanged("   \n "))
+        await presenter.send(.replySubmitTapped)
+
+        XCTAssertTrue(interactor.recordedCreateCommentRequests.isEmpty)
+        XCTAssertEqual(presenter.viewState.replyThread?.errorMessage, "답글 내용을 입력해 주세요.")
+    }
+
+    func testReplySubmitPreservesDraftOnFailure() async {
+        let parent = makeComment(id: "parent-1", postID: "post-123")
+        let interactor = StubCommunityDetailInteractor(
+            loadContentResult: .success(
+                CommunityDetailContent(
+                    detail: makeDetail(postID: "post-123", comments: [parent]),
+                    distanceMeters: nil
+                )
+            ),
+            loadCommentsResults: [.success(CursorPage(items: [parent], nextCursor: nil))],
+            createCommentResult: .failure(
+                CommunityDetailCommentFeatureError.unavailable(message: "답글 등록에 실패했어요.")
+            )
+        )
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: interactor,
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.commentReplyTapped("parent-1"))
+        await presenter.send(.replyDraftChanged("실패 답글"))
+        await presenter.send(.replySubmitTapped)
+
+        XCTAssertEqual(presenter.viewState.replyThread?.draft, "실패 답글")
+        XCTAssertEqual(presenter.viewState.replyThread?.errorMessage, "답글 등록에 실패했어요.")
+    }
+
+    func testRapidDoubleTapDoesNotCreateDuplicateReplyRequests() async {
+        let parent = makeComment(id: "parent-1", postID: "post-123")
+        let interactor = StubCommunityDetailInteractor(
+            loadContentResult: .success(
+                CommunityDetailContent(
+                    detail: makeDetail(postID: "post-123", comments: [parent]),
+                    distanceMeters: nil
+                )
+            ),
+            loadCommentsResults: [.success(CursorPage(items: [parent], nextCursor: nil))],
+            createCommentResult: .success(
+                makeComment(id: "reply-1", postID: "post-123", isMine: true, parentCommentID: "parent-1")
+            ),
+            createCommentDelayNanos: 100_000_000
+        )
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: interactor,
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.commentReplyTapped("parent-1"))
+        await presenter.send(.replyDraftChanged("중복 방지"))
+        async let first: Void = presenter.send(.replySubmitTapped)
+        async let second: Void = presenter.send(.replySubmitTapped)
+        _ = await (first, second)
+
+        XCTAssertEqual(interactor.recordedCreateCommentRequests.count, 1)
+    }
+
+    func testReplyActionStateExistsOnlyForTopLevelComments() async {
+        let reply = makeComment(
+            id: "reply-1",
+            postID: "post-123",
+            parentCommentID: "parent-1"
+        )
+        let parent = makeComment(
+            id: "parent-1",
+            postID: "post-123",
+            replies: [reply]
+        )
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: StubCommunityDetailInteractor(
+                loadContentResult: .success(
+                    CommunityDetailContent(
+                        detail: makeDetail(postID: "post-123", comments: [parent]),
+                        distanceMeters: nil
+                    )
+                ),
+                loadCommentsResults: [.success(CursorPage(items: [parent], nextCursor: nil))]
+            ),
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+
+        XCTAssertTrue(presenter.viewState.commentSection.comments.first?.isTopLevel == true)
+        XCTAssertFalse(presenter.viewState.commentSection.comments.first?.replies.first?.isTopLevel == true)
+    }
+
+    func testOpeningReplyThreadForReplyIsIgnored() async {
+        let reply = makeComment(
+            id: "reply-1",
+            postID: "post-123",
+            parentCommentID: "parent-1"
+        )
+        let parent = makeComment(
+            id: "parent-1",
+            postID: "post-123",
+            replies: [reply]
+        )
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: StubCommunityDetailInteractor(
+                loadContentResult: .success(
+                    CommunityDetailContent(
+                        detail: makeDetail(postID: "post-123", comments: [parent]),
+                        distanceMeters: nil
+                    )
+                ),
+                loadCommentsResults: [.success(CursorPage(items: [parent], nextCursor: nil))]
+            ),
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.commentReplyTapped("reply-1"))
+
+        XCTAssertNil(presenter.viewState.replyThread)
+    }
+
+    func testReplyCountViewOpensCorrectParentThread() async {
+        let parent = makeComment(
+            id: "parent-1",
+            postID: "post-123",
+            replies: [makeComment(id: "reply-1", postID: "post-123", parentCommentID: "parent-1")]
+        )
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: StubCommunityDetailInteractor(
+                loadContentResult: .success(
+                    CommunityDetailContent(
+                        detail: makeDetail(postID: "post-123", comments: [parent]),
+                        distanceMeters: nil
+                    )
+                ),
+                loadCommentsResults: [.success(CursorPage(items: [parent], nextCursor: nil))]
+            ),
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.commentReplyTapped("parent-1"))
+
+        XCTAssertEqual(presenter.viewState.replyThread?.parentComment.id, "parent-1")
+        XCTAssertEqual(presenter.viewState.replyThread?.replies.map(\.id), ["reply-1"])
+    }
+
+    func testReplyThreadStateUpdatesWhenPostDetailRefreshes() async {
+        let initialParent = makeComment(id: "parent-1", postID: "post-123")
+        let refreshedParent = makeComment(
+            id: "parent-1",
+            postID: "post-123",
+            replies: [makeComment(id: "reply-2", postID: "post-123", parentCommentID: "parent-1")]
+        )
+        let presenter = CommunityDetailPresenter(
+            postID: "post-123",
+            interactor: StubCommunityDetailInteractor(
+                loadContentResult: .success(
+                    CommunityDetailContent(
+                        detail: makeDetail(postID: "post-123", comments: [initialParent]),
+                        distanceMeters: nil
+                    )
+                ),
+                loadCommentsResults: [
+                    .success(CursorPage(items: [initialParent], nextCursor: nil)),
+                    .success(CursorPage(items: [refreshedParent], nextCursor: nil))
+                ]
+            ),
+            router: CommunityDetailRouter(),
+            sessionStore: makeSessionStore(userID: "me")
+        )
+
+        await presenter.send(.onAppear)
+        await presenter.send(.commentReplyTapped("parent-1"))
+        await presenter.send(.commentsRetryTapped)
+
+        XCTAssertEqual(presenter.viewState.replyThread?.replies.map(\.id), ["reply-2"])
+    }
+
     private func makeDetail(postID: String, comments: [CommunityComment] = [CommunityComment(
         id: "comment-1",
         postID: "post-123",
@@ -427,12 +707,14 @@ final class CommunityDetailFeatureTests: XCTestCase {
         id: String,
         postID: String,
         content: String = "댓글 본문",
-        isMine: Bool = false
+        isMine: Bool = false,
+        parentCommentID: String? = nil,
+        replies: [CommunityComment] = []
     ) -> CommunityComment {
         CommunityComment(
             id: id,
             postID: postID,
-            parentCommentID: nil,
+            parentCommentID: parentCommentID,
             author: CommunityPostAuthor(
                 id: isMine ? "me" : "other",
                 nick: isMine ? "나" : "댓글러",
@@ -443,7 +725,7 @@ final class CommunityDetailFeatureTests: XCTestCase {
             updatedAt: nil,
             isMine: isMine,
             isHidden: false,
-            replies: []
+            replies: replies
         )
     }
 
@@ -556,7 +838,7 @@ private struct StubCommunityRepository: CommunityRepository {
     }
 
     func createComment(postID: String, content: String, parentCommentID: String?) async throws -> CommunityComment {
-        try createCommentResult.get()
+        return try createCommentResult.get()
     }
 
     func updateComment(postID: String, commentID: String, content: String) async throws -> CommunityComment {
@@ -644,7 +926,9 @@ private final class StubCommunityDetailInteractor: CommunityDetailInteracting {
     var deleteCommentResult: Result<Void, Error>
     var likeResult: Result<Bool, Error>
     var loadCommentsDelayNanos: UInt64
+    var createCommentDelayNanos: UInt64
     private(set) var recordedCommentCursors: [String?] = []
+    private(set) var recordedCreateCommentRequests: [(content: String, parentCommentID: String?)] = []
 
     init(
         loadContentResult: Result<CommunityDetailContent, Error>,
@@ -680,7 +964,8 @@ private final class StubCommunityDetailInteractor: CommunityDetailInteracting {
         ),
         deleteCommentResult: Result<Void, Error> = .success(()),
         likeResult: Result<Bool, Error> = .success(false),
-        loadCommentsDelayNanos: UInt64 = 0
+        loadCommentsDelayNanos: UInt64 = 0,
+        createCommentDelayNanos: UInt64 = 0
     ) {
         self.loadContentResult = loadContentResult
         self.loadCommentsResults = loadCommentsResults
@@ -690,6 +975,7 @@ private final class StubCommunityDetailInteractor: CommunityDetailInteracting {
         self.deleteCommentResult = deleteCommentResult
         self.likeResult = likeResult
         self.loadCommentsDelayNanos = loadCommentsDelayNanos
+        self.createCommentDelayNanos = createCommentDelayNanos
     }
 
     func loadInitialContent() async throws -> CommunityDetailContent {
@@ -708,8 +994,12 @@ private final class StubCommunityDetailInteractor: CommunityDetailInteracting {
         return try loadCommentsResults.removeFirst().get()
     }
 
-    func createComment(content: String) async throws -> CommunityComment {
-        try createCommentResult.get()
+    func createComment(content: String, parentCommentID: String?) async throws -> CommunityComment {
+        recordedCreateCommentRequests.append((content: content, parentCommentID: parentCommentID))
+        if createCommentDelayNanos > 0 {
+            try? await Task.sleep(nanoseconds: createCommentDelayNanos)
+        }
+        return try createCommentResult.get()
     }
 
     func updateComment(commentID: String, content: String) async throws -> CommunityComment {

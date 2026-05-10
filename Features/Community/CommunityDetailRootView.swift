@@ -58,7 +58,7 @@ struct CommunityDetailRootView: View {
         }
         .onChange(of: router.dismissRequested) { _, dismissRequested in
             guard dismissRequested else { return }
-            router.clearDismissRequest()
+            clearDismissRequestAfterViewUpdate()
             dismiss()
         }
         .navigationDestination(isPresented: storeDetailPresentedBinding) {
@@ -76,10 +76,48 @@ struct CommunityDetailRootView: View {
                 isComposerPresented = false
                 presentedComposerInitialDraft = nil
                 presentedComposerMode = .create
-                router.clearPendingRoute()
+                clearPendingRouteAfterViewUpdate()
                 if postID == presenter.viewState.postID {
                     Task { await presenter.send(.retryTapped) }
                 }
+            }
+        }
+        .navigationDestination(isPresented: replyThreadPresentedBinding) {
+            if let replyThread = presenter.viewState.replyThread {
+                CommentReplyThreadView(
+                    thread: replyThread,
+                    sectionState: presenter.viewState.commentSection,
+                    imageLoader: imageLoader,
+                    onDraftChanged: { draft in
+                        Task { await presenter.send(.replyDraftChanged(draft)) }
+                    },
+                    onSubmitTapped: {
+                        Task { await presenter.send(.replySubmitTapped) }
+                    },
+                    onAuthTapped: {
+                        Task { await presenter.send(.loginRequiredTapped) }
+                    },
+                    onEditTapped: { commentID in
+                        Task { await presenter.send(.commentEditTapped(commentID)) }
+                    },
+                    onEditDraftChanged: { draft in
+                        Task { await presenter.send(.commentEditDraftChanged(draft)) }
+                    },
+                    onEditSaveTapped: {
+                        Task { await presenter.send(.commentEditSaveTapped) }
+                    },
+                    onEditCancelTapped: {
+                        Task { await presenter.send(.commentEditCancelled) }
+                    },
+                    onDeleteConfirmed: { commentID in
+                        Task { await presenter.send(.commentDeleteConfirmed(commentID)) }
+                    },
+                    onScrollTargetHandled: {
+                        Task { await presenter.send(.replyScrollTargetHandled) }
+                    }
+                )
+            } else {
+                EmptyView()
             }
         }
         .navigationDestination(isPresented: chatPresentedBinding) {
@@ -107,13 +145,26 @@ struct CommunityDetailRootView: View {
 }
 
 private extension CommunityDetailRootView {
+    var replyThreadPresentedBinding: Binding<Bool> {
+        Binding(
+            get: { presenter.viewState.replyThread != nil },
+            set: { isPresented in
+                guard !isPresented else { return }
+                Task { @MainActor in
+                    await Task.yield()
+                    await presenter.send(.replyThreadDismissed)
+                }
+            }
+        )
+    }
+
     var storeDetailPresentedBinding: Binding<Bool> {
         Binding(
             get: { presentedStoreID != nil },
             set: { isPresented in
                 if !isPresented {
                     presentedStoreID = nil
-                    router.clearPendingRoute()
+                    clearPendingRouteAfterViewUpdate()
                 }
             }
         )
@@ -138,7 +189,7 @@ private extension CommunityDetailRootView {
                     isComposerPresented = false
                     presentedComposerMode = .create
                     presentedComposerInitialDraft = nil
-                    router.clearPendingRoute()
+                    clearPendingRouteAfterViewUpdate()
                 }
             }
         )
@@ -150,9 +201,23 @@ private extension CommunityDetailRootView {
             set: { isPresented in
                 if !isPresented {
                     presentedChatTarget = nil
-                    router.clearPendingRoute()
+                    clearPendingRouteAfterViewUpdate()
                 }
             }
         )
+    }
+
+    func clearPendingRouteAfterViewUpdate() {
+        Task { @MainActor in
+            await Task.yield()
+            router.clearPendingRoute()
+        }
+    }
+
+    func clearDismissRequestAfterViewUpdate() {
+        Task { @MainActor in
+            await Task.yield()
+            router.clearDismissRequest()
+        }
     }
 }

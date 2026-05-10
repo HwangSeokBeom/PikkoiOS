@@ -247,6 +247,14 @@ final class ChatHardeningTests: XCTestCase {
         XCTAssertEqual(ChatSearchEngine.search(messages: messages, query: "pikko").map(\.messageID), ["server-2"])
     }
 
+    func testChatSearchHighlightsMultipleOccurrencesInOneMessage() {
+        let message = makeMessage(id: "server-1", serverChatID: "server-1", content: "Pikko pikko PIKKO")
+
+        let result = ChatSearchEngine.search(messages: [message], query: "pikko")
+
+        XCTAssertEqual(result.first?.matchRanges.count, 3)
+    }
+
     func testChatSearchResultUsesClientIDForOptimisticMessageStability() {
         let optimistic = makeMessage(
             id: "local-1",
@@ -307,6 +315,141 @@ final class ChatHardeningTests: XCTestCase {
         XCTAssertEqual(Set(presenter.viewState.rooms.map(\.title)), Set(["민지", "Alex"]))
         XCTAssertNil(presenter.viewState.emptyTitle)
         XCTAssertNil(presenter.viewState.roomListSearchResultCount)
+    }
+
+    func testChatListEmptyQueryReturnsFullListAndNoEmptySearchState() async {
+        let rooms = [
+            makeRoom(id: "room-1", opponentName: "민지", lastContent: "안녕하세요"),
+            makeRoom(id: "room-2", opponentName: "Alex", lastContent: "Hello Pikko")
+        ]
+        let presenter = ChatPresenter(
+            interactor: makeInteractor(chatRepository: StubChatRepository(rooms: rooms)),
+            router: StubChatRouter()
+        )
+
+        await presenter.send(.onAppear(instanceID: "test", presentationKind: .internal))
+        await presenter.send(.activateRoomListSearch)
+        await presenter.send(.roomListSearchQueryChanged("   "))
+
+        XCTAssertEqual(Set(presenter.viewState.rooms.map(\.title)), Set(["민지", "Alex"]))
+        XCTAssertNil(presenter.viewState.roomListSearchResultCount)
+        XCTAssertNil(presenter.viewState.emptyTitle)
+    }
+
+    func testChatListSearchReloadRefetchesRoomsAndReappliesQuery() async {
+        let counter = ChatRepositoryCallCounter()
+        let repository = StubChatRepository(
+            rooms: [
+                makeRoom(id: "room-1", opponentName: "민지", lastContent: "오늘 LATTE 가능해요"),
+                makeRoom(id: "room-2", opponentName: "준호", lastContent: "내일 픽업할게요")
+            ],
+            callCounter: counter
+        )
+        let presenter = ChatPresenter(
+            interactor: makeInteractor(chatRepository: repository),
+            router: StubChatRouter()
+        )
+
+        await presenter.send(.onAppear(instanceID: "test", presentationKind: .internal))
+        await presenter.send(.roomListSearchQueryChanged("latte"))
+        await presenter.send(.refreshRequested)
+
+        let fetchChatRoomsCount = await counter.fetchChatRoomsCount()
+        let fetchMessagesCount = await counter.fetchMessagesCount()
+        XCTAssertEqual(fetchChatRoomsCount, 2)
+        XCTAssertEqual(presenter.viewState.rooms.map(\.title), ["민지"])
+        XCTAssertEqual(presenter.viewState.roomListSearchResultCount, 1)
+        XCTAssertEqual(fetchMessagesCount, 0)
+    }
+
+    func testMessageSearchOneResultSelectsScrollTargetAndHighlights() async {
+        let presenter = await makeLoadedRoomPresenter(messages: [
+            makeMessage(id: "server-1", serverChatID: "server-1", content: "hello", createdAt: date(1)),
+            makeMessage(id: "server-2", serverChatID: "server-2", content: "Sd message", createdAt: date(2))
+        ])
+
+        await presenter.send(.searchTapped)
+        await presenter.send(.searchQueryChanged("sd"))
+
+        XCTAssertEqual(presenter.viewState.searchResults.count, 1)
+        XCTAssertEqual(presenter.viewState.selectedSearchResultIndex, 0)
+        XCTAssertEqual(presenter.viewState.messageSearch.scrollTargetChatId, "server-2")
+        XCTAssertEqual(presenter.viewState.scrollCommand?.target, .message(id: "server-2"))
+        XCTAssertEqual(presenter.viewState.messages.first(where: { $0.id == "server-2" })?.searchMatchRanges.count, 1)
+        XCTAssertEqual(presenter.viewState.messages.first(where: { $0.id == "server-2" })?.isSelectedSearchMatch, true)
+    }
+
+    func testMessageSearchMultipleResultsNavigatesSequentially() async {
+        let presenter = await makeLoadedRoomPresenter(messages: [
+            makeMessage(id: "server-1", serverChatID: "server-1", content: "메시지 하나", createdAt: date(1)),
+            makeMessage(id: "server-2", serverChatID: "server-2", content: "둘", createdAt: date(2)),
+            makeMessage(id: "server-3", serverChatID: "server-3", content: "메시지 둘", createdAt: date(3))
+        ])
+
+        await presenter.send(.searchTapped)
+        await presenter.send(.searchQueryChanged("메시지"))
+
+        XCTAssertEqual(presenter.viewState.searchStatusText, "1 / 2")
+        XCTAssertEqual(presenter.viewState.selectedSearchResult?.messageID, "server-1")
+
+        await presenter.send(.nextSearchResultTapped)
+        XCTAssertEqual(presenter.viewState.searchStatusText, "2 / 2")
+        XCTAssertEqual(presenter.viewState.selectedSearchResult?.messageID, "server-3")
+
+        await presenter.send(.previousSearchResultTapped)
+        XCTAssertEqual(presenter.viewState.searchStatusText, "1 / 2")
+        XCTAssertEqual(presenter.viewState.selectedSearchResult?.messageID, "server-1")
+    }
+
+    func testMessageSearchNoResultClearsSelectionAndScrollTarget() async {
+        let presenter = await makeLoadedRoomPresenter(messages: [
+            makeMessage(id: "server-1", serverChatID: "server-1", content: "hello", createdAt: date(1))
+        ])
+
+        await presenter.send(.searchTapped)
+        await presenter.send(.searchQueryChanged("없음"))
+
+        XCTAssertTrue(presenter.viewState.searchResults.isEmpty)
+        XCTAssertNil(presenter.viewState.selectedSearchResultIndex)
+        XCTAssertNil(presenter.viewState.messageSearch.scrollTargetChatId)
+        XCTAssertEqual(presenter.viewState.searchStatusText, "검색 결과가 없어요.")
+    }
+
+    func testIncomingSocketMessageRecomputesSearchAndPreservesSelectedMatch() async {
+        let realtime = ReconnectCapturingRealtimeService()
+        let presenter = await makeLoadedRoomPresenter(
+            messages: [
+                makeMessage(id: "server-1", serverChatID: "server-1", content: "match one", createdAt: date(1)),
+                makeMessage(id: "server-2", serverChatID: "server-2", content: "match two", createdAt: date(2))
+            ],
+            realtimeService: realtime
+        )
+
+        await presenter.send(.searchTapped)
+        await presenter.send(.searchQueryChanged("match"))
+        await presenter.send(.nextSearchResultTapped)
+        XCTAssertEqual(presenter.viewState.selectedSearchResult?.messageID, "server-2")
+
+        await realtime.triggerMessage(makeMessage(id: "server-3", serverChatID: "server-3", content: "match three", createdAt: date(3), senderID: "user-2"))
+
+        XCTAssertEqual(presenter.viewState.searchResults.count, 3)
+        XCTAssertEqual(presenter.viewState.selectedSearchResult?.messageID, "server-2")
+    }
+
+    func testSearchCancelClearsQueryHighlightsAndRestoresNormalChatUI() async {
+        let presenter = await makeLoadedRoomPresenter(messages: [
+            makeMessage(id: "server-1", serverChatID: "server-1", content: "hello", createdAt: date(1))
+        ])
+
+        await presenter.send(.searchTapped)
+        await presenter.send(.searchQueryChanged("hello"))
+        await presenter.send(.searchDismissed)
+
+        XCTAssertFalse(presenter.viewState.isSearchActive)
+        XCTAssertEqual(presenter.viewState.searchQuery, "")
+        XCTAssertTrue(presenter.viewState.searchResults.isEmpty)
+        XCTAssertEqual(presenter.viewState.messages.first?.searchMatchRanges, [])
+        XCTAssertEqual(presenter.viewState.messages.first?.isSelectedSearchMatch, false)
     }
 
     func testChatUploadValidatorAcceptsUppercaseSupportedExtensions() throws {
@@ -402,6 +545,7 @@ final class ChatHardeningTests: XCTestCase {
     }
 
     private func makeInteractor(
+        target: ChatTarget? = nil,
         chatRepository: StubChatRepository = StubChatRepository(),
         realtimeService: ChatRealtimeServiceProtocol = ReconnectCapturingRealtimeService()
     ) -> ChatInteractor {
@@ -418,12 +562,31 @@ final class ChatHardeningTests: XCTestCase {
             refreshToken: "refresh-token"
         ))
         return ChatInteractor(
+            target: target,
             chatRepository: chatRepository,
             localDataSource: CoreDataChatLocalDataSource(inMemory: true),
             realtimeService: realtimeService,
             storeRepository: StubChatStoreRepository(),
             sessionStore: sessionStore
         )
+    }
+
+    @MainActor
+    private func makeLoadedRoomPresenter(
+        messages: [ChatMessage],
+        realtimeService: ChatRealtimeServiceProtocol = ReconnectCapturingRealtimeService()
+    ) async -> ChatPresenter {
+        let rooms = [makeRoom(id: "room-1", opponentName: "민지", lastContent: messages.last?.content ?? "")]
+        let presenter = ChatPresenter(
+            interactor: makeInteractor(
+                chatRepository: StubChatRepository(rooms: rooms, messages: messages),
+                realtimeService: realtimeService
+            ),
+            router: StubChatRouter()
+        )
+        await presenter.send(.onAppear(instanceID: "test", presentationKind: .internal))
+        await presenter.send(.roomTapped("server:room-1"))
+        return presenter
     }
 }
 
@@ -440,8 +603,13 @@ private actor StubChatTokenStore: TokenStore {
 
 private struct StubChatRepository: ChatRepository {
     var rooms: [ChatRoom] = []
+    var messages: [ChatMessage] = []
+    var callCounter: ChatRepositoryCallCounter?
 
-    func fetchChatRooms() async throws -> [ChatRoom] { rooms }
+    func fetchChatRooms() async throws -> [ChatRoom] {
+        await callCounter?.recordFetchChatRooms()
+        return rooms
+    }
     func createOrFetchChatRoom(mode: ChatRoomCreationMode) async throws -> ChatRoom {
         ChatRoom(
             id: "room-1",
@@ -456,7 +624,10 @@ private struct StubChatRepository: ChatRepository {
             roomType: nil
         )
     }
-    func fetchMessages(roomID: String, next: String?) async throws -> [ChatMessage] { [] }
+    func fetchMessages(roomID: String, next: String?) async throws -> [ChatMessage] {
+        await callCounter?.recordFetchMessages()
+        return messages
+    }
     func sendMessage(roomID: String, content: String, files: [String], clientMessageID: String) async throws -> ChatMessage {
         ChatMessage(
             id: "server-1",
@@ -473,9 +644,26 @@ private struct StubChatRepository: ChatRepository {
     func uploadFiles(roomID: String, files: [ChatUploadFile]) async throws -> [String] { [] }
 }
 
+private actor ChatRepositoryCallCounter {
+    private var roomFetches = 0
+    private var messageFetches = 0
+
+    func fetchChatRoomsCount() -> Int { roomFetches }
+    func fetchMessagesCount() -> Int { messageFetches }
+
+    func recordFetchChatRooms() {
+        roomFetches += 1
+    }
+
+    func recordFetchMessages() {
+        messageFetches += 1
+    }
+}
+
 @MainActor
 private final class ReconnectCapturingRealtimeService: ChatRealtimeServiceProtocol {
     private var onReconnect: (@MainActor () async -> Void)?
+    private var onMessage: (@MainActor (ChatMessage) async -> Void)?
 
     func connect(
         roomID: String,
@@ -483,6 +671,7 @@ private final class ReconnectCapturingRealtimeService: ChatRealtimeServiceProtoc
         onMessage: @escaping @MainActor (ChatMessage) async -> Void,
         onReconnect: @escaping @MainActor () async -> Void
     ) async throws {
+        self.onMessage = onMessage
         self.onReconnect = onReconnect
     }
 
@@ -490,6 +679,10 @@ private final class ReconnectCapturingRealtimeService: ChatRealtimeServiceProtoc
 
     func triggerReconnect() async {
         await onReconnect?()
+    }
+
+    func triggerMessage(_ message: ChatMessage) async {
+        await onMessage?(message)
     }
 }
 

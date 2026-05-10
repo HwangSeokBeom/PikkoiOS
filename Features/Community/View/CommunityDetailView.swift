@@ -90,8 +90,8 @@ struct CommunityDetailView: View {
                                 onDeleteConfirmed: { commentID in
                                     Task { await presenter.send(.commentDeleteConfirmed(commentID)) }
                                 },
-                                onAuthorChatTapped: { authorID in
-                                    Task { await presenter.send(.commentAuthorChatTapped(authorID)) }
+                                onReplyTapped: { commentID in
+                                    Task { await presenter.send(.commentReplyTapped(commentID)) }
                                 }
                             )
                         }
@@ -236,7 +236,7 @@ private final class CommunityDetailKeyboardObserver: ObservableObject {
 
     @objc private func handleKeyboardWillChangeFrame(_ notification: Notification) {
         guard let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
-            isKeyboardVisible = false
+            updateKeyboardVisibility(false, key: "commentDetailKeyboard")
             return
         }
 
@@ -245,11 +245,29 @@ private final class CommunityDetailKeyboardObserver: ObservableObject {
             .flatMap(\.windows)
             .first { $0.isKeyWindow }?
             .bounds ?? UIScreen.main.bounds
-        isKeyboardVisible = max(0, windowBounds.maxY - endFrame.minY) > 0
+        updateKeyboardVisibility(
+            max(0, windowBounds.maxY - endFrame.minY) > 0,
+            key: "commentDetailKeyboard"
+        )
     }
 
     @objc private func handleKeyboardWillHide(_ notification: Notification) {
-        isKeyboardVisible = false
+        updateKeyboardVisibility(false, key: "commentDetailKeyboard")
+    }
+
+    private func updateKeyboardVisibility(_ newValue: Bool, key: String) {
+        guard isKeyboardVisible != newValue else {
+            #if DEBUG
+            DebugLogDeduplicator.shared.printWhenChanged(
+                key: "SwiftUIStateGuard.\(key)",
+                value: "\(newValue)",
+                logger: Logger(category: "SwiftUIStateGuard"),
+                message: "[SwiftUIStateGuard] dedupe layout update key=\(key)"
+            )
+            #endif
+            return
+        }
+        isKeyboardVisible = newValue
     }
 }
 
@@ -271,11 +289,11 @@ private struct PreviewCommunityDetailInteractor: CommunityDetailInteracting {
         CursorPage(items: CommunityDetailContent.fallback(postID: "post-001").detail.comments, nextCursor: nil)
     }
 
-    func createComment(content: String) async throws -> CommunityComment {
+    func createComment(content: String, parentCommentID: String?) async throws -> CommunityComment {
         CommunityComment(
             id: "preview-created-comment",
             postID: "post-001",
-            parentCommentID: nil,
+            parentCommentID: parentCommentID,
             author: CommunityPostAuthor(
                 id: "preview-me",
                 nick: "프리뷰 사용자",

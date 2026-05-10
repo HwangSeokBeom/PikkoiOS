@@ -22,6 +22,7 @@ struct ChatRootView: View {
     private let imageLoader: any AuthorizedImageLoading
     @FocusState private var isComposerFocused: Bool
     @FocusState private var isSearchFocused: Bool
+    @FocusState private var isRoomListSearchFocused: Bool
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isFileImporterPresented = false
     @State private var isDetailEmptyStateVisible = false
@@ -72,6 +73,13 @@ struct ChatRootView: View {
                     ToolbarItem(placement: .principal) {
                         roomSearchHeader
                     }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("취소") {
+                            Task { await presenter.send(.searchDismissed) }
+                        }
+                        .font(PikkoTypography.captionStrong)
+                        .foregroundStyle(PikkoColor.primary)
+                    }
                 } else {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
@@ -86,7 +94,14 @@ struct ChatRootView: View {
             }
         }
         .onChange(of: presenter.viewState.isSearchActive) { _, active in
-            isSearchFocused = active
+            Task { @MainActor in
+                isSearchFocused = active
+            }
+        }
+        .onChange(of: presenter.viewState.isRoomListSearchActive) { _, active in
+            Task { @MainActor in
+                isRoomListSearchFocused = active
+            }
         }
         .task {
             await presenter.send(.onAppear(instanceID: chatViewInstanceID, presentationKind: presentationKind))
@@ -105,31 +120,31 @@ struct ChatRootView: View {
 
     private var roomSearchHeader: some View {
         HStack(spacing: PikkoSpacing.xs) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(PikkoColor.secondaryText)
+
             TextField("메시지 검색", text: searchTextBinding)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .focused($isSearchFocused)
                 .font(PikkoTypography.body)
-                .padding(.horizontal, PikkoSpacing.sm)
-                .frame(height: 34)
-                .background(PikkoColor.surface)
-                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
 
             if !presenter.viewState.searchQuery.isEmpty {
                 Button {
-                    Task { await presenter.send(.searchQueryChanged("")) }
+                    Task { await presenter.send(.clearSearchQuery) }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(PikkoColor.secondaryText)
                 }
                 .accessibilityLabel("검색어 지우기")
             }
-
-            Button("취소") {
-                Task { await presenter.send(.searchDismissed) }
-            }
-            .font(PikkoTypography.captionStrong)
         }
+        .padding(.horizontal, PikkoSpacing.sm)
+        .frame(minWidth: 210, maxWidth: .infinity, minHeight: 34)
+        .background(PikkoColor.surface)
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
     }
 
     private var loadingView: some View {
@@ -204,6 +219,20 @@ struct ChatRootView: View {
                     }
                 }
 
+                if presenter.viewState.rooms.isEmpty, let emptyTitle = presenter.viewState.emptyTitle {
+                    EmptyStateView(
+                        title: emptyTitle,
+                        message: presenter.viewState.emptyMessage ?? "잠시 후 다시 시도해 주세요.",
+                        systemImage: "magnifyingglass",
+                        actionTitle: presenter.viewState.primaryActionTitle,
+                        action: {
+                            Task { await presenter.send(.primaryButtonTapped) }
+                        }
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, PikkoSpacing.xxl)
+                }
+
                 if presenter.viewState.isLoadingNextPage {
                     ProgressView()
                         .frame(maxWidth: .infinity)
@@ -222,24 +251,39 @@ struct ChatRootView: View {
     private var chatListSearchField: some View {
         VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
             HStack(spacing: PikkoSpacing.sm) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(PikkoColor.secondaryText)
-                TextField("채팅방 검색", text: roomListSearchBinding)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(PikkoTypography.body)
-                if !presenter.viewState.roomListSearchQuery.isEmpty {
-                    Button {
-                        Task { await presenter.send(.roomListSearchQueryChanged("")) }
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
+                HStack(spacing: PikkoSpacing.sm) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(PikkoColor.secondaryText)
+                    TextField("채팅방 검색", text: roomListSearchBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .focused($isRoomListSearchFocused)
+                        .font(PikkoTypography.body)
+                        .onTapGesture {
+                            Task { await presenter.send(.activateRoomListSearch) }
+                        }
+                    if !presenter.viewState.roomListSearchQuery.isEmpty {
+                        Button {
+                            Task { await presenter.send(.roomListSearchQueryChanged("")) }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(PikkoColor.secondaryText)
+                        }
+                        .accessibilityLabel("채팅방 검색어 지우기")
                     }
-                    .accessibilityLabel("채팅방 검색어 지우기")
+                }
+                .padding(PikkoSpacing.md)
+                .background(PikkoColor.surfaceElevated)
+                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+
+                if presenter.viewState.isRoomListSearchActive {
+                    Button("취소") {
+                        Task { await presenter.send(.cancelRoomListSearch) }
+                    }
+                    .font(PikkoTypography.captionStrong)
+                    .foregroundStyle(PikkoColor.primary)
                 }
             }
-            .padding(PikkoSpacing.md)
-            .background(PikkoColor.surfaceElevated)
-            .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
 
             if let count = presenter.viewState.roomListSearchResultCount {
                 Text("\(count)개 채팅방")
@@ -284,7 +328,7 @@ struct ChatRootView: View {
                             .padding(.bottom, PikkoSpacing.sm)
                     }
 
-                    if presenter.viewState.isSearchActive {
+                    if presenter.viewState.showsMessageSearchPanel {
                         searchStatusBar
                             .padding(.bottom, PikkoSpacing.xs)
                     }
@@ -715,7 +759,9 @@ struct ChatRootView: View {
     private func updateMeasuredComposerHeight(_ height: CGFloat) {
         guard height.isFinite, height > 0 else { return }
         guard abs(measuredComposerHeight - height) > Layout.geometryTolerance else { return }
-        measuredComposerHeight = height
+        Task { @MainActor in
+            measuredComposerHeight = height
+        }
 #if DEBUG
         guard ChatDebugOptions.isComposerGeometryLoggingEnabled else { return }
         Logger.shared.debug("[ChatComposer] measuredHeight=\(height)")
@@ -860,7 +906,7 @@ private struct ChatRoomRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(room.title)
+                    Text(highlighted(room.title, ranges: room.titleMatchRanges, role: .title))
                         .font(PikkoTypography.bodyStrong)
                         .foregroundStyle(PikkoColor.primaryText)
                         .lineLimit(1)
@@ -873,7 +919,7 @@ private struct ChatRoomRow: View {
                         .lineLimit(1)
                 }
 
-                Text(room.subtitle)
+                Text(highlighted(room.subtitle, ranges: room.subtitleMatchRanges, role: .subtitle))
                     .font(PikkoTypography.caption)
                     .foregroundStyle(PikkoColor.secondaryText)
                     .lineLimit(2)
@@ -888,6 +934,26 @@ private struct ChatRoomRow: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         .pikkoShadow(PikkoShadow.card)
+    }
+
+    private enum HighlightRole {
+        case title
+        case subtitle
+    }
+
+    private func highlighted(_ text: String, ranges: [NSRange], role: HighlightRole) -> AttributedString {
+        var attributed = AttributedString(text)
+        for nsRange in ranges {
+            guard let range = Range(nsRange, in: text),
+                  let lower = AttributedString.Index(range.lowerBound, within: attributed),
+                  let upper = AttributedString.Index(range.upperBound, within: attributed) else {
+                continue
+            }
+            let attributedRange = lower..<upper
+            attributed[attributedRange].backgroundColor = PikkoColor.warning.opacity(role == .title ? 0.34 : 0.24)
+            attributed[attributedRange].foregroundColor = PikkoColor.primaryText
+        }
+        return attributed
     }
 }
 
@@ -974,8 +1040,14 @@ private struct ChatMessageBubble: View {
         .background(message.isSelectedSearchMatch ? selectedBubbleColor : (message.isMine ? bubbleColor : PikkoColor.elevatedSurface))
         .overlay {
             RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous)
-                .stroke(message.isMine ? .clear : PikkoColor.divider.opacity(0.65), lineWidth: 1)
+                .stroke(
+                    message.isSelectedSearchMatch
+                        ? PikkoColor.warning.opacity(0.95)
+                        : (message.isMine ? .clear : PikkoColor.divider.opacity(0.65)),
+                    lineWidth: message.isSelectedSearchMatch ? 2 : 1
+                )
         }
+        .shadow(color: message.isSelectedSearchMatch ? PikkoColor.warning.opacity(0.22) : .clear, radius: 10, y: 2)
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
         .frame(maxWidth: 260, alignment: message.isMine ? .trailing : .leading)
     }
