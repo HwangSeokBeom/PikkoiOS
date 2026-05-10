@@ -56,13 +56,13 @@ struct OrderDetailView: View {
         }
         .navigationTitle("주문 상세")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("주문을 취소할까요?", isPresented: $isCancelConfirmationPresented) {
+        .alert(presenter.viewState.isPaymentRecoveryCandidate ? "대기 주문을 정리할까요?" : "주문을 취소할까요?", isPresented: $isCancelConfirmationPresented) {
             Button("아니요", role: .cancel) {}
-            Button("주문 취소", role: .destructive) {
+            Button(presenter.viewState.isPaymentRecoveryCandidate ? "정리하기" : "주문 취소", role: .destructive) {
                 Task { await presenter.send(.cancelConfirmed) }
             }
         } message: {
-            Text("취소 후에는 주문현황에서 제외돼요.")
+            Text(presenter.viewState.isPaymentRecoveryCandidate ? "서버 주문을 취소하지 않고 이 기기의 주문현황에서만 숨겨요." : "취소 후에는 주문현황에서 제외돼요.")
         }
     }
 
@@ -233,13 +233,17 @@ struct OrderDetailView: View {
                 detailRow(title: "요청 메모", value: memoText, valueLineLimit: 4)
             }
 
+            if presenter.viewState.isPaymentRecoveryCandidate {
+                paymentRecoveryBox
+            }
+
             if presenter.viewState.canCancelOrder || presenter.viewState.cancelDisabledReasonText != nil {
                 Divider()
                     .padding(.top, PikkoSpacing.sm)
 
-                if presenter.viewState.canCancelOrder {
+                if presenter.viewState.canCancelOrder && !presenter.viewState.isPaymentRecoveryCandidate {
                     cancelOrderButton
-                } else if let cancelDisabledReasonText = presenter.viewState.cancelDisabledReasonText {
+                } else if !presenter.viewState.isPaymentRecoveryCandidate, let cancelDisabledReasonText = presenter.viewState.cancelDisabledReasonText {
                     Text(cancelDisabledReasonText)
                         .font(PikkoTypography.caption)
                         .foregroundStyle(PikkoColor.secondaryText)
@@ -252,6 +256,45 @@ struct OrderDetailView: View {
         .background(PikkoColor.surfaceElevated)
         .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.hero, style: .continuous))
         .pikkoShadow(PikkoShadow.card)
+    }
+
+    private var paymentRecoveryBox: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+            VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+                Text(presenter.viewState.paymentRecoveryTitle ?? "결제 미완료")
+                    .font(PikkoTypography.bodyStrong)
+                    .foregroundStyle(PikkoColor.primaryText)
+                Text(presenter.viewState.paymentRecoveryMessage ?? "결제를 완료해야 주문이 접수돼요.")
+                    .font(PikkoTypography.caption)
+                    .foregroundStyle(PikkoColor.secondaryText)
+            }
+
+            PrimaryButton(
+                title: presenter.viewState.paymentRecoveryPrimaryActionTitle ?? "결제 이어하기",
+                systemImage: "creditcard",
+                isEnabled: !presenter.viewState.isPaymentRecoveryInProgress
+            ) {
+                Task { await presenter.send(.resumePendingPaymentTapped) }
+            }
+
+            Button {
+                isCancelConfirmationPresented = true
+            } label: {
+                HStack(spacing: PikkoSpacing.xs) {
+                    Image(systemName: "archivebox")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(presenter.viewState.paymentRecoverySecondaryActionTitle ?? "대기 주문 정리")
+                        .font(PikkoTypography.captionStrong)
+                }
+                .foregroundStyle(PikkoColor.secondaryText)
+                .frame(maxWidth: .infinity)
+                .frame(height: 40)
+                .background(PikkoColor.gray100)
+                .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.top, PikkoSpacing.sm)
     }
 
     private func detailRow(title: String, value: String, valueLineLimit: Int? = nil) -> some View {
@@ -302,7 +345,7 @@ struct OrderDetailView: View {
                         .font(.system(size: 14, weight: .semibold))
                 }
 
-                Text("주문 취소")
+                Text(presenter.viewState.isPaymentRecoveryCandidate ? "대기 주문 정리" : "주문 취소")
                     .font(PikkoTypography.bodyStrong)
             }
             .foregroundStyle(PikkoColor.danger)

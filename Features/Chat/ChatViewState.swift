@@ -2,6 +2,16 @@ import Foundation
 
 enum ChatSearchScope: Equatable {
     case loadedMessagesOnly
+    case localCache
+
+    var noticeText: String {
+        switch self {
+        case .loadedMessagesOnly:
+            return "현재 불러온 메시지에서 검색해요."
+        case .localCache:
+            return "기기에 저장된 메시지까지 검색해요."
+        }
+    }
 }
 
 struct ChatSearchResult: Equatable, Sendable, Identifiable {
@@ -99,6 +109,7 @@ struct ChatRoomRowViewState: Equatable, Identifiable {
     let timeText: String
     let avatarPath: String?
     let section: ChatRoomRowSection
+    var searchSnippet: String? = nil
 }
 
 struct ChatMessageRowViewState: Equatable, Identifiable {
@@ -111,6 +122,7 @@ struct ChatMessageRowViewState: Equatable, Identifiable {
     let senderName: String
     let isMine: Bool
     let sendStatus: ChatSendStatus
+    let isSelectedSearchMatch: Bool
 
     var statusText: String? {
         switch sendStatus {
@@ -123,6 +135,25 @@ struct ChatMessageRowViewState: Equatable, Identifiable {
         case .sent, .recovered:
             return nil
         }
+    }
+}
+
+struct ChatMessageSearchState: Equatable {
+    var isSearchActive = false
+    var query = ""
+    var matches: [ChatSearchResultViewState] = []
+    var selectedMatchIndex: Int?
+    var isLoadingSearchExpansion = false
+    var searchScope: ChatSearchScope = .loadedMessagesOnly
+    var mayHaveOlderUnloadedMessages = true
+    var isSearching = false
+
+    var selectedMatch: ChatSearchResultViewState? {
+        guard let selectedMatchIndex,
+              matches.indices.contains(selectedMatchIndex) else {
+            return nil
+        }
+        return matches[selectedMatchIndex]
     }
 }
 
@@ -172,6 +203,8 @@ struct ChatViewState: Equatable {
     var scrollCommand: ChatScrollCommand?
     var showsNewMessageIndicator = false
     var newMessageCount = 0
+    var roomListSearchQuery = ""
+    var roomListSearchResultCount: Int?
     var isSearchActive = false
     var searchQuery = ""
     var searchResults: [ChatSearchResultViewState] = []
@@ -179,6 +212,7 @@ struct ChatViewState: Equatable {
     var isSearching = false
     var searchScope: ChatSearchScope = .loadedMessagesOnly
     var searchMayHaveOlderUnloadedMessages = true
+    var messageSearch = ChatMessageSearchState()
 
     var selectedSearchResult: ChatSearchResultViewState? {
         guard let selectedSearchResultIndex,
@@ -191,18 +225,15 @@ struct ChatViewState: Equatable {
     var searchStatusText: String {
         let trimmedQuery = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedQuery.isEmpty {
-            return "검색어를 입력해 주세요."
+            return ""
         }
         if isSearching {
             return "검색 중..."
         }
         if searchResults.isEmpty {
-            return searchMayHaveOlderUnloadedMessages
-                ? "불러온 메시지에서 결과가 없어요. 이전 대화는 아직 불러오지 않았을 수 있어요."
-                : "불러온 메시지에서 일치하는 결과가 없어요."
+            return "검색 결과가 없어요."
         }
-        let current = (selectedSearchResultIndex ?? 0) + 1
-        return "\(current)/\(searchResults.count) - 불러온 메시지 기준"
+        return "\(searchResults.count)개 결과"
     }
 
     var showsEmptyState: Bool {
@@ -229,5 +260,9 @@ struct ChatViewState: Equatable {
 
     var canNavigateSearchResults: Bool {
         searchResults.count > 1
+    }
+
+    var searchScopeNoticeText: String {
+        searchScope.noticeText
     }
 }

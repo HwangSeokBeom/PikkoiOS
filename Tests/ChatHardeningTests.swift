@@ -263,6 +263,52 @@ final class ChatHardeningTests: XCTestCase {
         XCTAssertEqual(result.first?.messageID, "local-1")
     }
 
+    func testChatListSearchFiltersByNicknameAndLastMessageLocally() async {
+        let rooms = [
+            makeRoom(id: "room-1", opponentName: "민지", lastContent: "오늘 LATTE 가능해요"),
+            makeRoom(id: "room-2", opponentName: "준호", lastContent: "내일 픽업할게요")
+        ]
+        let presenter = ChatPresenter(
+            interactor: makeInteractor(chatRepository: StubChatRepository(rooms: rooms)),
+            router: StubChatRouter()
+        )
+
+        await presenter.send(.onAppear(instanceID: "test", presentationKind: .internal))
+        XCTAssertEqual(Set(presenter.viewState.rooms.map(\.title)), Set(["민지", "준호"]))
+
+        await presenter.send(.roomListSearchQueryChanged("민지"))
+        XCTAssertEqual(presenter.viewState.rooms.map(\.title), ["민지"])
+        XCTAssertEqual(presenter.viewState.roomListSearchResultCount, 1)
+
+        await presenter.send(.roomListSearchQueryChanged("latte"))
+        XCTAssertEqual(presenter.viewState.rooms.map(\.title), ["민지"])
+        XCTAssertEqual(presenter.viewState.roomListSearchResultCount, 1)
+    }
+
+    func testChatListSearchShowsNoResultAndClearsBackToRoomList() async {
+        let rooms = [
+            makeRoom(id: "room-1", opponentName: "민지", lastContent: "안녕하세요"),
+            makeRoom(id: "room-2", opponentName: "Alex", lastContent: "Hello Pikko")
+        ]
+        let presenter = ChatPresenter(
+            interactor: makeInteractor(chatRepository: StubChatRepository(rooms: rooms)),
+            router: StubChatRouter()
+        )
+
+        await presenter.send(.onAppear(instanceID: "test", presentationKind: .internal))
+        await presenter.send(.roomListSearchQueryChanged("없음"))
+
+        XCTAssertTrue(presenter.viewState.rooms.isEmpty)
+        XCTAssertEqual(presenter.viewState.emptyTitle, "검색 결과가 없어요")
+        XCTAssertEqual(presenter.viewState.roomListSearchResultCount, 0)
+
+        await presenter.send(.roomListSearchQueryChanged(""))
+
+        XCTAssertEqual(Set(presenter.viewState.rooms.map(\.title)), Set(["민지", "Alex"]))
+        XCTAssertNil(presenter.viewState.emptyTitle)
+        XCTAssertNil(presenter.viewState.roomListSearchResultCount)
+    }
+
     func testChatUploadValidatorAcceptsUppercaseSupportedExtensions() throws {
         let files = [
             ChatUploadFile(data: Data("jpg".utf8), fileName: "a.JPG", mimeType: "image/jpeg", typeIdentifier: "public.jpeg"),
@@ -326,11 +372,39 @@ final class ChatHardeningTests: XCTestCase {
         )
     }
 
+    private func makeRoom(id: String, opponentName: String, lastContent: String) -> ChatRoom {
+        ChatRoom(
+            id: id,
+            createdAt: date(1),
+            updatedAt: date(2),
+            participants: [
+                ChatParticipant(id: "user-1", nick: "나", profileImagePath: nil),
+                ChatParticipant(id: "\(id)-opponent", nick: opponentName, profileImagePath: nil)
+            ],
+            lastMessage: makeMessage(
+                id: "\(id)-message",
+                serverChatID: "\(id)-message",
+                roomID: id,
+                content: lastContent,
+                createdAt: date(2),
+                senderID: "\(id)-opponent"
+            ),
+            storeID: nil,
+            storeName: nil,
+            opponentID: "\(id)-opponent",
+            opponentName: opponentName,
+            roomType: nil
+        )
+    }
+
     private func date(_ seconds: TimeInterval) -> Date {
         Date(timeIntervalSince1970: seconds)
     }
 
-    private func makeInteractor(realtimeService: ChatRealtimeServiceProtocol) -> ChatInteractor {
+    private func makeInteractor(
+        chatRepository: StubChatRepository = StubChatRepository(),
+        realtimeService: ChatRealtimeServiceProtocol = ReconnectCapturingRealtimeService()
+    ) -> ChatInteractor {
         let sessionStore = SessionStore(
             tokenStore: StubChatTokenStore(),
             userDefaultsStore: UserDefaultsStore(userDefaults: UserDefaults(suiteName: "ChatHardeningTests.\(UUID().uuidString)")!)
@@ -344,13 +418,18 @@ final class ChatHardeningTests: XCTestCase {
             refreshToken: "refresh-token"
         ))
         return ChatInteractor(
-            chatRepository: StubChatRepository(),
+            chatRepository: chatRepository,
             localDataSource: CoreDataChatLocalDataSource(inMemory: true),
             realtimeService: realtimeService,
             storeRepository: StubChatStoreRepository(),
             sessionStore: sessionStore
         )
     }
+}
+
+@MainActor
+private final class StubChatRouter: ChatRouting {
+    func routeToPrimaryDestination() {}
 }
 
 private actor StubChatTokenStore: TokenStore {
@@ -360,7 +439,9 @@ private actor StubChatTokenStore: TokenStore {
 }
 
 private struct StubChatRepository: ChatRepository {
-    func fetchChatRooms() async throws -> [ChatRoom] { [] }
+    var rooms: [ChatRoom] = []
+
+    func fetchChatRooms() async throws -> [ChatRoom] { rooms }
     func createOrFetchChatRoom(mode: ChatRoomCreationMode) async throws -> ChatRoom {
         ChatRoom(
             id: "room-1",

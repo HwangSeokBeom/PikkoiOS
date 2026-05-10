@@ -9,6 +9,7 @@ enum ChatAction {
     case roomTapped(String)
     case backToRoomsTapped
     case messageTextChanged(String)
+    case roomListSearchQueryChanged(String)
     case searchTapped
     case searchDismissed
     case searchQueryChanged(String)

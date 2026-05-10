@@ -32,9 +32,7 @@ actor LocalOrderCancellationStore {
             reason: reason
         )
         upsert(record, userID: userID)
-        Logger.shared.debug(
-            "[LocalOrderCancel] save orderCode=\(order.orderCode) status=\(order.status.apiValue) paid=\(order.isPaymentCompleted)"
-        )
+        Logger.shared.debug("[PendingOrderHide] localOnly=true orderCode=\(order.orderCode)")
     }
 
     func save(detail: OrderDetail, userID: String, reason: String? = nil, cancelledAt: Date = Date()) {
@@ -47,9 +45,7 @@ actor LocalOrderCancellationStore {
             reason: reason
         )
         upsert(record, userID: userID)
-        Logger.shared.debug(
-            "[LocalOrderCancel] save orderCode=\(detail.orderCode) status=\(detail.status.apiValue) paid=\(detail.paidAt != nil || detail.paymentSummary?.paidAt != nil)"
-        )
+        Logger.shared.debug("[PendingOrderHide] localOnly=true orderCode=\(detail.orderCode)")
     }
 
     func remove(orderCode: String, userID: String) {
@@ -61,7 +57,24 @@ actor LocalOrderCancellationStore {
     }
 
     func apply(to orders: [OrderSummary], userID: String) -> [OrderSummary] {
-        orders.map { apply(to: $0, userID: userID) }
+        orders.compactMap { order in
+            guard record(for: order.orderCode, userID: userID) != nil else {
+                return order
+            }
+            if order.status == .cancelled {
+                remove(orderCode: order.orderCode, userID: userID)
+                return order
+            }
+            guard order.status == .pending else {
+                remove(orderCode: order.orderCode, userID: userID)
+                Logger.shared.debug(
+                    "[PendingOrderHide] removedStale orderCode=\(order.orderCode) serverStatus=\(order.status.apiValue)"
+                )
+                return order
+            }
+            Logger.shared.debug("[PendingOrderHide] applied localOnly=true orderCode=\(order.orderCode)")
+            return nil
+        }
     }
 
     func apply(to order: OrderSummary, userID: String) -> OrderSummary {
@@ -82,10 +95,8 @@ actor LocalOrderCancellationStore {
             return order
         }
 
-        Logger.shared.debug(
-            "[LocalOrderCancel] applied orderCode=\(order.orderCode) hiddenFromActiveOrders=true"
-        )
-        return order.updatingStatus(.cancelled, paymentVerificationState: order.paymentVerificationState)
+        Logger.shared.debug("[PendingOrderHide] keptServerStatus orderCode=\(order.orderCode) status=\(order.status.apiValue)")
+        return order
     }
 
     func apply(to detail: OrderDetail, userID: String) -> OrderDetail {
@@ -106,10 +117,8 @@ actor LocalOrderCancellationStore {
             return detail
         }
 
-        Logger.shared.debug(
-            "[LocalOrderCancel] applied orderCode=\(detail.orderCode) hiddenFromActiveOrders=true"
-        )
-        return detail.updatingStatus(.cancelled, updatedAt: Date())
+        Logger.shared.debug("[PendingOrderHide] keptServerStatus orderCode=\(detail.orderCode) status=\(detail.status.apiValue)")
+        return detail
     }
 
     private func upsert(_ record: LocalOrderCancellationRecord, userID: String) {

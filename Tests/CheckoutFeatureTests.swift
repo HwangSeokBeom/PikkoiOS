@@ -135,10 +135,10 @@ final class CheckoutFeatureTests: XCTestCase {
             storeName: "새싹 카페",
             menuSummary: "카페라떼 외 1개",
             totalPriceAmount: 12_200,
-            createdAt: Date(timeIntervalSince1970: 1_710_000_000),
+            createdAt: Date(),
             state: .recoverablePending,
             impUID: "imp_test",
-            lastUpdatedAt: Date(timeIntervalSince1970: 1_710_000_100)
+            lastUpdatedAt: Date()
         )
 
         await store.upsert(session)
@@ -146,7 +146,7 @@ final class CheckoutFeatureTests: XCTestCase {
         let recovered = await reloadedStore.recoverableSession(userID: "user-1", storeID: "store-1", totalPriceAmount: 12_200)
 
         XCTAssertEqual(recovered?.orderCode, "ORDER-001")
-        XCTAssertEqual(recovered?.impUID, "imp_test")
+        XCTAssertNil(recovered?.impUID)
         XCTAssertEqual(recovered?.state, .recoverablePending)
     }
 

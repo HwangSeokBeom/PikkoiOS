@@ -9,22 +9,26 @@ final class OrderDetailPresenter: ObservableObject {
     private let router: OrderDetailRouting
     private let mapper: OrderMapper
     private let cancelPolicyResolver = OrderCancelPolicyResolver()
+    private let paymentCoordinator: OrderPaymentCoordinator
     private let dateParser = DateParser()
 
     private var hasLoaded = false
     private var currentCancelPolicy: OrderCancelPolicy?
+    private var currentDetail: OrderDetail?
     private var cancellables = Set<AnyCancellable>()
 
     init(
         initialOrderID: String,
         interactor: OrderDetailInteracting,
         router: OrderDetailRouting,
-        mapper: OrderMapper
+        mapper: OrderMapper,
+        paymentCoordinator: OrderPaymentCoordinator = .shared
     ) {
         self.viewState = OrderDetailViewState(orderID: initialOrderID)
         self.interactor = interactor
         self.router = router
         self.mapper = mapper
+        self.paymentCoordinator = paymentCoordinator
         bindOrderStatusChanges()
     }
 
@@ -61,6 +65,16 @@ final class OrderDetailPresenter: ObservableObject {
                 )
             )
 
+        case .resumePendingPaymentTapped:
+            await resumePendingPayment()
+
+        case .paymentBridgeResult(let result):
+            await handlePaymentBridge(result)
+
+        case .paymentBridgeDismissed:
+            guard viewState.paymentBridgeContext != nil else { return }
+            await handlePaymentBridge(.cancelled)
+
         case .cancelConfirmed:
             await cancelOrder()
 
@@ -84,6 +98,7 @@ final class OrderDetailPresenter: ObservableObject {
     }
 
     private func apply(detail: OrderDetail) {
+        currentDetail = detail
         viewState.orderID = detail.orderID
         viewState.orderCode = detail.orderCode
         viewState.storeID = detail.storeID
@@ -92,7 +107,7 @@ final class OrderDetailPresenter: ObservableObject {
         viewState.storeCategoryText = detail.storeCategory
         viewState.storeCloseText = detail.storeCloseTime.map { "마감 \($0)" }
         viewState.storeImagePath = detail.storeImagePath
-        viewState.statusTitle = detail.status.displayTitle
+        viewState.statusTitle = detail.isRecoverablePendingPayment ? "결제 대기" : detail.status.displayTitle
         viewState.orderStatus = detail.status
         viewState.createdAtText = dateParser.string(from: detail.createdAt, format: "M월 d일 a h:mm")
         viewState.paidAtText = detail.paidAt.map { "결제 \($0.formatted(date: .abbreviated, time: .shortened))" }
@@ -114,7 +129,19 @@ final class OrderDetailPresenter: ObservableObject {
         viewState.emptyState = nil
         viewState.hasLoadedContent = true
         applyCancelPolicy(detail)
+        applyPaymentRecovery(detail)
         applyReviewCTA(detail)
+    }
+
+    private func applyPaymentRecovery(_ detail: OrderDetail) {
+        viewState.isPaymentRecoveryCandidate = detail.isRecoverablePendingPayment
+        viewState.paymentRecoveryTitle = detail.isRecoverablePendingPayment ? "결제 미완료" : nil
+        viewState.paymentRecoveryMessage = detail.isRecoverablePendingPayment ? "결제를 완료해야 주문이 접수돼요." : nil
+        viewState.paymentRecoveryPrimaryActionTitle = detail.isRecoverablePendingPayment ? "결제 이어하기" : nil
+        viewState.paymentRecoverySecondaryActionTitle = detail.isRecoverablePendingPayment ? "대기 주문 정리" : nil
+        if detail.isRecoverablePendingPayment {
+            Logger.shared.debug("[PaymentRecovery] candidate orderCode=\(detail.orderCode) amount=\(detail.totalAmount) reason=unpaidPendingApproval")
+        }
     }
 
     private func cancelOrder() async {
@@ -157,6 +184,7 @@ final class OrderDetailPresenter: ObservableObject {
                 )
                 detail = try await interactor.cancelOrder(orderCode: viewState.orderCode)
             case .localPendingCancel:
+                Logger.shared.debug("[PendingOrderHide] localOnly=true orderCode=\(viewState.orderCode)")
                 detail = try await interactor.cancelPendingOrderLocally(orderCode: viewState.orderCode)
             case .unsupported:
                 throw OrderFeatureError.unavailable(message: policy.userMessage ?? "현재 주문은 앱에서 취소할 수 없어요.")
@@ -169,11 +197,11 @@ final class OrderDetailPresenter: ObservableObject {
                     OrderRefreshNotificationUserInfoKey.event: OrderRefreshNotification(
                         orderID: detail.orderID,
                         orderCode: detail.orderCode,
-                        message: "주문이 취소되었어요."
+                    message: policy.strategy == .localPendingCancel ? "대기 주문을 주문현황에서 숨겼어요." : "주문이 취소되었어요."
                     )
                 ]
             )
-            viewState.cancelSuccessMessage = "주문이 취소되었어요."
+            viewState.cancelSuccessMessage = policy.strategy == .localPendingCancel ? "대기 주문을 주문현황에서 숨겼어요." : "주문이 취소되었어요."
         } catch {
             let featureError = (error as? OrderFeatureError)
                 ?? .unavailable(message: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
@@ -184,6 +212,94 @@ final class OrderDetailPresenter: ObservableObject {
         }
 
         viewState.isCancelling = false
+    }
+
+    private func resumePendingPayment() async {
+        guard let detail = currentDetail, detail.isRecoverablePendingPayment else { return }
+        guard !viewState.isPaymentRecoveryInProgress else { return }
+        Logger.shared.debug("[PaymentRecovery] resume tapped orderCode=\(detail.orderCode)")
+        Logger.shared.debug("[PaymentRecovery] reuseExistingOrder orderCode=\(detail.orderCode) createOrderSkipped=true")
+        viewState.isPaymentRecoveryInProgress = true
+        viewState.cancelErrorMessage = nil
+        viewState.cancelSuccessMessage = nil
+        do {
+            let session = try await interactor.makePendingPaymentSession(detail: detail)
+            await interactor.savePendingPaymentSession(session)
+            guard await paymentCoordinator.beginPayment(orderCode: detail.orderCode) else {
+                viewState.cancelErrorMessage = "이미 진행 중인 결제가 있어요. 결제 상태를 확인해 주세요."
+                viewState.isPaymentRecoveryInProgress = false
+                return
+            }
+            let request = try await interactor.makePaymentRequest(pendingSession: session)
+            await interactor.updatePendingPaymentSession(orderCode: detail.orderCode, state: .openingPayment, impUID: nil)
+            viewState.paymentBridgeContext = CheckoutPaymentBridgeContext(
+                orderID: detail.orderID,
+                orderCode: detail.orderCode,
+                paymentRequest: request
+            )
+        } catch {
+            let featureError = (error as? OrderFeatureError) ?? .unavailable(message: "결제를 다시 여는 중 오류가 발생했어요.")
+            viewState.cancelErrorMessage = featureError.userMessage
+        }
+        viewState.isPaymentRecoveryInProgress = false
+    }
+
+    private func handlePaymentBridge(_ result: CheckoutPaymentBridgeResult) async {
+        guard let context = viewState.paymentBridgeContext else { return }
+        viewState.paymentBridgeContext = nil
+        await paymentCoordinator.endPayment(orderCode: context.orderCode)
+        switch result {
+        case .cancelled:
+            Logger.shared.debug("[PaymentRecovery] portOne returned cancel orderCode=\(context.orderCode)")
+            await interactor.updatePendingPaymentSession(orderCode: context.orderCode, state: .recoverablePending, impUID: nil)
+            viewState.cancelSuccessMessage = "결제가 완료되지 않았어요. 언제든 이어서 결제할 수 있어요."
+        case .failed(let message):
+            Logger.shared.debug("[PaymentRecovery] portOne returned failure orderCode=\(context.orderCode)")
+            await interactor.updatePendingPaymentSession(orderCode: context.orderCode, state: .recoverablePending, impUID: nil)
+            viewState.cancelErrorMessage = message.isEmpty ? "결제를 완료하지 못했어요. 다시 시도해 주세요." : message
+        case .missingImpUID:
+            Logger.shared.debug("[PaymentRecovery] portOne returned failure orderCode=\(context.orderCode) reason=missingImpUid")
+            await interactor.updatePendingPaymentSession(orderCode: context.orderCode, state: .recoverablePending, impUID: nil)
+            viewState.cancelErrorMessage = "결제 완료 정보를 확인하지 못했어요. 다시 결제할 수 있어요."
+        case .succeeded(let impUID, let merchantUID):
+            Logger.shared.debug("[PaymentRecovery] portOne returned success orderCode=\(context.orderCode)")
+            await validateRecoveredPayment(
+                PaymentValidationRequest(
+                    orderID: context.orderID,
+                    orderCode: context.orderCode,
+                    merchantUID: merchantUID ?? context.orderCode,
+                    impUID: impUID,
+                    success: true,
+                    errorMessage: nil
+                )
+            )
+        }
+    }
+
+    private func validateRecoveredPayment(_ request: PaymentValidationRequest) async {
+        guard let orderCode = request.orderCode else { return }
+        await interactor.updatePendingPaymentSession(orderCode: orderCode, state: .validatingReceipt, impUID: request.impUID)
+        Logger.shared.debug("[PaymentRecovery] validation status=start orderCode=\(orderCode)")
+        do {
+            _ = try await paymentCoordinator.validation(request: request) {
+                try await self.interactor.validatePayment(request)
+            }
+            await interactor.removePendingPaymentSession(orderCode: orderCode)
+            Logger.shared.debug("[PaymentRecovery] validation status=200 orderCode=\(orderCode)")
+            await loadDetail()
+            viewState.cancelSuccessMessage = "결제가 확인됐어요. 주문이 접수되었습니다."
+        } catch let error as OrderFeatureError where error == .alreadyValidated {
+            Logger.shared.debug("[PaymentRecovery] validation status=409 orderCode=\(orderCode)")
+            _ = try? await interactor.fetchPaymentReceipt(orderCode: orderCode)
+            _ = await interactor.refreshOrdersAfterAlreadyValidatedPayment(orderCode: orderCode)
+            await interactor.removePendingPaymentSession(orderCode: orderCode)
+            await loadDetail()
+            viewState.cancelSuccessMessage = "이미 확인된 결제예요. 주문 내역을 새로고침했어요."
+        } catch {
+            Logger.shared.debug("[PaymentRecovery] validation status=failed orderCode=\(orderCode)")
+            await interactor.updatePendingPaymentSession(orderCode: orderCode, state: .validationFailed, impUID: request.impUID)
+            viewState.cancelErrorMessage = "결제 확인에 실패했어요. 주문 내역에서 다시 확인해 주세요."
+        }
     }
 
     private func applyCancelPolicy(_ detail: OrderDetail) {

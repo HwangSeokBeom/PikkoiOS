@@ -166,16 +166,16 @@ final class OrderFeatureTests: XCTestCase {
 
     func testPendingOrderWithoutPaymentEvidenceExecutesLocalPendingCancel() async {
         let pendingOrder = makeOrder(id: "order-1", status: .pending, paidAt: nil, receiptURL: nil)
-        let cancelledDetail = makeDetail(order: pendingOrder, status: .cancelled)
+        let pendingDetail = makeDetail(order: pendingOrder, status: .pending)
         let presenter = OrderPresenter(
             interactor: SpyOrderInteractor(
                 initialState: makeInitialState(),
                 fetchResults: [
                     .success(CursorPage(items: [pendingOrder], nextCursor: nil)),
-                    .success(CursorPage(items: [cancelledDetail.asSummary], nextCursor: nil))
+                    .success(CursorPage(items: [], nextCursor: nil))
                 ],
                 localCancelResults: [
-                    pendingOrder.orderCode: .success(cancelledDetail)
+                    pendingOrder.orderCode: .success(pendingDetail)
                 ]
             ),
             router: SpyOrderRouter()
@@ -186,12 +186,14 @@ final class OrderFeatureTests: XCTestCase {
         let item = presenter.viewState.orders.first
         XCTAssertTrue(item?.canCancel == true)
         XCTAssertTrue(item?.isCancelEnabled == true)
-        XCTAssertEqual(item?.statusTitle, "결제 확인중")
+        XCTAssertEqual(item?.statusTitle, "결제 대기")
+        XCTAssertTrue(item?.isPaymentRecoveryCandidate == true)
+        XCTAssertEqual(item?.paymentRecoveryPrimaryActionTitle, "결제 이어하기")
 
         await presenter.send(.cancelConfirmed("order-1"))
 
-        XCTAssertEqual(presenter.viewState.successMessage, "주문이 취소되었어요.")
-        XCTAssertEqual(presenter.viewState.orders.first?.status, .cancelled)
+        XCTAssertEqual(presenter.viewState.successMessage, "대기 주문을 주문현황에서 숨겼어요.")
+        XCTAssertTrue(presenter.viewState.orders.isEmpty)
     }
 
     func testStatusChangeEligibilityRequiresPaidOrderAndOnlyAllowsNextStep() async {
@@ -268,7 +270,8 @@ final class OrderFeatureTests: XCTestCase {
         let unpaidItem = presenter.viewState.orders.first { $0.id == unpaidPendingOrder.id }
         XCTAssertNil(unpaidItem?.allowedNextStatus)
         XCTAssertFalse(unpaidItem?.isPaymentVerified ?? true)
-        XCTAssertEqual(unpaidItem?.statusTitle, "결제 확인중")
+        XCTAssertEqual(unpaidItem?.statusTitle, "결제 대기")
+        XCTAssertTrue(unpaidItem?.isPaymentRecoveryCandidate == true)
         XCTAssertEqual(unpaidItem?.statusChangeMessage, "결제 정보 확인 후 상태를 변경할 수 있어요.")
     }
 
@@ -842,9 +845,11 @@ final class OrderFeatureTests: XCTestCase {
 
         await store.save(order: pendingOrder, userID: userID)
         let reloadedStore = LocalOrderCancellationStore(store: UserDefaultsStore(userDefaults: userDefaults))
-        let locallyCancelled = await reloadedStore.apply(to: pendingOrder, userID: userID)
+        let locallyHiddenList = await reloadedStore.apply(to: [pendingOrder], userID: userID)
+        let locallyHiddenDetail = await reloadedStore.apply(to: pendingOrder, userID: userID)
 
-        XCTAssertEqual(locallyCancelled.status, .cancelled)
+        XCTAssertTrue(locallyHiddenList.isEmpty)
+        XCTAssertEqual(locallyHiddenDetail.status, .pending)
 
         let progressedOrder = makeOrder(id: "order-1", status: .preparing, paidAt: nil, receiptURL: nil)
         let serverPreferred = await reloadedStore.apply(to: progressedOrder, userID: userID)
@@ -1241,6 +1246,59 @@ private struct SpyOrderInteractor: OrderInteracting {
         )
     }
 
+    func makePendingPaymentSession(order: OrderSummary) async throws -> PendingPaymentSession {
+        PendingPaymentSession(
+            userID: "user-1",
+            orderCode: order.orderCode,
+            orderID: order.id,
+            storeID: order.storeID,
+            storeName: order.storeName,
+            menuSummary: order.paymentRecoveryDisplayName,
+            totalPriceAmount: order.totalAmount,
+            createdAt: order.createdAt,
+            state: .recoverablePending,
+            impUID: nil,
+            lastUpdatedAt: order.createdAt
+        )
+    }
+
+    func savePendingPaymentSession(_ session: PendingPaymentSession) async {}
+
+    func updatePendingPaymentSession(orderCode: String, state: PaymentFlowState, impUID: String?) async {}
+
+    func removePendingPaymentSession(orderCode: String) async {}
+
+    func makePaymentRequest(pendingSession: PendingPaymentSession) async throws -> PaymentGatewayRequest {
+        PaymentGatewayRequest(
+            orderID: pendingSession.orderID ?? pendingSession.orderCode,
+            merchantUID: pendingSession.orderCode,
+            amount: pendingSession.totalPriceAmount,
+            orderName: pendingSession.menuSummary,
+            buyerName: "테스트",
+            pg: "html5_inicis",
+            pgID: nil,
+            payMethod: "card",
+            appScheme: "pikko",
+            userCode: "imp12345678",
+            isTestMode: true
+        )
+    }
+
+    func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt {
+        ValidatedPaymentReceipt(
+            paymentID: "payment-1",
+            orderID: request.orderID,
+            orderCode: request.orderCode,
+            totalPriceAmount: nil,
+            createdAt: nil,
+            updatedAt: nil
+        )
+    }
+
+    func refreshOrdersAfterAlreadyValidatedPayment(orderCode: String) async -> Bool {
+        true
+    }
+
     func cancelOrder(orderCode: String) async throws -> OrderDetail {
         guard let result = cancelResults[orderCode] else {
             throw OrderFeatureError.unavailable(message: "주문을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
@@ -1264,7 +1322,7 @@ private struct SpyOrderInteractor: OrderInteracting {
                 storeCategory: nil,
                 storeCloseTime: nil,
                 storeImagePath: nil,
-                status: .cancelled,
+                status: .pending,
                 createdAt: Date(timeIntervalSince1970: 1_710_000_000),
                 updatedAt: Date(timeIntervalSince1970: 1_710_000_120),
                 paidAt: nil,
@@ -1272,7 +1330,7 @@ private struct SpyOrderInteractor: OrderInteracting {
                 totalAmount: 0,
                 items: [],
                 timeline: [
-                    OrderStatusTimelineEntry(id: "cancelled", status: .cancelled, completed: true, changedAt: Date())
+                    OrderStatusTimelineEntry(id: "pending", status: .pending, completed: true, changedAt: Date())
                 ],
                 paymentSummary: nil,
                 userMemo: nil,

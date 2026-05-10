@@ -141,6 +141,7 @@ struct FeatureBuilderFactory {
             notificationService: container.appNotificationService,
             orderStatusSnapshotStore: container.orderStatusSnapshotStore,
             liveActivityManager: container.orderLiveActivityManager,
+            appConfiguration: container.appConfiguration,
             imageLoader: container.authorizedImageLoader,
             makeAuthView: {
                 AnyView(makeAuthView(context: .orderHistory))
@@ -150,6 +151,14 @@ struct FeatureBuilderFactory {
             },
             makeCartView: {
                 makeCartView()
+            },
+            makePaymentBridgeView: { context, onResult in
+                AnyView(
+                    makeCheckoutPaymentBridgeView(
+                        context: context,
+                        onResult: onResult
+                    )
+                )
             },
             onExploreHome: {
                 appState.selectedTab = .home
@@ -164,6 +173,7 @@ struct FeatureBuilderFactory {
             sessionStore: appState.sessionStore,
             imageLoader: container.authorizedImageLoader,
             mapper: container.orderMapper,
+            appConfiguration: container.appConfiguration,
             makeAuthView: {
                 AnyView(makeAuthView(context: .orderHistory))
             },
@@ -172,6 +182,14 @@ struct FeatureBuilderFactory {
             },
             makeReviewComposerView: { context, onSubmitted in
                 AnyView(makeReviewComposerView(context: context, onSubmitted: onSubmitted))
+            },
+            makePaymentBridgeView: { context, onResult in
+                AnyView(
+                    makeCheckoutPaymentBridgeView(
+                        context: context,
+                        onResult: onResult
+                    )
+                )
             }
         ).build()
     }

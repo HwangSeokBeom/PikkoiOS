@@ -8,6 +8,7 @@ struct OrderDetailRootView: View {
     private let makeAuthView: () -> AnyView
     private let makeStoreDetailView: (String) -> AnyView
     private let makeReviewComposerView: (ReviewComposerContext, @escaping (UserStoreReview) -> Void) -> AnyView
+    private let makePaymentBridgeView: (CheckoutPaymentBridgeContext, @escaping @MainActor (CheckoutPaymentBridgeResult) -> Void) -> AnyView
 
     @State private var presentedStoreID: String?
     @State private var presentedReviewContext: ReviewComposerContext?
@@ -18,7 +19,8 @@ struct OrderDetailRootView: View {
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping () -> AnyView,
         makeStoreDetailView: @escaping (String) -> AnyView,
-        makeReviewComposerView: @escaping (ReviewComposerContext, @escaping (UserStoreReview) -> Void) -> AnyView
+        makeReviewComposerView: @escaping (ReviewComposerContext, @escaping (UserStoreReview) -> Void) -> AnyView,
+        makePaymentBridgeView: @escaping (CheckoutPaymentBridgeContext, @escaping @MainActor (CheckoutPaymentBridgeResult) -> Void) -> AnyView
     ) {
         _presenter = StateObject(wrappedValue: presenter)
         _router = StateObject(wrappedValue: router)
@@ -26,6 +28,7 @@ struct OrderDetailRootView: View {
         self.makeAuthView = makeAuthView
         self.makeStoreDetailView = makeStoreDetailView
         self.makeReviewComposerView = makeReviewComposerView
+        self.makePaymentBridgeView = makePaymentBridgeView
     }
 
     var body: some View {
@@ -69,6 +72,13 @@ struct OrderDetailRootView: View {
         .fullScreenCover(isPresented: authPresentedBinding) {
             makeAuthView()
         }
+        .sheet(isPresented: paymentBridgePresentedBinding) {
+            if let context = presenter.viewState.paymentBridgeContext {
+                makePaymentBridgeView(context) { result in
+                    Task { await presenter.send(.paymentBridgeResult(result)) }
+                }
+            }
+        }
         .task {
             await presenter.send(.onAppear)
         }
@@ -106,6 +116,17 @@ private extension OrderDetailRootView {
                 if !isPresented {
                     presentedReviewContext = nil
                     router.clearPendingRoute()
+                }
+            }
+        )
+    }
+
+    var paymentBridgePresentedBinding: Binding<Bool> {
+        Binding(
+            get: { presenter.viewState.paymentBridgeContext != nil },
+            set: { isPresented in
+                if !isPresented {
+                    Task { await presenter.send(.paymentBridgeDismissed) }
                 }
             }
         )

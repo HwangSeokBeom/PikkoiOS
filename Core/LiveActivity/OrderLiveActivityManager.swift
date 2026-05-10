@@ -57,8 +57,8 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
             return
         }
         logDisplayPolicy(snapshot: snapshot)
-        guard snapshot.status.isOrderLiveActivityActive else {
-            logger.debug("[OrderLiveActivity] skipped reason=notActiveOrder orderCode=\(snapshot.orderCode) status=\(snapshot.status.apiValue)")
+        guard order.isLiveActivityEligible else {
+            logger.debug("[OrderLiveActivity] skipped reason=notPaidActiveOrder orderCode=\(snapshot.orderCode) status=\(snapshot.status.apiValue) paid=\(order.isPaymentCompleted)")
             return
         }
         guard activity(orderCode: snapshot.orderCode) == nil else {
@@ -107,7 +107,7 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
             return
         }
         logDisplayPolicy(snapshot: snapshot)
-        if !snapshot.status.isOrderLiveActivityActive {
+        if !order.isLiveActivityEligible {
             end(order: order, reason: endReason(for: snapshot.status))
             return
         }
@@ -132,11 +132,11 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
 
     func sync(orders: [OrderSummary], source: String) {
         guard isSupported else { return }
-        let activeOrders = orders.filter { $0.status.isOrderLiveActivityActive }
+        let activeOrders = orders.filter(\.isLiveActivityEligible)
         logger.debug("[OrderLiveActivity] sync requested source=\(source) orderCount=\(orders.count) activeOrderCount=\(activeOrders.count)")
         guard !activeOrders.isEmpty else {
             logger.debug("[OrderLiveActivity] skipped reason=noActiveOrders")
-            for order in orders where !order.status.isOrderLiveActivityActive {
+            for order in orders where !order.isLiveActivityEligible {
                 end(order: order, reason: endReason(for: order.status))
             }
             logger.debug("[OrderRefresh] liveActivity sync count=0")
@@ -150,7 +150,7 @@ final class OrderLiveActivityManager: OrderLiveActivityManaging {
                 start(order: order)
             }
         }
-        for order in orders where !order.status.isOrderLiveActivityActive {
+        for order in orders where !order.isLiveActivityEligible {
             end(order: order, reason: endReason(for: order.status))
         }
         logger.debug("[OrderRefresh] liveActivity sync count=\(activeOrders.count)")

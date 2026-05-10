@@ -8,10 +8,12 @@ struct OrderBuilder {
     private let notificationService: AppNotificationService
     private let orderStatusSnapshotStore: OrderStatusSnapshotStore
     private let liveActivityManager: OrderLiveActivityManaging
+    private let appConfiguration: AppConfiguration
     private let imageLoader: any AuthorizedImageLoading
     private let makeAuthView: () -> AnyView
     private let makeOrderDetailView: (String) -> AnyView
     private let makeCartView: () -> CartRootView
+    private let makePaymentBridgeView: (CheckoutPaymentBridgeContext, @escaping @MainActor (CheckoutPaymentBridgeResult) -> Void) -> AnyView
     private let onExploreHome: () -> Void
 
     init(
@@ -21,10 +23,12 @@ struct OrderBuilder {
         notificationService: AppNotificationService = NoopAppNotificationService(),
         orderStatusSnapshotStore: OrderStatusSnapshotStore = InMemoryOrderStatusSnapshotStore(),
         liveActivityManager: OrderLiveActivityManaging = NoopOrderLiveActivityManager.shared,
+        appConfiguration: AppConfiguration = AppConfiguration(),
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping () -> AnyView,
         makeOrderDetailView: @escaping (String) -> AnyView,
         makeCartView: @escaping () -> CartRootView,
+        makePaymentBridgeView: @escaping (CheckoutPaymentBridgeContext, @escaping @MainActor (CheckoutPaymentBridgeResult) -> Void) -> AnyView,
         onExploreHome: @escaping () -> Void
     ) {
         self.initialOrderID = initialOrderID
@@ -33,10 +37,12 @@ struct OrderBuilder {
         self.notificationService = notificationService
         self.orderStatusSnapshotStore = orderStatusSnapshotStore
         self.liveActivityManager = liveActivityManager
+        self.appConfiguration = appConfiguration
         self.imageLoader = imageLoader
         self.makeAuthView = makeAuthView
         self.makeOrderDetailView = makeOrderDetailView
         self.makeCartView = makeCartView
+        self.makePaymentBridgeView = makePaymentBridgeView
         self.onExploreHome = onExploreHome
     }
 
@@ -48,7 +54,8 @@ struct OrderBuilder {
             sessionStore: sessionStore,
             notificationService: notificationService,
             orderStatusSnapshotStore: orderStatusSnapshotStore,
-            liveActivityManager: liveActivityManager
+            liveActivityManager: liveActivityManager,
+            appConfiguration: appConfiguration
         )
         let presenter = OrderPresenter(interactor: interactor, router: router)
 
@@ -58,7 +65,8 @@ struct OrderBuilder {
             imageLoader: imageLoader,
             makeAuthView: makeAuthView,
             makeOrderDetailView: makeOrderDetailView,
-            makeCartView: makeCartView
+            makeCartView: makeCartView,
+            makePaymentBridgeView: makePaymentBridgeView
         )
     }
 }

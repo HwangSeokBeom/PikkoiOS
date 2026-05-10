@@ -14,6 +14,8 @@ struct OrderViewState: Equatable {
     var errorMessage: String?
     var successMessage: String?
     var hiddenOrderUndoCode: String?
+    var paymentBridgeContext: CheckoutPaymentBridgeContext?
+    var resumingPaymentOrderCodes: Set<String> = []
     var emptyState: OrderEmptyState?
     var requiresAuthentication = false
     var cancellingOrderIDs: Set<String> = []
@@ -92,6 +94,12 @@ struct OrderListItemViewState: Equatable, Identifiable {
     let isReviewWritable: Bool
     let reviewDisabledReasonText: String?
     let canHideFromHistory: Bool
+    let isPaymentRecoveryCandidate: Bool
+    let paymentRecoveryTitle: String?
+    let paymentRecoveryMessage: String?
+    let paymentRecoveryPrimaryActionTitle: String?
+    let paymentRecoverySecondaryActionTitle: String?
+    let isPaymentRecoveryInProgress: Bool
     var isPastOrder = false
     var canWriteReview = false
 }

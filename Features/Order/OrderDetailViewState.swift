@@ -33,6 +33,13 @@ struct OrderDetailViewState: Equatable {
     var canCancelOrder = false
     var canExecuteCancelOrder = false
     var cancelDisabledReasonText: String?
+    var paymentBridgeContext: CheckoutPaymentBridgeContext?
+    var isPaymentRecoveryCandidate = false
+    var paymentRecoveryTitle: String?
+    var paymentRecoveryMessage: String?
+    var paymentRecoveryPrimaryActionTitle: String?
+    var paymentRecoverySecondaryActionTitle: String?
+    var isPaymentRecoveryInProgress = false
 }
 
 struct OrderDetailItemViewState: Equatable, Identifiable {

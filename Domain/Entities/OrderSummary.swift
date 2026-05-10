@@ -216,6 +216,23 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
         paymentCompletionEvidence.source
     }
 
+    var isRecoverablePendingPayment: Bool {
+        status == .pending
+            && paidAt == nil
+            && !isPaymentCompleted
+            && paymentEvidenceSource == "none"
+            && !orderCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && totalAmount > 0
+            && !itemSummaries.isEmpty
+    }
+
+    var paymentRecoveryDisplayName: String {
+        let firstName = itemSummaries.first?.menuName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseName = firstName?.isEmpty == false ? firstName! : storeName
+        let distinctCount = itemSummaries.count
+        return distinctCount > 1 ? "\(baseName) 외 \(distinctCount - 1)개" : baseName
+    }
+
     var paymentCompletionEvidence: OrderPaymentCompletionEvidence {
         let normalizedVerificationState = paymentVerificationState.normalizedPaymentState
         if normalizedVerificationState == "verified" {
@@ -377,6 +394,33 @@ struct OrderSummary: Equatable, Sendable, Identifiable {
             reviewID: nil,
             reviewRating: nil
         )
+    }
+}
+
+extension OrderDetail {
+    var isRecoverablePendingPayment: Bool {
+        let normalizedPaymentStatus = paymentSummary?.statusText?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            ?? ""
+        let hasPaidSummary = paymentSummary?.paidAt != nil
+            || paymentSummary?.receiptURL != nil
+            || ["paid", "completed", "complete", "succeeded", "success", "approved"].contains(normalizedPaymentStatus)
+
+        return status == .pending
+            && paidAt == nil
+            && !hasPaidSummary
+            && !orderCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && totalAmount > 0
+            && !items.isEmpty
+    }
+
+    var paymentRecoveryDisplayName: String {
+        let firstName = items.first?.menuName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseName = firstName?.isEmpty == false ? firstName! : storeName
+        let distinctCount = items.count
+        return distinctCount > 1 ? "\(baseName) 외 \(distinctCount - 1)개" : baseName
     }
 }
 

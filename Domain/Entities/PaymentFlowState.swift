@@ -50,3 +50,11 @@ struct PendingPaymentSession: Codable, Equatable, Identifiable, Sendable {
         impUID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 }
+
+extension PendingPaymentSession {
+    static let staleSessionTTL: TimeInterval = 60 * 60 * 24 * 3
+
+    func isStale(now: Date = Date()) -> Bool {
+        lastUpdatedAt.addingTimeInterval(Self.staleSessionTTL) <= now
+    }
+}

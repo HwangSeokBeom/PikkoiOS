@@ -124,6 +124,8 @@ final class ChatPresenter: ObservableObject {
             popChatRoom(reason: "backButton")
         case .messageTextChanged(let text):
             viewState.messageText = text
+        case .roomListSearchQueryChanged(let query):
+            updateRoomListSearchQuery(query)
         case .searchTapped:
             activateSearch()
         case .searchDismissed:
@@ -703,6 +705,7 @@ final class ChatPresenter: ObservableObject {
         viewState.emptyMessage = viewState.rooms.isEmpty ? "상대방과 대화를 시작하면 여기에 표시돼요." : nil
         viewState.primaryActionTitle = viewState.rooms.isEmpty ? "다시 불러오기" : nil
         viewState.requiresAuthentication = false
+        applyRoomListSearch()
     }
 
     private func applyMessages() {
@@ -795,7 +798,8 @@ final class ChatPresenter: ObservableObject {
     }
 
     private func makeMessageRow(_ message: ChatMessage, dateText: String?) -> ChatMessageRowViewState {
-        ChatMessageRowViewState(
+        let isSelected = viewState.selectedSearchResult?.messageID == message.renderID
+        return ChatMessageRowViewState(
             id: message.renderID,
             dateText: dateText,
             content: message.content,
@@ -804,7 +808,8 @@ final class ChatPresenter: ObservableObject {
             timeText: message.createdAt.map { timeFormatter.string(from: $0) } ?? "",
             senderName: message.sender.nick,
             isMine: message.sender.id == interactor.currentUserID,
-            sendStatus: message.sendStatus
+            sendStatus: message.sendStatus,
+            isSelectedSearchMatch: isSelected
         )
     }
 
@@ -815,11 +820,15 @@ final class ChatPresenter: ObservableObject {
     private func activateSearch() {
         guard viewState.mode == .roomDetail else { return }
         viewState.isSearchActive = true
+        viewState.messageSearch.isSearchActive = true
         viewState.searchScope = .loadedMessagesOnly
+        viewState.messageSearch.searchScope = .loadedMessagesOnly
         viewState.searchMayHaveOlderUnloadedMessages = true
+        viewState.messageSearch.mayHaveOlderUnloadedMessages = true
         refreshSearchResultsForCurrentMessages()
 #if DEBUG
-        Logger(category: "ChatSearch").debug("[ChatSearch] active=true loadedMessages=\(messages.count)")
+        Logger(category: "ChatSearch").debug("[ChatSearch] activated roomId=\(viewState.selectedRoomID ?? "-")")
+        Logger(category: "ChatSearch").debug("[ChatSearch] scope=loadedMessages reason=noDocumentedServerSearchEndpoint")
 #endif
     }
 
@@ -829,14 +838,16 @@ final class ChatPresenter: ObservableObject {
         resetSearchState()
         applyMessages()
 #if DEBUG
-        Logger(category: "ChatSearch").debug("[ChatSearch] active=false")
+        Logger(category: "ChatSearch").debug("[ChatSearch] closed reason=user")
 #endif
     }
 
     private func updateSearchQuery(_ query: String) {
         guard viewState.isSearchActive else { return }
         viewState.searchQuery = query
+        viewState.messageSearch.query = query
         viewState.isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        viewState.messageSearch.isSearching = viewState.isSearching
         searchTask?.cancel()
 
         let snapshot = messages
@@ -868,7 +879,7 @@ final class ChatPresenter: ObservableObject {
             }
         }
 #if DEBUG
-        Logger(category: "ChatSearch").debug("[ChatSearch] queryChanged length=\(query.count) debounceMs=300")
+        Logger(category: "ChatSearch").debug("[ChatSearch] queryChanged length=\(query.count) matchCount=\(viewState.searchResults.count)")
 #endif
     }
 
@@ -890,15 +901,19 @@ final class ChatPresenter: ObservableObject {
                 messageIndex: $0.messageIndex
             )
         }
+        viewState.messageSearch.matches = viewState.searchResults
         if let previousID,
            let preservedIndex = viewState.searchResults.firstIndex(where: { $0.id == previousID }) {
             viewState.selectedSearchResultIndex = preservedIndex
         } else {
             viewState.selectedSearchResultIndex = viewState.searchResults.isEmpty ? nil : 0
         }
+        viewState.messageSearch.selectedMatchIndex = viewState.selectedSearchResultIndex
         viewState.isSearching = false
+        viewState.messageSearch.isSearching = false
+        viewState.messages = makeMessageRows(messages)
 #if DEBUG
-        Logger(category: "ChatSearch").debug("[ChatSearch] completed resultCount=\(results.count) loadedMessages=\(messages.count)")
+        Logger(category: "ChatSearch").debug("[ChatSearch] queryChanged length=\(viewState.searchQuery.count) matchCount=\(results.count)")
 #endif
     }
 
@@ -907,13 +922,23 @@ final class ChatPresenter: ObservableObject {
         let current = viewState.selectedSearchResultIndex ?? 0
         let next = (current + offset + viewState.searchResults.count) % viewState.searchResults.count
         viewState.selectedSearchResultIndex = next
+        viewState.messageSearch.selectedMatchIndex = next
+        viewState.messages = makeMessageRows(messages)
         enqueueScroll(target: .message(id: viewState.searchResults[next].messageID), reason: "search", animated: true)
+#if DEBUG
+        Logger(category: "ChatSearch").debug("[ChatSearch] selected index=\(next) chatId=\(viewState.searchResults[next].messageID)")
+#endif
     }
 
     private func selectSearchResult(id: String) {
         guard let index = viewState.searchResults.firstIndex(where: { $0.id == id }) else { return }
         viewState.selectedSearchResultIndex = index
+        viewState.messageSearch.selectedMatchIndex = index
+        viewState.messages = makeMessageRows(messages)
         enqueueScroll(target: .message(id: viewState.searchResults[index].messageID), reason: "searchResult", animated: true)
+#if DEBUG
+        Logger(category: "ChatSearch").debug("[ChatSearch] selected index=\(index) chatId=\(viewState.searchResults[index].messageID)")
+#endif
     }
 
     private func searchMatchRanges(for message: ChatMessage) -> [NSRange] {
@@ -937,6 +962,34 @@ final class ChatPresenter: ObservableObject {
         viewState.isSearching = false
         viewState.searchScope = .loadedMessagesOnly
         viewState.searchMayHaveOlderUnloadedMessages = true
+        viewState.messageSearch = ChatMessageSearchState()
+    }
+
+    private func updateRoomListSearchQuery(_ query: String) {
+        viewState.roomListSearchQuery = query
+        applyRoomListSearch()
+    }
+
+    private func applyRoomListSearch() {
+        let rows = listEntries.map(makeRoomRow)
+        let query = viewState.roomListSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            viewState.rooms = rows
+            viewState.roomListSearchResultCount = nil
+            viewState.emptyTitle = rows.isEmpty ? "아직 채팅방이 없어요" : nil
+            viewState.emptyMessage = rows.isEmpty ? "상대방과 대화를 시작하면 여기에 표시돼요." : nil
+            viewState.primaryActionTitle = rows.isEmpty ? "다시 불러오기" : nil
+            return
+        }
+        let filtered = rows.filter { row in
+            row.title.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "ko_KR")) != nil
+                || row.subtitle.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "ko_KR")) != nil
+        }
+        viewState.rooms = filtered
+        viewState.roomListSearchResultCount = filtered.count
+        viewState.emptyTitle = filtered.isEmpty ? "검색 결과가 없어요" : nil
+        viewState.emptyMessage = filtered.isEmpty ? "채팅방 이름이나 마지막 메시지를 다시 확인해 주세요." : nil
+        viewState.primaryActionTitle = filtered.isEmpty ? "다시 불러오기" : nil
     }
 
     private func loadNextRoomPageIfNeeded() {

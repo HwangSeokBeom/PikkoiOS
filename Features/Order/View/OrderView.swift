@@ -81,17 +81,17 @@ struct OrderView: View {
                 }
             }
         }
-        .alert("주문을 취소할까요?", isPresented: cancelConfirmationBinding) {
+        .alert(cancelCandidate?.isPaymentRecoveryCandidate == true ? "대기 주문을 정리할까요?" : "주문을 취소할까요?", isPresented: cancelConfirmationBinding) {
             Button("아니요", role: .cancel) {
                 cancelCandidate = nil
             }
-            Button("주문 취소", role: .destructive) {
+            Button(cancelCandidate?.isPaymentRecoveryCandidate == true ? "정리하기" : "주문 취소", role: .destructive) {
                 guard let orderID = cancelCandidate?.id else { return }
                 cancelCandidate = nil
                 Task { await presenter.send(.cancelConfirmed(orderID)) }
             }
         } message: {
-            Text("취소 후에는 주문현황에서 제외돼요.")
+            Text(cancelCandidate?.isPaymentRecoveryCandidate == true ? "서버 주문을 취소하지 않고 이 기기의 주문현황에서만 숨겨요." : "취소 후에는 주문현황에서 제외돼요.")
         }
         .alert("주문 상태 변경", isPresented: statusChangeConfirmationBinding) {
             Button("취소", role: .cancel) {
@@ -188,9 +188,18 @@ struct OrderView: View {
                                 )
                             }
                         },
+                        onResumePayment: {
+                            Task {
+                                await presenter.send(.resumePendingPayment(order.orderCode))
+                            }
+                        },
                         onHideFromHistory: {
                             Task {
-                                await presenter.send(.hideOrderFromHistory(order.orderCode))
+                                if order.isPaymentRecoveryCandidate {
+                                    await presenter.send(.cancelConfirmed(order.id))
+                                } else {
+                                    await presenter.send(.hideOrderFromHistory(order.orderCode))
+                                }
                             }
                         }
                     )
@@ -303,6 +312,7 @@ private struct OrderRowView: View {
     let onCancelTap: () -> Void
     let onStatusSelect: (OrderStatus) -> Void
     let onRefreshPaymentReceipt: () -> Void
+    let onResumePayment: () -> Void
     let onHideFromHistory: () -> Void
 
     var body: some View {
@@ -357,15 +367,74 @@ private struct OrderRowView: View {
 
             activeMenuCard
 
-            if order.canCancel {
+            if order.isPaymentRecoveryCandidate {
+                paymentRecoveryActions
+            }
+
+            if order.canCancel && !order.isPaymentRecoveryCandidate {
                 cancelButton
                     .frame(maxWidth: .infinity, alignment: .trailing)
-            } else if let cancelDisabledReasonText = order.cancelDisabledReasonText {
+            } else if !order.isPaymentRecoveryCandidate, let cancelDisabledReasonText = order.cancelDisabledReasonText {
                 cancelUnavailableMessage
                     .accessibilityLabel(cancelDisabledReasonText)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
+    }
+
+    private var paymentRecoveryActions: some View {
+        VStack(alignment: .leading, spacing: PikkoSpacing.sm) {
+            VStack(alignment: .leading, spacing: PikkoSpacing.xs) {
+                Text(order.paymentRecoveryTitle ?? "결제 미완료")
+                    .font(PikkoTypography.bodyStrong)
+                    .foregroundStyle(PikkoColor.primaryText)
+                Text(order.paymentRecoveryMessage ?? "결제를 완료해야 주문이 접수돼요.")
+                    .font(PikkoTypography.caption)
+                    .foregroundStyle(PikkoColor.secondaryText)
+            }
+
+            HStack(spacing: PikkoSpacing.sm) {
+                Button(action: onResumePayment) {
+                    HStack(spacing: PikkoSpacing.xs) {
+                        if order.isPaymentRecoveryInProgress {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "creditcard")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        Text(order.paymentRecoveryPrimaryActionTitle ?? "결제 이어하기")
+                            .font(PikkoTypography.bodyStrong)
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .background(PikkoColor.primary)
+                    .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(order.isPaymentRecoveryInProgress)
+
+                Button(action: onHideFromHistory) {
+                    HStack(spacing: PikkoSpacing.xs) {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(order.paymentRecoverySecondaryActionTitle ?? "대기 주문 정리")
+                            .font(PikkoTypography.captionStrong)
+                    }
+                    .foregroundStyle(PikkoColor.secondaryText)
+                    .frame(width: 116, height: 46)
+                    .background(PikkoColor.gray100)
+                    .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, Layout.cardHorizontalPadding)
+        .padding(.vertical, Layout.cardVerticalPadding)
+        .background(PikkoColor.surfaceElevated)
+        .clipShape(RoundedRectangle(cornerRadius: PikkoRadius.card, style: .continuous))
+        .pikkoShadow(PikkoShadow.card)
     }
 
     private var activeMenuCard: some View {
@@ -654,7 +723,7 @@ private struct OrderRowView: View {
                         .font(.system(size: 13, weight: .semibold))
                 }
 
-                Text("주문 취소")
+                Text(order.isPaymentRecoveryCandidate ? "대기 주문 정리" : "주문 취소")
                     .font(PikkoTypography.captionStrong)
             }
             .foregroundStyle(PikkoColor.danger)

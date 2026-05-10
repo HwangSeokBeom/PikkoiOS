@@ -201,6 +201,72 @@ private struct SpyOrderDetailInteractor: OrderDetailInteracting {
         }
     }
 
+    func makePendingPaymentSession(detail: OrderDetail) async throws -> PendingPaymentSession {
+        PendingPaymentSession(
+            userID: "user-1",
+            orderCode: detail.orderCode,
+            orderID: detail.orderID,
+            storeID: detail.storeID,
+            storeName: detail.storeName,
+            menuSummary: detail.paymentRecoveryDisplayName,
+            totalPriceAmount: detail.totalAmount,
+            createdAt: detail.createdAt,
+            state: .recoverablePending,
+            impUID: nil,
+            lastUpdatedAt: detail.updatedAt
+        )
+    }
+
+    func savePendingPaymentSession(_ session: PendingPaymentSession) async {}
+
+    func updatePendingPaymentSession(orderCode: String, state: PaymentFlowState, impUID: String?) async {}
+
+    func removePendingPaymentSession(orderCode: String) async {}
+
+    func makePaymentRequest(pendingSession: PendingPaymentSession) async throws -> PaymentGatewayRequest {
+        PaymentGatewayRequest(
+            orderID: pendingSession.orderID ?? pendingSession.orderCode,
+            merchantUID: pendingSession.orderCode,
+            amount: pendingSession.totalPriceAmount,
+            orderName: pendingSession.menuSummary,
+            buyerName: "테스트",
+            pg: "html5_inicis",
+            pgID: nil,
+            payMethod: "card",
+            appScheme: "pikko",
+            userCode: "imp12345678",
+            isTestMode: true
+        )
+    }
+
+    func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt {
+        ValidatedPaymentReceipt(
+            paymentID: "payment-1",
+            orderID: request.orderID,
+            orderCode: request.orderCode,
+            totalPriceAmount: nil,
+            createdAt: nil,
+            updatedAt: nil
+        )
+    }
+
+    func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt {
+        PaymentReceipt(
+            impUID: "imp_test",
+            merchantUID: orderCode,
+            amount: 12_000,
+            currency: "KRW",
+            status: "paid",
+            methodText: "card",
+            paidAt: Date(),
+            receiptURL: nil
+        )
+    }
+
+    func refreshOrdersAfterAlreadyValidatedPayment(orderCode: String) async -> Bool {
+        true
+    }
+
     func cancelOrder(orderCode: String) async throws -> OrderDetail {
         _ = orderCode
         switch cancelResult {

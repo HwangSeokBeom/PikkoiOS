@@ -39,6 +39,7 @@ enum OrderFeatureError: Error, Equatable {
     case authenticationRequired
     case notFound
     case configurationRequired
+    case alreadyValidated
     case unavailable(message: String)
 
     var userMessage: String {
@@ -49,6 +50,8 @@ enum OrderFeatureError: Error, Equatable {
             return "주문 정보를 찾을 수 없어요."
         case .configurationRequired:
             return "앱 설정을 확인해 주세요."
+        case .alreadyValidated:
+            return "이미 확인된 결제예요. 주문 내역을 새로고침해 주세요."
         case .unavailable(let message):
             return message
         }

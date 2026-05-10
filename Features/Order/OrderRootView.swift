@@ -8,6 +8,7 @@ struct OrderRootView: View {
     private let makeAuthView: () -> AnyView
     private let makeOrderDetailView: (String) -> AnyView
     private let makeCartView: () -> CartRootView
+    private let makePaymentBridgeView: (CheckoutPaymentBridgeContext, @escaping @MainActor (CheckoutPaymentBridgeResult) -> Void) -> AnyView
 
     @State private var presentedOrderID: String?
     @State private var isCartPresented = false
@@ -18,7 +19,8 @@ struct OrderRootView: View {
         imageLoader: any AuthorizedImageLoading,
         makeAuthView: @escaping () -> AnyView,
         makeOrderDetailView: @escaping (String) -> AnyView,
-        makeCartView: @escaping () -> CartRootView
+        makeCartView: @escaping () -> CartRootView,
+        makePaymentBridgeView: @escaping (CheckoutPaymentBridgeContext, @escaping @MainActor (CheckoutPaymentBridgeResult) -> Void) -> AnyView
     ) {
         _presenter = StateObject(wrappedValue: presenter)
         _router = StateObject(wrappedValue: router)
@@ -26,6 +28,7 @@ struct OrderRootView: View {
         self.makeAuthView = makeAuthView
         self.makeOrderDetailView = makeOrderDetailView
         self.makeCartView = makeCartView
+        self.makePaymentBridgeView = makePaymentBridgeView
     }
 
     var body: some View {
@@ -78,6 +81,13 @@ struct OrderRootView: View {
                 makeCartView()
             }
         }
+        .sheet(isPresented: paymentBridgePresentedBinding) {
+            if let context = presenter.viewState.paymentBridgeContext {
+                makePaymentBridgeView(context) { result in
+                    Task { await presenter.send(.paymentBridgeResult(result)) }
+                }
+            }
+        }
     }
 }
 
@@ -101,6 +111,17 @@ private extension OrderRootView {
             set: { isPresented in
                 if !isPresented {
                     router.dismissAuth()
+                }
+            }
+        )
+    }
+
+    var paymentBridgePresentedBinding: Binding<Bool> {
+        Binding(
+            get: { presenter.viewState.paymentBridgeContext != nil },
+            set: { isPresented in
+                if !isPresented {
+                    Task { await presenter.send(.paymentBridgeDismissed) }
                 }
             }
         )

@@ -122,3 +122,9 @@ extension OrderStatus {
         }
     }
 }
+
+extension OrderSummary {
+    var isLiveActivityEligible: Bool {
+        status.isOrderLiveActivityActive && isPaymentCompleted
+    }
+}

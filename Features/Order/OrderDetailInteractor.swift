@@ -4,6 +4,14 @@ import Foundation
 protocol OrderDetailInteracting {
     func loadInitialState() async -> OrderDetailViewState
     func fetchOrderDetail() async throws -> OrderDetail
+    func makePendingPaymentSession(detail: OrderDetail) async throws -> PendingPaymentSession
+    func savePendingPaymentSession(_ session: PendingPaymentSession) async
+    func updatePendingPaymentSession(orderCode: String, state: PaymentFlowState, impUID: String?) async
+    func removePendingPaymentSession(orderCode: String) async
+    func makePaymentRequest(pendingSession: PendingPaymentSession) async throws -> PaymentGatewayRequest
+    func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt
+    func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt
+    func refreshOrdersAfterAlreadyValidatedPayment(orderCode: String) async -> Bool
     func cancelOrder(orderCode: String) async throws -> OrderDetail
     func cancelPendingOrderLocally(orderCode: String) async throws -> OrderDetail
 }
@@ -14,16 +22,22 @@ struct OrderDetailInteractor: OrderDetailInteracting {
     private let orderRepository: OrderRepository
     private let sessionStore: SessionStore
     private let localCancellationStore: LocalOrderCancellationStore
+    private let appConfiguration: AppConfiguration
+    private let pendingPaymentSessionStore: PendingPaymentSessionStore
 
     init(
         orderID: String,
         orderRepository: OrderRepository,
         sessionStore: SessionStore,
+        appConfiguration: AppConfiguration = AppConfiguration(),
+        pendingPaymentSessionStore: PendingPaymentSessionStore = .shared,
         localCancellationStore: LocalOrderCancellationStore = .shared
     ) {
         self.orderID = orderID
         self.orderRepository = orderRepository
         self.sessionStore = sessionStore
+        self.appConfiguration = appConfiguration
+        self.pendingPaymentSessionStore = pendingPaymentSessionStore
         self.localCancellationStore = localCancellationStore
     }
 
@@ -51,6 +65,98 @@ struct OrderDetailInteractor: OrderDetailInteracting {
             return await localCancellationStore.apply(to: detail, userID: userID)
         } catch {
             throw map(error: error)
+        }
+    }
+
+    func makePendingPaymentSession(detail: OrderDetail) async throws -> PendingPaymentSession {
+        guard let userID = sessionStore.currentUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userID.isEmpty else {
+            throw OrderFeatureError.authenticationRequired
+        }
+        return PendingPaymentSession(
+            userID: userID,
+            orderCode: detail.orderCode,
+            orderID: detail.orderID,
+            storeID: detail.storeID,
+            storeName: detail.storeName,
+            menuSummary: detail.paymentRecoveryDisplayName,
+            totalPriceAmount: detail.totalAmount,
+            createdAt: detail.createdAt,
+            state: .recoverablePending,
+            impUID: nil,
+            lastUpdatedAt: Date()
+        )
+    }
+
+    func savePendingPaymentSession(_ session: PendingPaymentSession) async {
+        await pendingPaymentSessionStore.upsert(session)
+    }
+
+    func updatePendingPaymentSession(orderCode: String, state: PaymentFlowState, impUID: String?) async {
+        guard let userID = sessionStore.currentUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userID.isEmpty else { return }
+        await pendingPaymentSessionStore.update(orderCode: orderCode, userID: userID, state: state, impUID: impUID)
+    }
+
+    func removePendingPaymentSession(orderCode: String) async {
+        guard let userID = sessionStore.currentUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userID.isEmpty else { return }
+        await pendingPaymentSessionStore.remove(orderCode: orderCode, userID: userID)
+    }
+
+    func makePaymentRequest(pendingSession: PendingPaymentSession) async throws -> PaymentGatewayRequest {
+        let merchantUID = pendingSession.orderCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !merchantUID.isEmpty, pendingSession.totalPriceAmount > 0 else {
+            throw OrderFeatureError.unavailable(message: "주문 결제 정보를 확인하지 못했어요.")
+        }
+        guard let userCode = appConfiguration.portOneUserCode?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userCode.isEmpty else {
+            throw OrderFeatureError.configurationRequired
+        }
+        let buyerName = sessionStore.nick?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Pikko 고객"
+        return PaymentGatewayRequest(
+            orderID: pendingSession.orderID ?? pendingSession.orderCode,
+            merchantUID: merchantUID,
+            amount: pendingSession.totalPriceAmount,
+            orderName: pendingSession.menuSummary.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Pikko 주문",
+            buyerName: buyerName,
+            pg: appConfiguration.portOnePg,
+            pgID: appConfiguration.portOnePgID,
+            payMethod: appConfiguration.portOnePayMethod,
+            appScheme: appConfiguration.portOneAppScheme,
+            userCode: userCode,
+            isTestMode: appConfiguration.isPaymentTestMode
+        )
+    }
+
+    func validatePayment(_ request: PaymentValidationRequest) async throws -> ValidatedPaymentReceipt {
+        do {
+            return try await orderRepository.validatePayment(request)
+        } catch let error as NetworkError {
+            if case .conflict = error {
+                throw OrderFeatureError.alreadyValidated
+            }
+            throw map(error: error, fallbackMessage: "결제 확인에 실패했어요.")
+        } catch {
+            throw map(error: error, fallbackMessage: "결제 확인에 실패했어요.")
+        }
+    }
+
+    func fetchPaymentReceipt(orderCode: String) async throws -> PaymentReceipt {
+        do {
+            return try await orderRepository.fetchPaymentReceipt(orderCode: orderCode)
+        } catch {
+            throw map(error: error, fallbackMessage: "결제 영수증을 확인하지 못했어요.")
+        }
+    }
+
+    func refreshOrdersAfterAlreadyValidatedPayment(orderCode: String) async -> Bool {
+        do {
+            let page = try await orderRepository.fetchOrders(cursor: nil, filter: nil, forceRefresh: true)
+            return page.items.contains { $0.orderCode == orderCode && $0.isPaymentCompleted }
+        } catch {
+            Logger.shared.warning("[PaymentRecovery] alreadyValidated orderRefreshFailed orderCode=\(orderCode) message=\(error.localizedDescription)")
+            return false
         }
     }
 
@@ -136,5 +242,11 @@ struct OrderDetailInteractor: OrderDetailInteracting {
         default:
             return .unavailable(message: fallbackMessage)
         }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

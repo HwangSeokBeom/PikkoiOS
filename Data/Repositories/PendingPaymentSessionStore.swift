@@ -11,7 +11,8 @@ actor PendingPaymentSessionStore {
     }
 
     func recoverableSession(userID: String, storeID: String, totalPriceAmount: Decimal) -> PendingPaymentSession? {
-        sessions(userID: userID)
+        pruneStaleSessions()
+        return sessions(userID: userID)
             .filter { $0.state.isRecoverable }
             .filter { $0.storeID == storeID && $0.totalPriceAmount == totalPriceAmount }
             .sorted { $0.lastUpdatedAt > $1.lastUpdatedAt }
@@ -19,13 +20,14 @@ actor PendingPaymentSessionStore {
     }
 
     func session(orderCode: String, userID: String) -> PendingPaymentSession? {
-        sessions(userID: userID).first { $0.orderCode == orderCode }
+        pruneStaleSessions()
+        return sessions(userID: userID).first { $0.orderCode == orderCode }
     }
 
     func upsert(_ session: PendingPaymentSession) {
         var nextSessions = allSessions()
         nextSessions.removeAll { $0.userID == session.userID && $0.orderCode == session.orderCode }
-        nextSessions.insert(session, at: 0)
+        nextSessions.insert(sanitizedForPersistence(session), at: 0)
         persist(nextSessions)
     }
 
@@ -68,11 +70,24 @@ actor PendingPaymentSessionStore {
         store.codableValue([PendingPaymentSession].self, forKey: storageKey) ?? []
     }
 
+    private func pruneStaleSessions(now: Date = Date()) {
+        let existing = allSessions()
+        let fresh = existing.filter { !$0.isStale(now: now) }
+        guard fresh.count != existing.count else { return }
+        persist(fresh)
+    }
+
     private func persist(_ sessions: [PendingPaymentSession]) {
         do {
-            try store.setCodable(Array(sessions.prefix(20)), forKey: storageKey)
+            try store.setCodable(Array(sessions.map(sanitizedForPersistence).prefix(20)), forKey: storageKey)
         } catch {
             Logger.shared.warning("[PaymentSession] persistFailed message=\(error.localizedDescription)")
         }
+    }
+
+    private func sanitizedForPersistence(_ session: PendingPaymentSession) -> PendingPaymentSession {
+        var sanitized = session
+        sanitized.impUID = nil
+        return sanitized
     }
 }
